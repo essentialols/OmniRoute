@@ -29,6 +29,11 @@ for (const [id, alias] of Object.entries(PROVIDER_ID_TO_ALIAS)) {
   ALIAS_TO_PROVIDER_ID[alias] = id;
 }
 
+// Manual aliases for external compatibility not covered by PROVIDER_ID_TO_ALIAS.
+// OpenCode's Zen provider now uses the "opencode" slug, but OmniRoute registers
+// it as "opencode-zen". This alias ensures `opencode/<model>` resolves correctly.
+ALIAS_TO_PROVIDER_ID["opencode"] = "opencode-zen";
+
 // Provider-scoped legacy model aliases. Used to normalize provider/model inputs
 // and keep backward compatibility when upstream IDs change.
 const PROVIDER_MODEL_ALIASES: ProviderModelAliasMap = {
