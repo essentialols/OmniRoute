@@ -19,7 +19,6 @@ import {
   getProxyLogsTableMaxRows,
 } from "../logEnv";
 import { generateRequestId, getRequestId } from "@/shared/utils/requestId";
-import { deleteCallLogsBefore, trimCallLogsToMaxRows } from "../usage/callLogs";
 
 /** @returns {SqliteAdapter | null} */
 function getDb() {
@@ -449,7 +448,7 @@ export function getRetentionDays() {
  *   proxyLogsMaxRows: number
  * }}
  */
-export function cleanupExpiredLogs() {
+export async function cleanupExpiredLogs() {
   const db = getDb();
   const appRetentionDays = getAppLogRetentionDays();
   const callRetentionDays = getCallLogRetentionDays();
@@ -493,6 +492,7 @@ export function cleanupExpiredLogs() {
   }
 
   try {
+    const { deleteCallLogsBefore } = await import("../usage/callLogs");
     const r2 = deleteCallLogsBefore(callCutoff);
     deletedCallLogs = r2.deletedRows;
   } catch {
@@ -531,6 +531,7 @@ export function cleanupExpiredLogs() {
   const BATCH_SIZE = 5000;
   if (callLogsMaxRows > 0) {
     try {
+      const { trimCallLogsToMaxRows } = await import("../usage/callLogs");
       const trimmed = trimCallLogsToMaxRows(callLogsMaxRows);
       trimmedCallLogs = trimmed.deletedRows;
     } catch {
