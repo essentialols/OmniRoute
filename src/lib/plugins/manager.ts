@@ -7,7 +7,7 @@
  * @module plugins/manager
  */
 
-import { mkdir, cp, rm, realpath } from "fs/promises";
+import { mkdir, cp, rm, realpath, readFile } from "fs/promises";
 import { join, dirname } from "path";
 import { randomUUID } from "crypto";
 import { logger } from "../../../open-sse/utils/logger.ts";

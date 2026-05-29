@@ -145,7 +145,7 @@ export async function emitHookBlocking(
   let mergedBody: unknown = ctx.body;
   let mergedMetadata: Record<string, unknown> = (ctx.metadata as Record<string, unknown>) || {};
 
-  for (const reg of list.sort((a, b) => a.priority - b.priority)) {
+  for (const reg of list) {
     try {
       const result = await reg.handler(payload);
       if (result && typeof result === "object") {
@@ -217,7 +217,7 @@ export async function runOnRequest(ctx: PluginContext): Promise<PluginResult> {
 export async function runOnResponse(ctx: PluginContext, response: unknown): Promise<unknown> {
   let currentResponse = response;
   const list = hooks.get("onResponse") || [];
-  for (const reg of list.sort((a, b) => a.priority - b.priority)) {
+  for (const reg of list) {
     try {
       const result = await reg.handler({ ...ctx, response: currentResponse });
       if (
