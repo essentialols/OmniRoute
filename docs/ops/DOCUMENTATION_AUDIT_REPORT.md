@@ -1,3 +1,9 @@
+---
+title: "Documentation Audit & Sync Report"
+version: 3.8.24
+lastUpdated: 2026-06-13
+---
+
 # OmniRoute — Relatório de Auditoria de Documentação & Plano de Sincronização
 
 > **Versão do projeto:** 3.8.24 · **Data:** 2026-06-13 · **Status:** FASE 1 (pesquisa/organização) — execução **pendente de confirmação**
