@@ -32,6 +32,8 @@ jobs:
       DISABLE_SQLITE_AUTO_BACKUP: "true"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -77,6 +79,8 @@ jobs:
       security-events: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -156,6 +160,7 @@ jobs:
       # would lack the base ref and the gate would self-skip (base-unresolved).
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
@@ -252,6 +257,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -282,6 +289,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -303,6 +312,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -317,6 +328,8 @@ jobs:
       langs: ${{ steps.langs.outputs.langs }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - id: langs
         run: |
           LANG_DIR="src/i18n/messages"
@@ -334,6 +347,8 @@ jobs:
     needs: i18n-matrix
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -362,6 +377,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
@@ -390,6 +406,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -421,6 +439,8 @@ jobs:
       JWT_SECRET: ci-build-secret-with-sufficient-length-for-validation
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -444,6 +464,8 @@ jobs:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -477,6 +499,8 @@ jobs:
       DISABLE_SQLITE_AUTO_BACKUP: "true"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -496,6 +520,8 @@ jobs:
       DISABLE_SQLITE_AUTO_BACKUP: "true"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -525,6 +551,8 @@ jobs:
       DISABLE_SQLITE_AUTO_BACKUP: "true"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_24_VERSION }}
@@ -549,6 +577,8 @@ jobs:
       DISABLE_SQLITE_AUTO_BACKUP: "true"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_26_VERSION }}
@@ -573,6 +603,8 @@ jobs:
       DISABLE_SQLITE_AUTO_BACKUP: "true"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -615,6 +647,8 @@ jobs:
       API_KEY_SECRET: ci-test-api-key-secret-long
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -692,6 +726,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
@@ -810,6 +845,8 @@ jobs:
       OMNIROUTE_PLAYWRIGHT_SKIP_BUILD: "1"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -851,6 +888,8 @@ jobs:
       DISABLE_SQLITE_AUTO_BACKUP: "true"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -869,6 +908,8 @@ jobs:
       DISABLE_SQLITE_AUTO_BACKUP: "true"
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.CI_NODE_VERSION }}

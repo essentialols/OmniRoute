@@ -44,6 +44,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/v{0}', inputs.version) || '' }}
           # Need full tag history for semver comparison when deciding :latest.
           fetch-depth: 0
@@ -144,6 +145,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/v{0}', inputs.version) || '' }}
           fetch-depth: 0
 
@@ -243,6 +245,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/v{0}', inputs.version) || '' }}
           fetch-depth: 0
 
