@@ -62,3 +62,19 @@ test("does not mutate the original tool objects (returns new entries for default
   assert.equal(original.type, undefined, "original tool must stay untouched");
   assert.equal(out[0].type, "custom");
 });
+
+test("passes non-object array entries through unchanged (no garbage wrapping)", () => {
+  // A null/primitive entry must NOT be spread into a fabricated tool like
+  // { type: "custom", '0': 'h' } — pass it through as-is.
+  const tools = [
+    { name: "real_tool", input_schema: {} }, // object → defaulted
+    null,
+    "weird",
+    42,
+  ];
+  const out = defaultClaudeToolType(tools) as unknown[];
+  assert.equal((out[0] as Record<string, unknown>).type, "custom", "real object gets defaulted");
+  assert.equal(out[1], null, "null passes through unchanged");
+  assert.equal(out[2], "weird", "string passes through unchanged");
+  assert.equal(out[3], 42, "number passes through unchanged");
+});

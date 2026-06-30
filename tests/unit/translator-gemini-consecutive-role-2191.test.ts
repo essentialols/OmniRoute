@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 // Claude paths), so consecutive `user` turns — or a tool-result turn (role:user)
 // immediately followed by a plain user turn — produced an invalid alternation.
 
-const { openaiToGeminiRequest } = await import(
+const { openaiToGeminiRequest, mergeConsecutiveSameRoleContents } = await import(
   "../../open-sse/translator/request/openai-to-gemini.ts"
 );
 
@@ -91,4 +91,32 @@ test("OpenAI -> Gemini keeps a normally alternating conversation unchanged", () 
     result.contents.map((c) => c.role),
     ["user", "model", "user"]
   );
+});
+
+test("mergeConsecutiveSameRoleContents merges adjacent same-role entries without mutating the input", () => {
+  const userPartsA = [{ text: "Hello" }];
+  const userPartsB = [{ text: "Additional context" }];
+  const input: GeminiContent[] = [
+    { role: "user", parts: userPartsA },
+    { role: "user", parts: userPartsB },
+    { role: "model", parts: [{ text: "Hi" }] },
+  ];
+
+  const merged = mergeConsecutiveSameRoleContents(input) as GeminiContent[];
+
+  // Merged output: one user block carrying both parts, then the model block.
+  assert.deepEqual(
+    merged.map((c) => c.role),
+    ["user", "model"]
+  );
+  assert.deepEqual(
+    merged[0].parts.map((p) => p.text),
+    ["Hello", "Additional context"]
+  );
+
+  // The caller's input objects and their parts arrays must be untouched.
+  assert.equal(input.length, 3, "input array must not be mutated");
+  assert.equal(userPartsA.length, 1, "first input parts array must not be mutated");
+  assert.equal(userPartsB.length, 1, "second input parts array must not be mutated");
+  assert.notStrictEqual(merged[0].parts, userPartsA, "merged parts must be a fresh array");
 });

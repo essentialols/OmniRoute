@@ -246,14 +246,16 @@ function buildHistoricalToolResultContext(name: string, response: unknown): stri
 // that invalid alternation through. Merge adjacent same-role entries by concatenating
 // their parts, the same normalization the Kiro and Claude request paths already apply
 // (9router#2191).
-function mergeConsecutiveSameRoleContents(contents: GeminiContent[]): GeminiContent[] {
+export function mergeConsecutiveSameRoleContents(contents: GeminiContent[]): GeminiContent[] {
   const merged: GeminiContent[] = [];
   for (const entry of contents) {
     const last = merged[merged.length - 1];
     if (last && last.role === entry.role) {
       last.parts.push(...entry.parts);
     } else {
-      merged.push(entry);
+      // Shallow-copy the entry and its `parts` array so a later same-role merge
+      // (`last.parts.push(...)`) never mutates the caller's input objects.
+      merged.push({ ...entry, parts: [...entry.parts] });
     }
   }
   return merged;
