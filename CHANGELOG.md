@@ -294,6 +294,46 @@
 
 - **refactor (oauth):** remove dead legacy OAuth service classes. ([#5838](https://github.com/diegosouzapw/OmniRoute/pull/5838) — thanks @diegosouzapw)
 
+### 🙌 Contributors
+
+Thanks to everyone whose work landed in v3.8.43:
+
+| Contributor                                                  | PRs / Issues                                                                                                         |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| [@ag-linden](https://github.com/ag-linden)                   | #5753                                                                                                                |
+| [@Ardem2025](https://github.com/Ardem2025)                   | #5770                                                                                                                |
+| [@arssnndr](https://github.com/arssnndr)                     | #5845                                                                                                                |
+| [@atomlong](https://github.com/atomlong)                     | #5822                                                                                                                |
+| [@backryun](https://github.com/backryun)                     | #5592                                                                                                                |
+| [@baslr](https://github.com/baslr)                           | direct commit / report                                                                                               |
+| [@Chewji9875](https://github.com/Chewji9875)                 | #5563, #5579, #5846                                                                                                  |
+| [@chirag127](https://github.com/chirag127)                   | #5738, #5771                                                                                                         |
+| [@DKotsyuba](https://github.com/DKotsyuba)                   | #5857                                                                                                                |
+| [@hartmark](https://github.com/hartmark)                     | #5834                                                                                                                |
+| [@ishatiwari21](https://github.com/ishatiwari21)             | #5799                                                                                                                |
+| [@janeza2](https://github.com/janeza2)                       | #5855, #5858                                                                                                         |
+| [@jetmiky](https://github.com/jetmiky)                       | direct commit / report                                                                                               |
+| [@josevictorferreira](https://github.com/josevictorferreira) | #5425                                                                                                                |
+| [@JxnLexn](https://github.com/JxnLexn)                       | #5652                                                                                                                |
+| [@KooshaPari](https://github.com/KooshaPari)                 | #5613, #5621, #5624, #5629, #5643, #5651, #5890                                                                      |
+| [@KunN-21](https://github.com/KunN-21)                       | direct commit / report                                                                                               |
+| [@manhdzzz](https://github.com/manhdzzz)                     | direct commit / report                                                                                               |
+| [@nguyenxvotanminh3](https://github.com/nguyenxvotanminh3)   | #5760, #5767, #5772                                                                                                  |
+| [@noir017](https://github.com/noir017)                       | direct commit / report                                                                                               |
+| [@pizzav-xyz](https://github.com/pizzav-xyz)                 | #5720                                                                                                                |
+| [@rdself](https://github.com/rdself)                         | #5746, #5856                                                                                                         |
+| [@shiva24082](https://github.com/shiva24082)                 | #5879                                                                                                                |
+| [@skyzea1](https://github.com/skyzea1)                       | #5432, #5701                                                                                                         |
+| [@Stazyu](https://github.com/Stazyu)                         | #5557                                                                                                                |
+| [@Thinkscape](https://github.com/Thinkscape)                 | #5549                                                                                                                |
+| [@vishalrajv](https://github.com/vishalrajv)                 | direct commit / report                                                                                               |
+| [@voravitl](https://github.com/voravitl)                     | direct commit / report                                                                                               |
+| [@waguriagentic](https://github.com/waguriagentic)           | direct commit / report                                                                                               |
+| [@wahyuzero](https://github.com/wahyuzero)                   | direct commit / report                                                                                               |
+| [@warelik](https://github.com/warelik)                       | direct commit / report                                                                                               |
+| [@Witroch4](https://github.com/Witroch4)                     | #5731, #5859, #5863                                                                                                  |
+| [@diegosouzapw](https://github.com/diegosouzapw)             | maintainer — cycle reconciliation, release-close base-red fixes, god-file decomposition, compression/memory features |
+
 ---
 
 ## [3.8.42] — 2026-06-30
