@@ -22,6 +22,7 @@
 - **feat(providers):** add Augment (Auggie CLI) as a local no-auth provider. (thanks @chamdanilukman)
 - **feat(providers):** add ModelScope as an OpenAI-compatible (API-key) provider. (thanks @tn5052)
 - **feat(providers):** add Qiniu as an OpenAI-compatible (API-key) provider. (thanks @JackChiang233)
+- **feat(providers):** add b.ai as an OpenAI-compatible (API-key) provider. (thanks @DEYLNN)
 
 ### 🔧 Bug Fixes
 
