@@ -27,6 +27,7 @@
 - **feat(providers):** add Charm Hyper as an OpenAI-compatible (API-key) provider. (thanks @whale9820)
 - **feat(providers):** add SumoPod and X5Lab as OpenAI-compatible (API-key) providers. (thanks @rigelra15)
 - **feat(server):** support reverse-proxy subpath deployment via OMNIROUTE_BASE_PATH (basePath-aware auth redirects). (thanks @SillyHippy)
+- **feat(cli-tools):** add CodeWhale CLI tool (successor to DeepSeek TUI). (thanks @aristorinjuang)
 
 ### 🔧 Bug Fixes
 
