@@ -1,0 +1,121 @@
+name: VPS Full Release Benchmark
+
+# Mede TODAS as fases pesadas do release na VPS self-hosted, para dimensionar o ganho
+# real end-to-end (não só unit+build). Cobre: unit shards, vitest, build web, build:cli,
+# e2e (Playwright) e integration — as mesmas fases do pipeline de release.
+#
+# push na branch chore/vps-runner-benchmark  -> roda na VPS (self-hosted)
+# workflow_dispatch (target=github)          -> ubuntu-latest (baseline)
+#
+# Segurança: label omni-release só existe aqui; fork nunca usa a VPS.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Onde rodar (vps = self-hosted, github = ubuntu-latest)"
+        type: choice
+        options: [vps, github]
+        default: vps
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vps-benchmark-full-${{ github.event.inputs.target || 'vps' }}
+  cancel-in-progress: true
+
+env:
+  RUNS_ON_JSON: >-
+    ${{ (github.event.inputs.target == 'github') && '"ubuntu-latest"'
+        || '["self-hosted","omni-release"]' }}
+
+jobs:
+  unit:
+    name: full-unit ${{ matrix.shard }}
+    runs-on: ${{ fromJSON(github.event.inputs.target == 'github' && '"ubuntu-latest"' || '["self-hosted","omni-release"]') }}
+    strategy: { fail-fast: false, matrix: { shard: [1, 2, 3, 4, 5, 6, 7, 8] } }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with: { node-version: "24" }
+      - run: npm ci
+      - name: unit shard (timed)
+        id: t
+        env: { TEST_SHARD: "${{ matrix.shard }}/8" }
+        run: |
+          s=$(date +%s); npm run test:unit:ci:shard || true; echo "sec=$(( $(date +%s)-s ))" >> "$GITHUB_OUTPUT"
+      - run: echo "| unit ${{ matrix.shard }}/8 | \`${RUNNER_NAME:-github}\` | ${{ steps.t.outputs.sec }}s |" >> "$GITHUB_STEP_SUMMARY"
+
+  vitest:
+    name: full-vitest
+    runs-on: ${{ fromJSON(github.event.inputs.target == 'github' && '"ubuntu-latest"' || '["self-hosted","omni-release"]') }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with: { node-version: "24" }
+      - run: npm ci
+      - name: vitest (timed)
+        id: t
+        run: |
+          s=$(date +%s); npm run test:vitest || true; echo "sec=$(( $(date +%s)-s ))" >> "$GITHUB_OUTPUT"
+      - run: echo "| vitest | \`${RUNNER_NAME:-github}\` | ${{ steps.t.outputs.sec }}s |" >> "$GITHUB_STEP_SUMMARY"
+
+  build-web:
+    name: full-build-web
+    runs-on: ${{ fromJSON(github.event.inputs.target == 'github' && '"ubuntu-latest"' || '["self-hosted","omni-release"]') }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with: { node-version: "24" }
+      - run: npm ci
+      - name: build web (timed)
+        id: t
+        run: |
+          s=$(date +%s); npm run build; echo "sec=$(( $(date +%s)-s ))" >> "$GITHUB_OUTPUT"
+      - run: echo "| build-web | \`${RUNNER_NAME:-github}\` | ${{ steps.t.outputs.sec }}s |" >> "$GITHUB_STEP_SUMMARY"
+
+  build-cli:
+    name: full-build-cli
+    runs-on: ${{ fromJSON(github.event.inputs.target == 'github' && '"ubuntu-latest"' || '["self-hosted","omni-release"]') }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with: { node-version: "24" }
+      - run: npm ci
+      - name: build cli (timed)
+        id: t
+        run: |
+          s=$(date +%s); npm run build:cli || true; echo "sec=$(( $(date +%s)-s ))" >> "$GITHUB_OUTPUT"
+      - run: echo "| build-cli | \`${RUNNER_NAME:-github}\` | ${{ steps.t.outputs.sec }}s |" >> "$GITHUB_STEP_SUMMARY"
+
+  e2e:
+    name: full-e2e ${{ matrix.shard }}
+    runs-on: ${{ fromJSON(github.event.inputs.target == 'github' && '"ubuntu-latest"' || '["self-hosted","omni-release"]') }}
+    strategy: { fail-fast: false, matrix: { shard: [1, 2, 3] } }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with: { node-version: "24" }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: e2e shard (timed, builds on demand)
+        id: t
+        run: |
+          s=$(date +%s); npx playwright test tests/e2e/*.spec.ts --shard=${{ matrix.shard }}/3 || true; echo "sec=$(( $(date +%s)-s ))" >> "$GITHUB_OUTPUT"
+      - run: echo "| e2e ${{ matrix.shard }}/3 | \`${RUNNER_NAME:-github}\` | ${{ steps.t.outputs.sec }}s |" >> "$GITHUB_STEP_SUMMARY"
+
+  integration:
+    name: full-integration ${{ matrix.shard }}
+    runs-on: ${{ fromJSON(github.event.inputs.target == 'github' && '"ubuntu-latest"' || '["self-hosted","omni-release"]') }}
+    strategy: { fail-fast: false, matrix: { shard: [1, 2] } }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with: { node-version: "24" }
+      - run: npm ci
+      - name: integration shard (timed)
+        id: t
+        run: |
+          s=$(date +%s); npm run test:integration -- --test-shard=${{ matrix.shard }}/2 || true; echo "sec=$(( $(date +%s)-s ))" >> "$GITHUB_OUTPUT"
+      - run: echo "| integration ${{ matrix.shard }}/2 | \`${RUNNER_NAME:-github}\` | ${{ steps.t.outputs.sec }}s |" >> "$GITHUB_STEP_SUMMARY"
