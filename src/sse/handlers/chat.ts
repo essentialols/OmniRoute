@@ -245,6 +245,20 @@ export async function handleChat(
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "messages: at least one message is required");
   }
 
+  // Reject non-string `model` before it reaches downstream code that calls
+  // `.toLowerCase()` / `.split()` / `.startsWith()` on it (crash-then-500 with an
+  // empty body, escaping the error sanitizer — #6407). An explicit `null`/`undefined`
+  // stays permitted here because the existing `Missing model` guard below returns a
+  // clean 400 for those; anything else that is not a string is a client type error.
+  const rawModel = (body as { model?: unknown }).model;
+  if (rawModel !== undefined && rawModel !== null && typeof rawModel !== "string") {
+    log.warn("CHAT", `Rejecting non-string model (typeof=${typeof rawModel})`);
+    return errorResponse(
+      HTTP_STATUS.BAD_REQUEST,
+      `model: Expected string, received ${Array.isArray(rawModel) ? "array" : typeof rawModel}`
+    );
+  }
+
   // Early schema validation for scalar params BEFORE provider/model resolution (#6412).
   // Previously, a bad `temperature: "not-a-number"` on an unknown provider returned
   // 404 "model_not_found" — hiding the real schema error. Validate the param shape
