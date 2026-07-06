@@ -2722,6 +2722,15 @@ async function handleRoundRobinCombo({
 
           if (stickyRoundRobinEnabled) {
             recordStickyRoundRobinSuccess(combo.name, target, stickyLimit, filteredTargets);
+          } else {
+            // #948: true round-robin (stickyLimit <= 1). The counter was advanced
+            // eagerly (+1 from the scheduled start index) before this loop ran, so
+            // when the scheduled model failed and a *different* model served via
+            // fallback, the next request reused the fallback-served model. Advance
+            // the pointer past the model that ACTUALLY served (modelIndex) instead,
+            // mirroring recordStickyRoundRobinSuccess's served-index logic. Read
+            // side applies `% modelCount`, so storing modelIndex + 1 is correct.
+            rrCounters.set(combo.name, modelIndex + 1);
           }
 
           // #3825: (re)record the sticky binding so the next turn re-pins (prompt-cache).
