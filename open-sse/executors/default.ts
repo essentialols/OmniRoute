@@ -566,6 +566,41 @@ export class DefaultExecutor extends BaseExecutor {
       withDefaults = withoutClientMetadata;
     }
 
+    // 9router#1649: Mistral's API returns 422 (extra_forbidden) when an
+    // assistant message carries a `reasoning_content` field (replayed thinking
+    // from a prior turn, e.g. via the Codex /responses path). The field is
+    // nested per-message, so the generic top-level 400/field-downgrade retry
+    // doesn't cover it. Strip it from every message before sending — scoped to
+    // Mistral so DeepSeek (which *requires* replayed reasoning_content) is
+    // unaffected.
+    if (
+      this.provider === "mistral" &&
+      withDefaults &&
+      typeof withDefaults === "object" &&
+      !Array.isArray(withDefaults) &&
+      Array.isArray((withDefaults as Record<string, unknown>).messages)
+    ) {
+      const record = withDefaults as Record<string, unknown>;
+      const messages = record.messages as unknown[];
+      let mutated = false;
+      const cleaned = messages.map((msg) => {
+        if (
+          msg &&
+          typeof msg === "object" &&
+          !Array.isArray(msg) &&
+          Object.prototype.hasOwnProperty.call(msg, "reasoning_content")
+        ) {
+          mutated = true;
+          const { reasoning_content: _dropped, ...rest } = msg as Record<string, unknown>;
+          return rest;
+        }
+        return msg;
+      });
+      if (mutated) {
+        withDefaults = { ...record, messages: cleaned };
+      }
+    }
+
     const targetFormat = getTargetFormat(this.provider, credentials?.providerSpecificData);
     const requestFormat =
       withDefaults && typeof withDefaults === "object" && !Array.isArray(withDefaults)
