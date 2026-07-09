@@ -56,6 +56,45 @@ _Living section — bullets land here as PRs merge into `release/v3.8.47` (paral
 - **chore(cli):** the shell-completion cache paths (`readCache`/`refreshCache`/`writeCache`) in `bin/cli/commands/completion.mjs` no longer swallow errors into a bare `catch {}` ([#6257](https://github.com/diegosouzapw/OmniRoute/pull/6257)) — each now binds the error and, when the new `OMNIROUTE_DEBUG_COMPLETION` env var is set, emits a `[omniroute completion]` diagnostic to `stderr`; the caches still fail silently by default so a missing/corrupt cache never breaks tab-completion. (thanks @KooshaPari)
 - **chore(quality):** `validate-release-green --full-ci` reproduces the full `ci.yml` static gate set locally — the pre-flight now reads `ci.yml` itself and runs every `npm run check:*` from the `lint` / `quality-gate` / `quality-extended` / `docs-sync-strict` / `pr-test-policy` jobs (`--` ratchet flags preserved, `test-masking` against `GITHUB_BASE_REF=main`), skipping only the non-local `pr-evidence`/`codeql-ratchet`. Closes the gap where 11 static base-reds leaked to the v3.8.46 release PR in ~2h of layered CI. Also wired into `nightly-release-green` so a static base-red opens a tracking issue the night it lands. Regression guard: `tests/unit/validate-release-green.test.ts` (+5 `extractCiGates` cases).
 
+### 🙌 Contributors
+
+Thanks to everyone whose work landed in v3.8.47:
+
+| Contributor                                                    | PRs / Issues                                                                                 |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| [@anki1kr](https://github.com/anki1kr)                         | #6041, #6078                                                                                 |
+| [@arssnndr](https://github.com/arssnndr)                       | #6163                                                                                        |
+| [@backryun](https://github.com/backryun)                       | #6154, #6235, #6248, #6331                                                                   |
+| [@charleszolot](https://github.com/charleszolot)               | direct commit / report                                                                       |
+| [@chirag127](https://github.com/chirag127)                     | #6145, #6189, #6265, #6328, #6400, #6402, #6404, #6405, #6406, #6407, #6408, #6412, #6414, … |
+| [@developerjillur](https://github.com/developerjillur)         | #6451, #6452, #6541, #6542, #6543, #6545, #6553, #6554, #6558                                |
+| [@dilneiss](https://github.com/dilneiss)                       | #6499                                                                                        |
+| [@DKotsyuba](https://github.com/DKotsyuba)                     | #6193, #6292                                                                                 |
+| [@dtybnrj](https://github.com/dtybnrj)                         | #6349                                                                                        |
+| [@eidoog](https://github.com/eidoog)                           | direct commit / report                                                                       |
+| [@hao3039032](https://github.com/hao3039032)                   | #6351                                                                                        |
+| [@hartmark](https://github.com/hartmark)                       | #6216                                                                                        |
+| [@Iammilansoni](https://github.com/Iammilansoni)               | #6200, #6209, #6245, #6366                                                                   |
+| [@jmengit](https://github.com/jmengit)                         | #6372, #6443                                                                                 |
+| [@jordansilly77-stack](https://github.com/jordansilly77-stack) | #6316                                                                                        |
+| [@JxnLexn](https://github.com/JxnLexn)                         | #6361                                                                                        |
+| [@kanztu](https://github.com/kanztu)                           | #6181                                                                                        |
+| [@karimalsalah](https://github.com/karimalsalah)               | #6291                                                                                        |
+| [@KooshaPari](https://github.com/KooshaPari)                   | #6144, #6166, #6173, #6257                                                                   |
+| [@LuisAlejandroVega](https://github.com/LuisAlejandroVega)     | #6177                                                                                        |
+| [@makcimbx](https://github.com/makcimbx)                       | #6303                                                                                        |
+| [@Moseyuh333](https://github.com/Moseyuh333)                   | #6186                                                                                        |
+| [@pizzav-xyz](https://github.com/pizzav-xyz)                   | #6648                                                                                        |
+| [@rianonehub](https://github.com/rianonehub)                   | #6204                                                                                        |
+| [@serverless83](https://github.com/serverless83)               | #6212                                                                                        |
+| [@shabeer](https://github.com/shabeer)                         | direct commit / report                                                                       |
+| [@swingtempo](https://github.com/swingtempo)                   | #6312                                                                                        |
+| [@Theadd](https://github.com/Theadd)                           | #6195                                                                                        |
+| [@ThongAccount](https://github.com/ThongAccount)               | #6649                                                                                        |
+| [@vinayakkulkarni](https://github.com/vinayakkulkarni)         | #6324, #6332                                                                                 |
+| [@VXNCXNX](https://github.com/VXNCXNX)                         | #6213                                                                                        |
+| [@xz-dev](https://github.com/xz-dev)                           | #6322, #6336                                                                                 |
+
 ---
 
 ## [3.8.46] — 2026-07-07
