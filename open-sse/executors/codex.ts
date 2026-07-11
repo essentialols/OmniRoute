@@ -780,11 +780,15 @@ export class CodexExecutor extends BaseExecutor {
         nextInput.signal?.addEventListener("abort", abortHandler, { once: true });
 
         try {
-          ws = await websocketFn(toWebSocketUrl(url), {
-            browser: "chrome_142",
-            os: "windows",
-            headers,
-          });
+          const wsOpts: Record<string, unknown> = { headers };
+          if (!isCodexPassthroughMode()) {
+            // Impersonate Chrome 142 TLS fingerprint when NOT in passthrough mode.
+            // The real Codex CLI is a Rust binary, not Chrome, so no impersonation
+            // is closer to truth than a wrong Chrome fingerprint.
+            wsOpts.browser = "chrome_142";
+            wsOpts.os = "windows";
+          }
+          ws = await websocketFn(toWebSocketUrl(url), wsOpts);
           if (closed) return;
           if (nextInput.signal?.aborted) {
             finishStream({ reason: "client_aborted" });

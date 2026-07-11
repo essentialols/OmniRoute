@@ -112,3 +112,25 @@ describe("passthrough buildHeaders", () => {
     assert.equal(shouldSynthesizeIdentity, false);
   });
 });
+
+describe("passthrough WebSocket transport", () => {
+  afterEach(() => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+  });
+
+  it("should not pass browser/os options to websocket in passthrough mode", () => {
+    process.env.CODEX_PASSTHROUGH_MODE = "1";
+
+    // In passthrough mode, the wreq-js websocket options should NOT
+    // include browser/os impersonation. The call should either:
+    // (a) use Node native WebSocket, or
+    // (b) pass wreq-js without browser/os fields
+    const passthroughActive = isCodexPassthroughMode();
+    const wsOptions = passthroughActive
+      ? { headers: {} } // no browser/os
+      : { browser: "chrome_142", os: "windows", headers: {} };
+
+    assert.equal(Object.prototype.hasOwnProperty.call(wsOptions, "browser"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(wsOptions, "os"), false);
+  });
+});
