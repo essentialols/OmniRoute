@@ -1,3 +1,8 @@
+---
+title: "Design System & Visual Identity"
+lastUpdated: 2026-07-11
+---
+
 # OmniRoute — Design System & Visual Identity
 
 > **Status:** reference — the standardization described here is **implemented** (phases 1–6: grid wallpaper, primitives, status-color centralization, mono token, DataTable token migration, focus-ring → accent, Checkbox/Textarea primitives, `cn()` → tailwind-merge, grid on every standalone screen, fluid 4K content shell, opaque data-table surfaces). This document is the canonical description of the dashboard's design tokens, components, and conventions; the phase framing below is kept as the rationale for each decision.
