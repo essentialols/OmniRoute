@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { obfuscateSensitiveWords } from "../../open-sse/services/claudeCodeObfuscation.ts";
 import { cavemanCompress } from "../../open-sse/services/compression/caveman.ts";
+import { signRequestBody } from "../../open-sse/services/claudeCodeCCH.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -255,5 +256,34 @@ describe("first user message protection", () => {
     const messages = (result.body as { messages: Array<{ content: string }> }).messages;
     // First user message SHOULD be compressed (pleasantries/polite framing stripped)
     assert.notEqual(messages[0].content, body.messages[0].content);
+  });
+});
+
+describe("CCH recomputation after compression", () => {
+  it("recomputes cch in passthrough mode when body was compressed", async () => {
+    const bodyWithPlaceholder = JSON.stringify({
+      system: [
+        {
+          type: "text",
+          text: "x-anthropic-billing-header: cc_version=2.1.205.a3f; cc_entrypoint=cli; cch=00000;",
+        },
+      ],
+      messages: [{ role: "user", content: "test" }],
+    });
+
+    const signed = await signRequestBody(bodyWithPlaceholder);
+    const match = signed.match(/cch=([0-9a-f]{5});/);
+    assert.ok(match, "CCH should be computed");
+    assert.notEqual(match![1], "00000", "CCH should not be placeholder");
+  });
+
+  it("does not modify body without cch placeholder", async () => {
+    const bodyNoCCH = JSON.stringify({
+      system: [{ type: "text", text: "normal system prompt" }],
+      messages: [{ role: "user", content: "test" }],
+    });
+
+    const result = await signRequestBody(bodyNoCCH);
+    assert.equal(result, bodyNoCCH, "Body without cch= should be unchanged");
   });
 });

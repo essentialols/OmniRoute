@@ -1227,10 +1227,14 @@ export class BaseExecutor {
 
         // CCH signing — replaces the cch=00000 placeholder in the billing
         // header with an xxHash64 integrity token over the serialized body.
-        if (
-          !passthroughActive &&
-          (isClaudeCodeCompatible(this.provider) || this.provider === "claude")
-        ) {
+        if (isClaudeCodeCompatible(this.provider) || this.provider === "claude") {
+          if (passthroughActive) {
+            // In passthrough mode, the client sent a real CCH computed over its
+            // original body. If compression modified messages, that CCH is now
+            // stale: reset it to the 00000 placeholder so signRequestBody
+            // recomputes the correct value over the final serialized body.
+            bodyString = bodyString.replace(/\bcch=[0-9a-f]{5};/, "cch=00000;");
+          }
           bodyString = await signRequestBody(bodyString);
         }
 
