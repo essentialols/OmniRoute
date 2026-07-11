@@ -61,6 +61,12 @@ export interface CavemanConfig {
   language?: string;
   autoDetectLanguage?: boolean;
   enabledLanguagePacks?: string[];
+  /**
+   * When true, the first user message is never compressed. Protects the CC
+   * fingerprint suffix, which is derived from fixed character positions of the
+   * first user message text (see claudeCodeFingerprint.ts). Default: false.
+   */
+  skipFirstUserMessage: boolean;
 }
 
 export interface CavemanOutputModeConfig {
@@ -337,6 +343,7 @@ export const DEFAULT_CAVEMAN_CONFIG: CavemanConfig = {
     "^\\s+at\\s",
   ],
   intensity: "lite",
+  skipFirstUserMessage: false,
 };
 
 export const DEFAULT_CAVEMAN_OUTPUT_MODE_CONFIG: CavemanOutputModeConfig = {

@@ -3,6 +3,7 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { obfuscateSensitiveWords } from "../../open-sse/services/claudeCodeObfuscation.ts";
+import { cavemanCompress } from "../../open-sse/services/compression/caveman.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -200,5 +201,59 @@ describe("tool preservation in passthrough mode", () => {
     // In passthrough mode, cache_control should NOT be deleted
     // (the guard skips the delete loop)
     assert.ok(tools[0].cache_control !== undefined);
+  });
+});
+
+describe("first user message protection", () => {
+  it("does not compress the first user message when skipFirstUserMessage is true", () => {
+    const body = {
+      messages: [
+        { role: "user", content: "Hello, could you please explain the database authentication?" },
+        {
+          role: "assistant",
+          content: "Sure, I would be happy to explain the authentication process.",
+        },
+        {
+          role: "user",
+          content: "Thank you so much, could you please also explain the authorization?",
+        },
+      ],
+    };
+
+    const result = cavemanCompress(body, {
+      enabled: true,
+      intensity: "lite",
+      skipFirstUserMessage: true,
+      compressRoles: ["user", "assistant"],
+      minMessageLength: 1,
+    });
+
+    const messages = (result.body as { messages: Array<{ content: string }> }).messages;
+
+    // First user message should be UNCHANGED
+    assert.equal(messages[0].content, body.messages[0].content);
+
+    // Second user message (messages[2]) should be compressed (filler stripped)
+    assert.notEqual(messages[2].content, body.messages[2].content);
+  });
+
+  it("compresses all messages when skipFirstUserMessage is false", () => {
+    const body = {
+      messages: [
+        { role: "user", content: "Hello, could you please explain the database authentication?" },
+      ],
+    };
+
+    const result = cavemanCompress(body, {
+      enabled: true,
+      intensity: "lite",
+      skipFirstUserMessage: false,
+      compressRoles: ["user"],
+      minMessageLength: 1,
+    });
+
+    const messages = (result.body as { messages: Array<{ content: string }> }).messages;
+    // First user message SHOULD be compressed (pleasantries/polite framing stripped)
+    assert.notEqual(messages[0].content, body.messages[0].content);
   });
 });

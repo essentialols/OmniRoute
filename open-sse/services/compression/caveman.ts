@@ -478,7 +478,17 @@ export function cavemanCompress(
   const customPreservation = compileUserPreservePatterns(config.preservePatterns ?? []);
   validationWarnings.push(...customPreservation.warnings);
 
+  let firstUserSeen = false;
   const compressedMessages = body.messages.map((msg): ChatMessage => {
+    // Skip first user message to protect fingerprint hash computation.
+    if (config.skipFirstUserMessage && msg.role === "user" && !firstUserSeen) {
+      firstUserSeen = true;
+      const contentStr = typeof msg.content === "string" ? msg.content : "";
+      totalOriginalTokens += estimateCompressionTokens(contentStr);
+      totalCompressedTokens += estimateCompressionTokens(contentStr);
+      return msg;
+    }
+
     if (typeof msg.content !== "string" && !Array.isArray(msg.content)) {
       return msg;
     }
