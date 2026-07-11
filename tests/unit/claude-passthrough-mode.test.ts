@@ -32,3 +32,35 @@ describe("claude passthrough mode toggle", () => {
     assert.equal(isPassthroughMode(), false);
   });
 });
+
+describe("passthrough identity", () => {
+  // parseUpstreamMetadataUserId is already exported from claudeIdentity.ts.
+  // We test the gating logic here (in passthrough mode, cloakIdentity must
+  // be false so the upstream metadata path is taken).
+
+  it("does not cloak identity when passthrough mode is on", () => {
+    process.env.CLAUDE_PASSTHROUGH_MODE = "1";
+    const { isPassthroughMode } = require("../../open-sse/executors/claudeIdentity.ts");
+
+    // Simulate the gating logic from base.ts:945
+    const isClaudeCodeClient = true;
+    const hasClaudeOAuthToken = true;
+    const passthroughActive = isPassthroughMode();
+
+    // In passthrough mode, cloakIdentity should be false regardless of client type
+    const cloakIdentity = (isClaudeCodeClient || hasClaudeOAuthToken) && !passthroughActive;
+    assert.equal(cloakIdentity, false);
+  });
+
+  it("still cloaks identity when passthrough mode is off", () => {
+    delete process.env.CLAUDE_PASSTHROUGH_MODE;
+    const { isPassthroughMode } = require("../../open-sse/executors/claudeIdentity.ts");
+
+    const isClaudeCodeClient = true;
+    const hasClaudeOAuthToken = true;
+    const passthroughActive = isPassthroughMode();
+
+    const cloakIdentity = (isClaudeCodeClient || hasClaudeOAuthToken) && !passthroughActive;
+    assert.equal(cloakIdentity, true);
+  });
+});
