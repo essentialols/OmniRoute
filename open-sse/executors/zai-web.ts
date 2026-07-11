@@ -196,7 +196,7 @@ export class ZaiWebExecutor extends BaseExecutor {
     super("zai-web", { id: "zai-web", baseUrl: BASE_URL });
   }
 
-  private buildHeaders(rawCookie: string, token: string): Record<string, string> {
+  private buildZaiHeaders(rawCookie: string, token: string): Record<string, string> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
@@ -347,7 +347,7 @@ export class ZaiWebExecutor extends BaseExecutor {
     const messages = (bodyObj.messages as Array<{ role: string; content: unknown }>) || [];
     const modelId = (bodyObj.model as string) || "glm-4.6";
     const reqBody = this.buildRequestBody(messages, modelId);
-    const reqHeaders = this.buildHeaders(rawCookie, token);
+    const reqHeaders = this.buildZaiHeaders(rawCookie, token);
 
     const fetched = await this.fetchUpstream(reqHeaders, reqBody, body, signal);
     if ("errorResult" in fetched) return fetched.errorResult;
