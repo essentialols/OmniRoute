@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import {
   applyCodexClientIdentityHeaders,
+  applyCodexClientMetadata,
   createCodexClientIdentity,
 } from "../../open-sse/config/codexIdentity.ts";
 
@@ -64,5 +65,29 @@ describe("passthrough identity headers", () => {
     assert.ok(headers["x-client-request-id"]);
     assert.ok(headers["x-codex-window-id"]);
     assert.ok(headers["x-codex-turn-metadata"]);
+  });
+});
+
+describe("passthrough body metadata", () => {
+  afterEach(() => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+  });
+
+  it("does not inject client_metadata when passthrough is on", () => {
+    process.env.CODEX_PASSTHROUGH_MODE = "1";
+    const body: Record<string, unknown> = { input: [], model: "gpt-5.5" };
+    const identity = createCodexClientIdentity("test-session-id", null);
+    applyCodexClientMetadata(body, identity);
+
+    assert.equal(body.client_metadata, undefined);
+  });
+
+  it("still injects client_metadata when passthrough is off", () => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+    const body: Record<string, unknown> = { input: [], model: "gpt-5.5" };
+    const identity = createCodexClientIdentity("test-session-id", null);
+    applyCodexClientMetadata(body, identity);
+
+    assert.ok(body.client_metadata !== undefined);
   });
 });
