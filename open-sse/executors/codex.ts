@@ -993,6 +993,10 @@ export class CodexExecutor extends BaseExecutor {
     stream: boolean,
     credentials: ProviderCredentials
   ) {
+    // NOTE: Body transforms in transformRequest are compatibility fixes, not identity
+    // synthesis. They remain active in CODEX_PASSTHROUGH_MODE because:
+    // - GPT-5 rejects system role, store=true, max_tokens, etc.
+    // - Passthrough mode only disables IDENTITY (headers, metadata, UA) synthesis.
     void stream;
     // Do not mutate the caller's payload in place. Combo quality checks and
     // other post-execute paths still inspect the original request body.
