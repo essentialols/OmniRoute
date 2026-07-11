@@ -1211,8 +1211,9 @@ export class BaseExecutor {
         let bodyString = JSON.stringify(transformedBody);
 
         const shouldFingerprint =
-          isCliCompatEnabled(this.provider) ||
-          (this.provider === "claude" && (isClaudeCodeClient || hasClaudeOAuthToken));
+          !passthroughActive &&
+          (isCliCompatEnabled(this.provider) ||
+            (this.provider === "claude" && (isClaudeCodeClient || hasClaudeOAuthToken)));
         if (shouldFingerprint) {
           const fingerprinted = applyFingerprint(this.provider, headers, transformedBody);
           finalHeaders = fingerprinted.headers;
