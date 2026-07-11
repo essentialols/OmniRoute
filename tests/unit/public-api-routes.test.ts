@@ -9,7 +9,22 @@ test("isPublicApiRoute allows public management prefixes", () => {
   assert.equal(isPublicApiRoute("/api/oauth/cursor/callback"), true);
 });
 
+test("isPublicApiRoute keeps cloud read/auth routes public but not cloud write routes", () => {
+  assert.equal(isPublicApiRoute("/api/cloud/auth", "POST"), true);
+  assert.equal(isPublicApiRoute("/api/cloud/model/resolve", "POST"), true);
+  assert.equal(isPublicApiRoute("/api/cloud/models/alias", "GET"), true);
+
+  assert.equal(isPublicApiRoute("/api/cloud/credentials/update", "PUT"), false);
+  assert.equal(isPublicApiRoute("/api/cloud/models/alias", "PUT"), false);
+  assert.equal(isPublicApiRoute("/api/cloud/unknown", "GET"), false);
+});
+
 test("isPublicApiRoute allows readonly health and require-login bootstrap routes", () => {
+  assert.equal(isPublicApiRoute("/api/health/ping", "GET"), true);
+  assert.equal(isPublicApiRoute("/api/health/ping", "HEAD"), true);
+  assert.equal(isPublicApiRoute("/api/health/ping", "OPTIONS"), true);
+  assert.equal(isPublicApiRoute("/api/health/ping", "DELETE"), false);
+
   assert.equal(isPublicApiRoute("/api/monitoring/health", "GET"), true);
   assert.equal(isPublicApiRoute("/api/monitoring/health", "HEAD"), true);
   assert.equal(isPublicApiRoute("/api/monitoring/health", "OPTIONS"), true);

@@ -147,6 +147,17 @@ test("KiroExecutor.buildHeaders includes Kiro-specific auth and metadata", () =>
   assert.ok(headers["Amz-Sdk-Invocation-Id"]);
 });
 
+test("KiroExecutor.buildHeaders marks long-lived Kiro API keys", () => {
+  const executor = new KiroExecutor();
+  const headers = executor.buildHeaders(
+    { apiKey: "kiro-api-key", providerSpecificData: { authMethod: "api_key" } },
+    true
+  );
+
+  assert.equal(headers.Authorization, "Bearer kiro-api-key");
+  assert.equal(headers.tokentype, "API_KEY");
+});
+
 test("KiroExecutor.transformRequest removes the top-level model field", () => {
   const executor = new KiroExecutor();
   const body = {
@@ -162,10 +173,10 @@ test("KiroExecutor.transformRequest removes the top-level model field", () => {
 
   const result = executor.transformRequest("kiro-model", body, true, {});
   assert.equal("model" in result, false);
-  assert.equal(
-    (result as any).conversationState.currentMessage.userInputMessage.modelId,
-    "kiro-model"
-  );
+  const kiroResult = result as unknown as {
+    conversationState: { currentMessage: { userInputMessage: { modelId: string } } };
+  };
+  assert.equal(kiroResult.conversationState.currentMessage.userInputMessage.modelId, "kiro-model");
 });
 
 test("KiroExecutor.transformRequest forwards additionalModelRequestFields (thinking) to AWS", () => {
@@ -182,7 +193,10 @@ test("KiroExecutor.transformRequest forwards additionalModelRequestFields (think
     },
   };
 
-  const result = executor.transformRequest("kiro-model", body, true, {}) as any;
+  const result = executor.transformRequest("kiro-model", body, true, {}) as unknown as Record<
+    string,
+    unknown
+  >;
   // The thinking control must survive the strict allowlist — otherwise graded
   // reasoning never reaches CodeWhisperer (the field the openai-to-kiro
   // translator builds would be silently dropped).
@@ -379,6 +393,13 @@ test("KiroExecutor.refreshCredentials handles missing and AWS-style refresh toke
 
   try {
     assert.equal(await executor.refreshCredentials({}, null), null);
+    assert.equal(
+      await executor.refreshCredentials(
+        { refreshToken: "ignored", providerSpecificData: { authMethod: "api_key" } },
+        null
+      ),
+      null
+    );
     const result = await executor.refreshCredentials(
       {
         refreshToken: "refresh",

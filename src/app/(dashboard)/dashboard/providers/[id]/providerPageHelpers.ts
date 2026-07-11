@@ -64,6 +64,7 @@ export type CompatByProtocolMap = Partial<
 export type CompatModelRow = {
   id?: string;
   name?: string;
+  /** optional registry aliases for display/import */ aliases?: readonly string[];
   source?: string;
   apiFormat?: string;
   supportedEndpoints?: string[];
@@ -77,7 +78,6 @@ export type CompatModelRow = {
 };
 
 export type CompatModelMap = Map<string, CompatModelRow>;
-
 export type HeaderDraftRow = { id: string; name: string; value: string };
 
 // ---------------------------------------------------------------------------
@@ -85,7 +85,6 @@ export type HeaderDraftRow = { id: string; name: string; value: string };
 // outside the .tsx). Returns the i18n key for a targetFormat value, or null when the
 // value is unknown (the caller then renders the raw value verbatim).
 // ---------------------------------------------------------------------------
-
 const TARGET_FORMAT_BADGE_I18N_KEYS: Record<string, string> = {
   openai: "compatProtocolOpenAI",
   "openai-responses": "compatProtocolOpenAIResponses",
@@ -255,6 +254,25 @@ export function isBaseUrlConfigurableProvider(providerId?: string | null) {
     providerId &&
     (CONFIGURABLE_BASE_URL_PROVIDERS.has(providerId) || isSelfHostedChatProvider(providerId))
   );
+}
+
+/**
+ * #6147 — whether a built-in provider is eligible for an OPT-IN "Advanced →
+ * override base URL" affordance in the edit-connection modal.
+ *
+ * This does NOT widen the always-on base-URL field: providers already covered by
+ * `isBaseUrlConfigurableProvider` (the configurable set + self-hosted) keep their
+ * existing dedicated field and return `false` here. Every *other* provider id is
+ * eligible to opt in per-connection so an operator can hot-fix a broken built-in
+ * preset by pointing it at a custom endpoint. The field stays hidden until the
+ * user explicitly reveals it (or an override was already saved), so nothing is
+ * exposed by default. OAuth connections are excluded at the call site, since
+ * their save path does not persist `providerSpecificData.baseUrl`.
+ */
+export function isBaseUrlOverrideEligibleProvider(providerId?: string | null): boolean {
+  if (!providerId) return false;
+  if (isBaseUrlConfigurableProvider(providerId)) return false;
+  return true;
 }
 
 export function getProviderBaseUrlDefault(providerId?: string | null) {

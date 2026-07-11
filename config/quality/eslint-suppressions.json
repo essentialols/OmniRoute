@@ -242,8 +242,8 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/dashboard/settings/components/ComboDefaultsTab.tsx": {
-    "no-restricted-syntax": {
+  "src/app/(dashboard)/dashboard/settings/components/MitmProxyTab.tsx": {
+    "@next/next/no-html-link-for-pages": {
       "count": 1
     }
   },
@@ -733,11 +733,6 @@
     }
   },
   "tests/unit/chatgpt-web-tools-5240.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 6
-    }
-  },
-  "tests/unit/chatgpt-web.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 6
     }
@@ -1392,11 +1387,6 @@
       "count": 1
     }
   },
-  "tests/unit/executor-kiro.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "tests/unit/executor-nlpcloud.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
@@ -1565,11 +1555,6 @@
   "tests/unit/memory-summarization.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
-    }
-  },
-  "tests/unit/messages-count-tokens-route.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 4
     }
   },
   "tests/unit/mimocode-executor.test.ts": {
@@ -1799,7 +1784,7 @@
   },
   "tests/unit/provider-models-route.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 58
+      "count": 57
     }
   },
   "tests/unit/provider-models-token-limits.test.ts": {
@@ -1845,11 +1830,6 @@
   "tests/unit/provider-validation-qwen-web-5855.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "tests/unit/provider-validation-specialty.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 8
     }
   },
   "tests/unit/providers-route-managed-catalog.test.ts": {
@@ -1979,7 +1959,7 @@
   },
   "tests/unit/response-sanitizer.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 84
+      "count": 83
     }
   },
   "tests/unit/responses-parse-once-4041.test.ts": {
@@ -2000,11 +1980,6 @@
   "tests/unit/safe-outbound-fetch.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 9
-    }
-  },
-  "tests/unit/save-call-log-persistence.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 7
     }
   },
   "tests/unit/schema-coercion.test.ts": {

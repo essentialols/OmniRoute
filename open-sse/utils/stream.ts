@@ -31,6 +31,8 @@ import {
   OMIT_STREAMING_CHUNK_MARKER,
   sanitizeStreamingChunk,
 } from "../handlers/responseSanitizer.ts";
+import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
+import { shouldDropResponsesCommentaryEvent } from "./responsesCommentaryDrop.ts";
 import { buildErrorBody } from "./error.ts";
 import { parseTextualToolCallCandidate, isValidToolCallHeaderPrefix } from "./textualToolCall.ts";
 import { recordToolLatency } from "../services/toolLatencyTracker.ts";
@@ -119,6 +121,12 @@ type StreamOptions = {
   copilotCompatibleReasoning?: boolean;
   /** Suppress the `</think>` close marker for clients that render it verbatim (#5245). */
   suppressThinkClose?: boolean;
+  /**
+   * Drop internal commentary-phase output items from Responses API passthrough
+   * streams before forwarding (#6199). When omitted, falls back to the
+   * `RESPONSES_PASSTHROUGH_DROP_COMMENTARY` feature flag (default on).
+   */
+  dropResponsesCommentary?: boolean;
   provider?: string | null;
   reqLogger?: StreamLogger | null;
   toolNameMap?: unknown;
@@ -621,8 +629,15 @@ export function createSSEStream(options: StreamOptions = {}) {
     body = null,
     onComplete = null,
     onFailure = null,
+    dropResponsesCommentary,
   } = options;
   const signatureNamespace = connectionId;
+
+  // Drop internal commentary-phase Responses output before forwarding (#6199).
+  // Explicit option wins; otherwise read the feature flag (default on). Resolved
+  // once per stream — never on the hot per-chunk path.
+  const shouldDropResponsesCommentary =
+    dropResponsesCommentary ?? isFeatureFlagEnabled("RESPONSES_PASSTHROUGH_DROP_COMMENTARY");
 
   const clientExpectsResponsesStream =
     (mode === STREAM_MODE.PASSTHROUGH
@@ -684,6 +699,12 @@ export function createSSEStream(options: StreamOptions = {}) {
   let passthroughResponsesId: string | null = null;
   let passthroughResponsesCurrentFunctionCallKey: string | null = null;
   const passthroughResponsesReasoningSummarySeen = new Set<string>();
+  // #6199 — commentary-phase items announced via `response.output_item.added` are
+  // internal. Their `response.output_text.delta`/`response.output_text.done`/
+  // `response.output_item.done` events do not carry the `phase`, so we remember the
+  // item id + output_index here and drop every matching follow-up event.
+  const passthroughResponsesCommentaryItemIds = new Set<string>();
+  const passthroughResponsesCommentaryIndexes = new Set<number>();
   // #5786 — highest Responses-API `sequence_number` already forwarded on this stream.
   // The Responses API guarantees a strictly increasing sequence_number, so any event at
   // or below this watermark is an upstream reconnect/retry replay and must be dropped —
@@ -1287,6 +1308,21 @@ export function createSSEStream(options: StreamOptions = {}) {
                     parsed.type === "error");
 
                 if (isResponsesSSE) {
+                  // #6199/#6561 — statefully drop internal commentary-phase output (see
+                  // ./responsesCommentaryDrop.ts) and clear the buffered `event:` line
+                  // for the same frame, or it flushes alone as an event-only SSE frame.
+                  if (
+                    shouldDropResponsesCommentary &&
+                    shouldDropResponsesCommentaryEvent(
+                      parsed as JsonRecord,
+                      passthroughResponsesCommentaryItemIds,
+                      passthroughResponsesCommentaryIndexes
+                    )
+                  ) {
+                    clearPendingPassthroughEvent();
+                    continue;
+                  }
+
                   const responsesIdsNormalized = normalizeResponsesSseIds(parsed as JsonRecord);
                   const parsedResponse =
                     parsed.response &&
