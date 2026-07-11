@@ -799,34 +799,39 @@ export class BaseExecutor {
         ) {
           const tb = transformedBody as Record<string, unknown>;
 
-          stripProxyToolPrefix(tb);
-          remapToolNamesInRequest(tb);
-          // Cloak third-party tool names + sanitize invalid tool schemas so
-          // Anthropic does not refuse native Claude OAuth traffic with a
-          // misleading "out of extra usage" placeholder. See Spec E.
-          cloakThirdPartyToolNames(tb);
-          if (Array.isArray(tb.tools)) {
-            tb.tools = sanitizeClaudeToolSchemas(tb.tools);
-          }
-          obfuscateInBody(tb);
-
-          // NOTE (issue #2260): This is the native `claude` provider OAuth path.
-          // It is intentionally NOT routed through applyCcBridgeTransformPipeline.
-          // The native OAuth path already prepends its own billing line + sentinel
-          // (see lines ~744-773 below, dayStamp-based, cc_entrypoint=cli, cch=00000
-          // placeholder, signed at body level). The CC bridge transforms DSL is
-          // wired into buildAndSignClaudeCodeRequest (claudeCodeCompatible.ts step 5b)
-          // which is the anthropic-compatible-cc-* relay path — a different,
-          // separately classified surface. Do not double-prepend here.
-
-          // Real CLI never sets cache_control on tools.
-          if (Array.isArray(tb.tools)) {
-            for (const t of tb.tools as Array<Record<string, unknown>>) {
-              delete t.cache_control;
+          // In passthrough mode, forward the client's tool definitions exactly as
+          // received: no prefix strip, no name remap/cloak, no schema rewrite, no
+          // obfuscation, and no cache_control removal. CC's own tool defs are valid.
+          if (!passthroughActive) {
+            stripProxyToolPrefix(tb);
+            remapToolNamesInRequest(tb);
+            // Cloak third-party tool names + sanitize invalid tool schemas so
+            // Anthropic does not refuse native Claude OAuth traffic with a
+            // misleading "out of extra usage" placeholder. See Spec E.
+            cloakThirdPartyToolNames(tb);
+            if (Array.isArray(tb.tools)) {
+              tb.tools = sanitizeClaudeToolSchemas(tb.tools);
             }
-            // Also strip OmniRoute provider prefix from versioned built-in tool
-            // model fields (e.g. cc/claude-opus-4-8 → claude-opus-4-8).
-            stripVersionedToolModelPrefix(tb.tools);
+            obfuscateInBody(tb);
+
+            // NOTE (issue #2260): This is the native `claude` provider OAuth path.
+            // It is intentionally NOT routed through applyCcBridgeTransformPipeline.
+            // The native OAuth path already prepends its own billing line + sentinel
+            // (see lines ~744-773 below, dayStamp-based, cc_entrypoint=cli, cch=00000
+            // placeholder, signed at body level). The CC bridge transforms DSL is
+            // wired into buildAndSignClaudeCodeRequest (claudeCodeCompatible.ts step 5b)
+            // which is the anthropic-compatible-cc-* relay path — a different,
+            // separately classified surface. Do not double-prepend here.
+
+            // Real CLI never sets cache_control on tools.
+            if (Array.isArray(tb.tools)) {
+              for (const t of tb.tools as Array<Record<string, unknown>>) {
+                delete t.cache_control;
+              }
+              // Also strip OmniRoute provider prefix from versioned built-in tool
+              // model fields (e.g. cc/claude-opus-4-8 → claude-opus-4-8).
+              stripVersionedToolModelPrefix(tb.tools);
+            }
           }
 
           // Per-request behavior overrides via custom client headers.

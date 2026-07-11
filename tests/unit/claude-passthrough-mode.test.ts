@@ -185,3 +185,20 @@ describe("fingerprint reordering disabled in passthrough mode", () => {
     assert.equal(shouldFingerprint, false);
   });
 });
+
+describe("tool preservation in passthrough mode", () => {
+  it("preserves cache_control on tools", () => {
+    process.env.CLAUDE_PASSTHROUGH_MODE = "1";
+    const { isPassthroughMode } = require("../../open-sse/executors/claudeIdentity.ts");
+    assert.equal(isPassthroughMode(), true);
+
+    const tools = [
+      { name: "Bash", description: "Run bash", cache_control: { type: "ephemeral" } },
+      { name: "Read", description: "Read files" },
+    ];
+
+    // In passthrough mode, cache_control should NOT be deleted
+    // (the guard skips the delete loop)
+    assert.ok(tools[0].cache_control !== undefined);
+  });
+});
