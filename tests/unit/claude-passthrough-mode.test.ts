@@ -5,6 +5,10 @@ import { createRequire } from "node:module";
 import { obfuscateSensitiveWords } from "../../open-sse/services/claudeCodeObfuscation.ts";
 import { cavemanCompress } from "../../open-sse/services/compression/caveman.ts";
 import { signRequestBody } from "../../open-sse/services/claudeCodeCCH.ts";
+import {
+  DEFAULT_CAVEMAN_CONFIG,
+  DEFAULT_COMPRESSION_CONFIG,
+} from "../../open-sse/services/compression/types.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -285,5 +289,19 @@ describe("CCH recomputation after compression", () => {
 
     const result = await signRequestBody(bodyNoCCH);
     assert.equal(result, bodyNoCCH, "Body without cch= should be unchanged");
+  });
+});
+
+describe("compression defaults for passthrough mode", () => {
+  // NOTE: preserveSystemPrompt / preserveSystemPromptMode are fields of
+  // CompressionConfig (DEFAULT_COMPRESSION_CONFIG), not CavemanConfig. The
+  // per-role compression default lives on DEFAULT_CAVEMAN_CONFIG.
+  it("preserves system prompt by default", () => {
+    assert.equal(DEFAULT_COMPRESSION_CONFIG.preserveSystemPrompt, true);
+    assert.equal(DEFAULT_COMPRESSION_CONFIG.preserveSystemPromptMode, "always");
+  });
+
+  it("only compresses user role by default", () => {
+    assert.deepEqual(DEFAULT_CAVEMAN_CONFIG.compressRoles, ["user"]);
   });
 });
