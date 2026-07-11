@@ -88,6 +88,83 @@ export function passthroughUpstreamSessionId(
   return UUID_RE.test(v) ? v : null;
 }
 
+// ---------- Passthrough identity-forwarding gate --------------------------
+
+/**
+ * True when passthrough is actually forwarding a *genuine* Claude Code client
+ * identity — i.e. `clientHeaders` carry the CC / Stainless identity markers a
+ * real `claude-cli` session sends. Passthrough exists to relay real CC traffic
+ * verbatim; when the inbound request is NOT a genuine CC client (e.g. a plain
+ * OpenAI-compatible caller) there is no real identity to forward, so the caller
+ * must fall back to the normal cloaked synthesis path instead of shipping an
+ * uncloaked synthesized identity that Anthropic throttles (429). Every
+ * synthesis-vs-forward decision in the Claude path should gate on this, not on
+ * the raw `isPassthroughMode()` env toggle.
+ */
+export function passthroughForwardsRealCcIdentity(
+  clientHeaders: Record<string, string | undefined> | null | undefined
+): boolean {
+  if (!clientHeaders) return false;
+  // Case-insensitive header lookup (inbound headers are normally lowercased, but
+  // do not assume it: match on the lowercased key).
+  const lowered: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(clientHeaders)) lowered[k.toLowerCase()] = v;
+  const get = (n: string): string | undefined => lowered[n.toLowerCase()];
+  // A real CC session forwards its own validated session id.
+  if (passthroughUpstreamSessionId(clientHeaders)) return true;
+  // Stainless SDK marker — every real @anthropic-ai/sdk (claude-cli) client sends it.
+  if (typeof get("x-stainless-package-version") === "string") return true;
+  // CC entrypoint marker.
+  const xApp = get("x-app");
+  if (typeof xApp === "string" && xApp.trim().toLowerCase() === "cli") return true;
+  // claude-code / claude-cli user agent.
+  const ua = get("user-agent");
+  if (
+    typeof ua === "string" &&
+    (ua.toLowerCase().includes("claude-code") || ua.toLowerCase().includes("claude-cli"))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * The Claude OAuth identity-cloak decision. Cloak (synthesize a per-account
+ * identity) for any Claude Code client or OAuth token, EXCEPT when passthrough is
+ * genuinely forwarding a real CC client identity — only then do we relay the
+ * client's own identity verbatim. A non-CC caller in passthrough still gets
+ * cloaked so its request is not throttled.
+ */
+export function shouldCloakClaudeIdentity(opts: {
+  isClaudeCodeClient: boolean;
+  hasClaudeOAuthToken: boolean;
+  passthroughActive: boolean;
+  clientHeaders: Record<string, string | undefined> | null | undefined;
+}): boolean {
+  const forwardsRealCc =
+    opts.passthroughActive && passthroughForwardsRealCcIdentity(opts.clientHeaders);
+  return (opts.isClaudeCodeClient || opts.hasClaudeOAuthToken) && !forwardsRealCc;
+}
+
+/**
+ * Drop a top-level `context_management` from a passthrough request body. When
+ * passthrough forwards a real CC client's own `anthropic-beta` verbatim and that
+ * header does not negotiate `context-management-2025-06-27`, strict Anthropic
+ * rejects a top-level `context_management` with 400
+ * "context_management: Extra inputs are not permitted". OmniRoute's thinking
+ * pairing can inject that field, so it must be stripped before the forwarded
+ * request is signed. No-op when `forwardsRealCcIdentity` is false — the non-CC
+ * fallback runs the full synthesis path, which negotiates the matching beta
+ * itself and is accepted (as the non-passthrough path already is).
+ */
+export function stripPassthroughInjectedContextManagement(
+  body: Record<string, unknown> | null | undefined,
+  forwardsRealCcIdentity: boolean
+): void {
+  if (!forwardsRealCcIdentity || !body || typeof body !== "object") return;
+  delete body.context_management;
+}
+
 // ---------- Session ID (per OAuth account, process lifetime) -------------
 
 const sessionCache = new Map<string, string>();
