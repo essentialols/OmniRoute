@@ -27,6 +27,7 @@ import {
   applyCodexClientIdentityHeaders,
   applyCodexClientMetadata,
   createCodexClientIdentity,
+  isCodexPassthroughMode,
   type CodexClientIdentity,
 } from "../config/codexIdentity.ts";
 import { getAccessToken } from "../services/tokenRefresh.ts";
@@ -885,29 +886,36 @@ export class CodexExecutor extends BaseExecutor {
   buildHeaders(credentials: ProviderCredentials, stream = true) {
     const isCompactRequest = isCompactResponsesEndpoint(credentials?.requestEndpointPath);
     const headers = super.buildHeaders(credentials, isCompactRequest ? false : true);
-    headers.Version = getCodexClientVersion();
-    setUserAgentHeader(headers, getCodexUserAgent());
 
-    // Add workspace binding header if workspaceId is persisted
+    if (!isCodexPassthroughMode()) {
+      // Synthesize identity headers only when NOT in passthrough mode.
+      // In passthrough mode the real Codex CLI's headers (Version, User-Agent,
+      // originator, session_id, x-codex-*) flow through untouched.
+      headers.Version = getCodexClientVersion();
+      setUserAgentHeader(headers, getCodexUserAgent());
+
+      const clientIdentity = credentials?.providerSpecificData?.codexClientIdentity as
+        CodexClientIdentity | null | undefined;
+
+      // Originator header — identifies the client type to the Codex backend.
+      // Ref: openai/codex login/src/auth/default_client.rs DEFAULT_ORIGINATOR = "codex_cli_rs"
+      headers["originator"] = "codex_cli_rs";
+
+      // session_id header — enables prompt cache affinity on the Codex backend.
+      // The official Codex client sets this to conversation_id (a stable UUID per session).
+      // Ref: openai/codex codex-api/src/requests/headers.rs build_conversation_headers()
+      const cacheSessionId = this.getPromptCacheSessionId(credentials, null);
+      if (cacheSessionId) {
+        headers["session_id"] = cacheSessionId;
+      }
+      applyCodexClientIdentityHeaders(headers, clientIdentity);
+    }
+
+    // Workspace binding is always needed (it's auth, not identity).
     const workspaceId = credentials?.providerSpecificData?.workspaceId;
     if (typeof workspaceId === "string" && workspaceId) {
       headers["chatgpt-account-id"] = workspaceId;
     }
-    const clientIdentity = credentials?.providerSpecificData?.codexClientIdentity as
-      CodexClientIdentity | null | undefined;
-
-    // Originator header — identifies the client type to the Codex backend.
-    // Ref: openai/codex login/src/auth/default_client.rs DEFAULT_ORIGINATOR = "codex_cli_rs"
-    headers["originator"] = "codex_cli_rs";
-
-    // session_id header — enables prompt cache affinity on the Codex backend.
-    // The official Codex client sets this to conversation_id (a stable UUID per session).
-    // Ref: openai/codex codex-api/src/requests/headers.rs build_conversation_headers()
-    const cacheSessionId = this.getPromptCacheSessionId(credentials, null);
-    if (cacheSessionId) {
-      headers["session_id"] = cacheSessionId;
-    }
-    applyCodexClientIdentityHeaders(headers, clientIdentity);
 
     return headers;
   }
