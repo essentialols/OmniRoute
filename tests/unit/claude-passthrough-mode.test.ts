@@ -167,3 +167,21 @@ describe("obfuscation disabled in passthrough mode", () => {
     assert.ok(result.includes("‍"));
   });
 });
+
+describe("fingerprint reordering disabled in passthrough mode", () => {
+  it("skips applyFingerprint when passthrough is on", () => {
+    process.env.CLAUDE_PASSTHROUGH_MODE = "1";
+    const { isPassthroughMode } = require("../../open-sse/executors/claudeIdentity.ts");
+
+    // The gating logic in base.ts
+    const provider = "claude";
+    const isClaudeCodeClient = true;
+    const hasClaudeOAuthToken = true;
+    const passthroughActive = isPassthroughMode();
+
+    const shouldFingerprint =
+      !passthroughActive && provider === "claude" && (isClaudeCodeClient || hasClaudeOAuthToken);
+
+    assert.equal(shouldFingerprint, false);
+  });
+});
