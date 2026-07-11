@@ -2,6 +2,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { obfuscateSensitiveWords } from "../../open-sse/services/claudeCodeObfuscation.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -139,5 +140,30 @@ describe("passthrough headers", () => {
     for (const header of PASSTHROUGH_HEADERS) {
       assert.ok(clientHeaders[header] !== undefined, `Client should provide ${header}`);
     }
+  });
+});
+
+describe("obfuscation disabled in passthrough mode", () => {
+  const originalEnv = process.env.CLAUDE_PASSTHROUGH_MODE;
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env.CLAUDE_PASSTHROUGH_MODE;
+    else process.env.CLAUDE_PASSTHROUGH_MODE = originalEnv;
+  });
+
+  it("does not insert zero-width joiners when passthrough is on", () => {
+    process.env.CLAUDE_PASSTHROUGH_MODE = "1";
+    const input = "I am using cline and cursor for development";
+    const result = obfuscateSensitiveWords(input);
+    // In passthrough mode, text should be unchanged
+    assert.equal(result, input);
+  });
+
+  it("still obfuscates when passthrough is off", () => {
+    delete process.env.CLAUDE_PASSTHROUGH_MODE;
+    const input = "I am using cline and cursor for development";
+    const result = obfuscateSensitiveWords(input);
+    // Should contain zero-width joiners
+    assert.notEqual(result, input);
+    assert.ok(result.includes("‍"));
   });
 });
