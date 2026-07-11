@@ -2,6 +2,10 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import {
+  applyCodexClientIdentityHeaders,
+  createCodexClientIdentity,
+} from "../../open-sse/config/codexIdentity.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -29,5 +33,36 @@ describe("codex passthrough mode toggle", () => {
     process.env.CODEX_PASSTHROUGH_MODE = "0";
     const { isCodexPassthroughMode } = require("../../open-sse/config/codexIdentity.ts");
     assert.equal(isCodexPassthroughMode(), false);
+  });
+});
+
+describe("passthrough identity headers", () => {
+  afterEach(() => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+  });
+
+  it("does not inject identity headers when passthrough is on", () => {
+    process.env.CODEX_PASSTHROUGH_MODE = "1";
+    const headers: Record<string, string> = { Authorization: "Bearer test" };
+    const identity = createCodexClientIdentity("test-session-id", null);
+    applyCodexClientIdentityHeaders(headers, identity);
+
+    // In passthrough mode, these should NOT be set by OmniRoute
+    assert.equal(headers["session_id"], undefined);
+    assert.equal(headers["x-client-request-id"], undefined);
+    assert.equal(headers["x-codex-window-id"], undefined);
+    assert.equal(headers["x-codex-turn-metadata"], undefined);
+  });
+
+  it("still injects identity headers when passthrough is off", () => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+    const headers: Record<string, string> = { Authorization: "Bearer test" };
+    const identity = createCodexClientIdentity("test-session-id", null);
+    applyCodexClientIdentityHeaders(headers, identity);
+
+    assert.ok(headers["session_id"]);
+    assert.ok(headers["x-client-request-id"]);
+    assert.ok(headers["x-codex-window-id"]);
+    assert.ok(headers["x-codex-turn-metadata"]);
   });
 });
