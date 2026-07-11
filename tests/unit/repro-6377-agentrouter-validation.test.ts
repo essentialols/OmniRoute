@@ -36,7 +36,7 @@ test.afterEach(() => {
 test("agentrouter key validation must not false-negative behind the CC-wire-image WAF gate (#6377)", async () => {
   const calls: { url: string; headers: Record<string, string> }[] = [];
 
-  globalThis.fetch = async (url: any, init: any = {}) => {
+  globalThis.fetch = async (url: string | URL, init: RequestInit = {}) => {
     const u = String(url);
     const headers: Record<string, string> = {};
     if (init?.headers) {
