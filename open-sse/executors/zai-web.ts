@@ -140,6 +140,29 @@ function parseSsePayload(data: string): ZaiDelta | null {
   }
 }
 
+/**
+ * Read the upstream SSE body to completion, invoking `onDelta` for every
+ * parsed delta. Returns true when `onDelta` signalled the stream ended
+ * (returned true), false when the body was exhausted without a done delta.
+ */
+async function drainSseDeltas(
+  sourceBody: ReadableStream<Uint8Array>,
+  onDelta: (delta: ZaiDelta) => boolean
+): Promise<boolean> {
+  const decoder = new TextDecoder();
+  const reader = sourceBody.getReader();
+  const buffer = { text: "" };
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return false;
+    const payloads = extractSseDataPayloads(buffer, decoder.decode(value, { stream: true }));
+    for (const raw of payloads) {
+      const delta = parseSsePayload(raw);
+      if (delta && onDelta(delta)) return true;
+    }
+  }
+}
+
 type ChunkEmitter = (
   controller: ReadableStreamDefaultController,
   delta: Record<string, unknown>,
@@ -210,24 +233,14 @@ export class ZaiWebExecutor extends BaseExecutor {
     emitChunk: ChunkEmitter,
     signal: AbortSignal | null | undefined
   ): ReadableStream {
-    const decoder = new TextDecoder();
     return new ReadableStream({
       async start(controller) {
-        const reader = sourceBody.getReader();
-        const buffer = { text: "" };
         const roleState = { emitted: false };
         try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const payloads = extractSseDataPayloads(buffer, decoder.decode(value, { stream: true }));
-
-            for (const raw of payloads) {
-              const delta = parseSsePayload(raw);
-              if (!delta) continue;
-              if (emitDeltaChunks(controller, delta, emitChunk, roleState)) return;
-            }
-          }
+          const ended = await drainSseDeltas(sourceBody, (delta) =>
+            emitDeltaChunks(controller, delta, emitChunk, roleState)
+          );
+          if (ended) return; // emitDeltaChunks already sent [DONE] and closed
           if (!roleState.emitted) emitChunk(controller, { role: "assistant", content: "" });
           emitChunk(controller, {}, "stop");
           controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
@@ -249,24 +262,14 @@ export class ZaiWebExecutor extends BaseExecutor {
   private async collectNonStreaming(
     sourceBody: ReadableStream<Uint8Array>
   ): Promise<{ answer: string; reasoning: string }> {
-    const decoder = new TextDecoder();
     let answer = "";
     let reasoning = "";
-    const reader = sourceBody.getReader();
-    const buffer = { text: "" };
     try {
-      outer: while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const payloads = extractSseDataPayloads(buffer, decoder.decode(value, { stream: true }));
-        for (const raw of payloads) {
-          const delta = parseSsePayload(raw);
-          if (!delta) continue;
-          if (delta.reasoning) reasoning += delta.reasoning;
-          if (delta.content) answer += delta.content;
-          if (delta.done) break outer;
-        }
-      }
+      await drainSseDeltas(sourceBody, (delta) => {
+        if (delta.reasoning) reasoning += delta.reasoning;
+        if (delta.content) answer += delta.content;
+        return delta.done;
+      });
     } catch {
       /* best-effort — return what we have */
     }
