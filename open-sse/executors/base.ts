@@ -1052,45 +1052,87 @@ export class BaseExecutor {
           // of force-injecting thinking/effort betas it never requested (#3415).
           const clientAnthropicBeta =
             clientHeaders?.["anthropic-beta"] ?? clientHeaders?.["Anthropic-Beta"] ?? null;
-          const ccHeaders: Record<string, string> = {
-            Accept: "application/json",
-            "anthropic-version": "2023-06-01",
-            // #3974: merge the client's allowlisted betas (e.g. tool-search-tool)
-            // on top of the shape-derived set so deferred-tool requests are not
-            // rejected; selectBetaFlags still gates thinking/effort per #3415.
-            "anthropic-beta": mergeClientAnthropicBeta(
-              selectBetaFlags(tb, null, clientAnthropicBeta),
-              clientAnthropicBeta
-            ),
-            "anthropic-dangerous-direct-browser-access": "true",
-            "x-app": "cli",
-            "User-Agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`,
-            "X-Stainless-Package-Version": CLAUDE_CODE_STAINLESS_VERSION,
-            "X-Stainless-Timeout": "600",
-            "accept-encoding": "gzip, deflate, br, zstd",
-            connection: "keep-alive",
-            "x-client-request-id": randomUUID(),
-            "X-Claude-Code-Session-Id": sessionId,
-          };
+          if (passthroughActive && clientHeaders) {
+            // Forward real CC headers verbatim instead of synthesizing.
+            // Only override Accept and auth; everything else comes from the real client.
+            const PASSTHROUGH_HEADER_NAMES = [
+              "User-Agent",
+              "X-Claude-Code-Session-Id",
+              "x-client-request-id",
+              "X-Stainless-Arch",
+              "X-Stainless-Lang",
+              "X-Stainless-OS",
+              "X-Stainless-Package-Version",
+              "X-Stainless-Runtime",
+              "X-Stainless-Runtime-Version",
+              "X-Stainless-Timeout",
+              "X-Stainless-Retry-Count",
+              "anthropic-beta",
+              "anthropic-version",
+              "anthropic-dangerous-direct-browser-access",
+              "x-app",
+              "accept-encoding",
+              "connection",
+            ];
+            const ptHeaders: Record<string, string> = {
+              Accept: "application/json",
+            };
+            for (const name of PASSTHROUGH_HEADER_NAMES) {
+              // Case-insensitive lookup in clientHeaders
+              const val =
+                clientHeaders[name] ??
+                clientHeaders[name.toLowerCase()] ??
+                clientHeaders[name.toUpperCase()];
+              if (typeof val === "string") ptHeaders[name] = val;
+            }
+            // Merge onto existing headers (which already have auth from the provider path)
+            const ptKeysLower = new Set(Object.keys(ptHeaders).map((k) => k.toLowerCase()));
+            for (const key of Object.keys(headers)) {
+              if (ptKeysLower.has(key.toLowerCase())) delete headers[key];
+            }
+            Object.assign(headers, ptHeaders);
+            delete headers["X-Stainless-Helper-Method"];
+          } else {
+            const ccHeaders: Record<string, string> = {
+              Accept: "application/json",
+              "anthropic-version": "2023-06-01",
+              // #3974: merge the client's allowlisted betas (e.g. tool-search-tool)
+              // on top of the shape-derived set so deferred-tool requests are not
+              // rejected; selectBetaFlags still gates thinking/effort per #3415.
+              "anthropic-beta": mergeClientAnthropicBeta(
+                selectBetaFlags(tb, null, clientAnthropicBeta),
+                clientAnthropicBeta
+              ),
+              "anthropic-dangerous-direct-browser-access": "true",
+              "x-app": "cli",
+              "User-Agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`,
+              "X-Stainless-Package-Version": CLAUDE_CODE_STAINLESS_VERSION,
+              "X-Stainless-Timeout": "600",
+              "accept-encoding": "gzip, deflate, br, zstd",
+              connection: "keep-alive",
+              "x-client-request-id": randomUUID(),
+              "X-Claude-Code-Session-Id": sessionId,
+            };
 
-          // Drop case variants of the same header name before merging — undici
-          // would otherwise concatenate them (issue #1454).
-          const ccKeysLower = new Set(Object.keys(ccHeaders).map((k) => k.toLowerCase()));
-          for (const key of Object.keys(headers)) {
-            if (ccKeysLower.has(key.toLowerCase())) delete headers[key];
+            // Drop case variants of the same header name before merging — undici
+            // would otherwise concatenate them (issue #1454).
+            const ccKeysLower = new Set(Object.keys(ccHeaders).map((k) => k.toLowerCase()));
+            for (const key of Object.keys(headers)) {
+              if (ccKeysLower.has(key.toLowerCase())) delete headers[key];
+            }
+            Object.assign(headers, ccHeaders);
+            delete headers["X-Stainless-Helper-Method"];
+
+            // Stainless OS/Arch/Runtime are host-derived (Stainless SDK does the
+            // same at runtime). Hardcoding them was a unique-per-deployment tell.
+            headers["X-Stainless-Arch"] = stainlessArch();
+            headers["X-Stainless-Lang"] = "js";
+            headers["X-Stainless-OS"] = stainlessOS();
+            headers["X-Stainless-Runtime"] = "node";
+            headers["X-Stainless-Runtime-Version"] = stainlessRuntimeVersion();
+            headers["X-Stainless-Retry-Count"] = "0";
+            delete headers["X-Stainless-Os"];
           }
-          Object.assign(headers, ccHeaders);
-          delete headers["X-Stainless-Helper-Method"];
-
-          // Stainless OS/Arch/Runtime are host-derived (Stainless SDK does the
-          // same at runtime). Hardcoding them was a unique-per-deployment tell.
-          headers["X-Stainless-Arch"] = stainlessArch();
-          headers["X-Stainless-Lang"] = "js";
-          headers["X-Stainless-OS"] = stainlessOS();
-          headers["X-Stainless-Runtime"] = "node";
-          headers["X-Stainless-Runtime-Version"] = stainlessRuntimeVersion();
-          headers["X-Stainless-Retry-Count"] = "0";
-          delete headers["X-Stainless-Os"];
 
           const overrideTag =
             appliedEffort || appliedThinking

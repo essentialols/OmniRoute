@@ -96,3 +96,48 @@ describe("passthrough system prompt", () => {
     assert.equal(clientSystem.length, 3);
   });
 });
+
+describe("passthrough headers", () => {
+  it("forwards real client headers in passthrough mode", () => {
+    const clientHeaders: Record<string, string> = {
+      "User-Agent": "claude-cli/2.1.205 (external, cli)",
+      "X-Claude-Code-Session-Id": "real-session-uuid",
+      "x-client-request-id": "real-request-uuid",
+      "X-Stainless-Arch": "arm64",
+      "X-Stainless-Lang": "js",
+      "X-Stainless-OS": "MacOS",
+      "X-Stainless-Package-Version": "0.94.0",
+      "X-Stainless-Runtime": "node",
+      "X-Stainless-Runtime-Version": "v26.3.0",
+      "X-Stainless-Timeout": "600",
+      "X-Stainless-Retry-Count": "0",
+      "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14",
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "x-app": "cli",
+    };
+
+    // These are the headers that should be forwarded verbatim
+    const PASSTHROUGH_HEADERS = [
+      "User-Agent",
+      "X-Claude-Code-Session-Id",
+      "x-client-request-id",
+      "X-Stainless-Arch",
+      "X-Stainless-Lang",
+      "X-Stainless-OS",
+      "X-Stainless-Package-Version",
+      "X-Stainless-Runtime",
+      "X-Stainless-Runtime-Version",
+      "X-Stainless-Timeout",
+      "X-Stainless-Retry-Count",
+      "anthropic-beta",
+      "anthropic-version",
+      "anthropic-dangerous-direct-browser-access",
+      "x-app",
+    ];
+
+    for (const header of PASSTHROUGH_HEADERS) {
+      assert.ok(clientHeaders[header] !== undefined, `Client should provide ${header}`);
+    }
+  });
+});
