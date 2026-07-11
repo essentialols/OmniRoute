@@ -66,6 +66,7 @@ import {
   getSessionId,
   isPassthroughMode,
   parseUpstreamMetadataUserId,
+  passthroughForwardsRealCcIdentity,
   passthroughUpstreamSessionId,
   resolveAccountUUID,
   resolveCliUserID,
@@ -73,6 +74,7 @@ import {
   stainlessArch,
   stainlessOS,
   stainlessRuntimeVersion,
+  stripPassthroughInjectedContextManagement,
   stripProxyToolPrefix,
 } from "./claudeIdentity.ts";
 import { withForcedResponsesUpstream } from "./forceResponsesUpstream.ts";
@@ -790,6 +792,17 @@ export class BaseExecutor {
         // this scope so both the in-block prepend and the later fingerprint/CCH
         // steps (siblings of the if below) can read it.
         const passthroughActive = isPassthroughMode();
+        // Passthrough only relays a genuine Claude Code client identity verbatim.
+        // A non-CC caller has no real identity / billing / headers to forward, so it
+        // must go through the normal cloaked synthesis path (otherwise its uncloaked
+        // synthesized identity is throttled with a 429). Gate every
+        // synthesis-vs-forward decision on this, not on the raw isPassthroughMode()
+        // env toggle.
+        const passthroughForwardsRealCc =
+          passthroughActive &&
+          passthroughForwardsRealCcIdentity(
+            clientHeaders as Record<string, string | undefined> | null | undefined
+          );
 
         if (
           this.provider === "claude" &&
@@ -802,7 +815,9 @@ export class BaseExecutor {
           // In passthrough mode, forward the client's tool definitions exactly as
           // received: no prefix strip, no name remap/cloak, no schema rewrite, no
           // obfuscation, and no cache_control removal. CC's own tool defs are valid.
-          if (!passthroughActive) {
+          // Only when genuinely forwarding a real CC identity; a non-CC caller falls
+          // back to full synthesis (which sanitizes tools).
+          if (!passthroughForwardsRealCc) {
             stripProxyToolPrefix(tb);
             remapToolNamesInRequest(tb);
             // Cloak third-party tool names + sanitize invalid tool schemas so
@@ -964,7 +979,8 @@ export class BaseExecutor {
           // X-Claude-Code-Session-Id and synthesize per-account: the CC device_id from
           // ~/.claude.json is shared across every account on one machine, which lets
           // Anthropic correlate accounts behind one OmniRoute.
-          const cloakIdentity = (isClaudeCodeClient || hasClaudeOAuthToken) && !isPassthroughMode();
+          const cloakIdentity =
+            (isClaudeCodeClient || hasClaudeOAuthToken) && !passthroughForwardsRealCc;
           const upstreamUserId = cloakIdentity ? null : parseUpstreamMetadataUserId(tb);
           if (upstreamUserId) {
             sessionId = upstreamUserId.session_id;
@@ -991,8 +1007,9 @@ export class BaseExecutor {
           // cache_control — that belongs on upstream prompt blocks at [2..].
           // In passthrough mode, the upstream CC client already includes its own
           // billing header (system[0]) and sentinel (system[1]) with a correctly
-          // computed CCH. Preserve them as-is; only prepend when synthesizing.
-          if (!passthroughActive) {
+          // computed CCH. Preserve them as-is; only prepend when synthesizing (which
+          // includes the non-CC passthrough fallback that has no client billing line).
+          if (!passthroughForwardsRealCc) {
             const dayStamp = new Date().toISOString().slice(0, 10);
             const buildHash = buildHashFor(CLAUDE_CODE_VERSION, dayStamp);
             const billingLine = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.${buildHash}; cc_entrypoint=cli; cch=00000;`;
@@ -1057,7 +1074,7 @@ export class BaseExecutor {
           // of force-injecting thinking/effort betas it never requested (#3415).
           const clientAnthropicBeta =
             clientHeaders?.["anthropic-beta"] ?? clientHeaders?.["Anthropic-Beta"] ?? null;
-          if (passthroughActive && clientHeaders) {
+          if (passthroughForwardsRealCc && clientHeaders) {
             // Forward real CC headers verbatim instead of synthesizing.
             // Only override Accept and auth; everything else comes from the real client.
             const PASSTHROUGH_HEADER_NAMES = [
@@ -1222,10 +1239,19 @@ export class BaseExecutor {
           );
         }
 
+        // Passthrough forwards the client's own anthropic-beta verbatim; drop any
+        // injected top-level context_management it does not negotiate, which strict
+        // Anthropic 400s on ("context_management: Extra inputs are not permitted").
+        // No-op for the non-CC synthesis fallback, which negotiates the beta itself.
+        stripPassthroughInjectedContextManagement(
+          transformedBody as Record<string, unknown>,
+          passthroughForwardsRealCc
+        );
+
         let bodyString = JSON.stringify(transformedBody);
 
         const shouldFingerprint =
-          !passthroughActive &&
+          !passthroughForwardsRealCc &&
           (isCliCompatEnabled(this.provider) ||
             (this.provider === "claude" && (isClaudeCodeClient || hasClaudeOAuthToken)));
         if (shouldFingerprint) {
@@ -1237,7 +1263,7 @@ export class BaseExecutor {
         // CCH signing — replaces the cch=00000 placeholder in the billing
         // header with an xxHash64 integrity token over the serialized body.
         if (isClaudeCodeCompatible(this.provider) || this.provider === "claude") {
-          if (passthroughActive) {
+          if (passthroughForwardsRealCc) {
             // In passthrough mode, the client sent a real CCH computed over its
             // original body. If compression modified messages, that CCH is now
             // stale: reset it to the 00000 placeholder so signRequestBody
