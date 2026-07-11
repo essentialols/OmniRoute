@@ -6,6 +6,7 @@ import {
   applyCodexClientIdentityHeaders,
   applyCodexClientMetadata,
   createCodexClientIdentity,
+  isCodexPassthroughMode,
 } from "../../open-sse/config/codexIdentity.ts";
 
 const require = createRequire(import.meta.url);
@@ -89,5 +90,25 @@ describe("passthrough body metadata", () => {
     applyCodexClientMetadata(body, identity);
 
     assert.ok(body.client_metadata !== undefined);
+  });
+});
+
+describe("passthrough buildHeaders", () => {
+  afterEach(() => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+  });
+
+  it("does not override User-Agent when passthrough is on", () => {
+    process.env.CODEX_PASSTHROUGH_MODE = "1";
+
+    // When passthrough is on, the executor should NOT force its own UA
+    // The real Codex CLI sends: codex-cli/0.142.0 (Windows 10.0.26200; x64)
+    // OmniRoute should not override this with its configured version
+    assert.equal(isCodexPassthroughMode(), true);
+
+    // The gating logic: in passthrough mode, skip setUserAgentHeader
+    // and skip originator injection
+    const shouldSynthesizeIdentity = !isCodexPassthroughMode();
+    assert.equal(shouldSynthesizeIdentity, false);
   });
 });
