@@ -80,7 +80,7 @@ export function applyCodexClientMetadata(
   body: Record<string, unknown>,
   identity?: CodexClientIdentity | null
 ): void {
-  if (!identity) return;
+  if (!identity || isCodexPassthroughMode()) return;
   const existing =
     body.client_metadata &&
     typeof body.client_metadata === "object" &&
