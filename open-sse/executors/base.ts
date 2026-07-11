@@ -64,6 +64,7 @@ import {
   buildHashFor,
   buildUserIdJson,
   getSessionId,
+  isPassthroughMode,
   parseUpstreamMetadataUserId,
   passthroughUpstreamSessionId,
   resolveAccountUUID,
@@ -951,7 +952,7 @@ export class BaseExecutor {
           // X-Claude-Code-Session-Id and synthesize per-account: the CC device_id from
           // ~/.claude.json is shared across every account on one machine, which lets
           // Anthropic correlate accounts behind one OmniRoute.
-          const cloakIdentity = isClaudeCodeClient || hasClaudeOAuthToken;
+          const cloakIdentity = (isClaudeCodeClient || hasClaudeOAuthToken) && !isPassthroughMode();
           const upstreamUserId = cloakIdentity ? null : parseUpstreamMetadataUserId(tb);
           if (upstreamUserId) {
             sessionId = upstreamUserId.session_id;
