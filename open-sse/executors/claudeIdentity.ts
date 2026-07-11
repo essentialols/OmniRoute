@@ -10,6 +10,15 @@
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
+// ---------- Passthrough mode toggle ---------------------------------------
+
+const PASSTHROUGH_TRUTHY = new Set(["1", "true", "yes", "on"]);
+
+export function isPassthroughMode(): boolean {
+  const val = (process.env.CLAUDE_PASSTHROUGH_MODE ?? "").trim().toLowerCase();
+  return PASSTHROUGH_TRUTHY.has(val);
+}
+
 // ---------- Versions ------------------------------------------------------
 
 export const CLAUDE_CODE_VERSION = "2.1.195";
