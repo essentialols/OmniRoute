@@ -64,3 +64,35 @@ describe("passthrough identity", () => {
     assert.equal(cloakIdentity, true);
   });
 });
+
+describe("passthrough system prompt", () => {
+  it("preserves client system blocks in passthrough mode", () => {
+    // The client (CC) sends system blocks like:
+    const clientSystem = [
+      {
+        type: "text",
+        text: "x-anthropic-billing-header: cc_version=2.1.205.a3f; cc_entrypoint=cli; cch=1b2c3;",
+      },
+      { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
+      {
+        type: "text",
+        text: "You are an interactive agent...",
+        cache_control: { type: "ephemeral" },
+      },
+    ];
+
+    // In passthrough mode, these should NOT be stripped and re-prepended.
+    // The billing header (system[0]) and sentinel (system[1]) should remain
+    // exactly as the client sent them.
+    process.env.CLAUDE_PASSTHROUGH_MODE = "1";
+    const { isPassthroughMode } = require("../../open-sse/executors/claudeIdentity.ts");
+    assert.equal(isPassthroughMode(), true);
+
+    // Verify the client's system[0] text starts with the billing header
+    assert.ok(clientSystem[0].text.startsWith("x-anthropic-billing-header:"));
+    // Verify system[1] is the sentinel
+    assert.ok(clientSystem[1].text.startsWith("You are Claude Code"));
+    // Both present = no prepend needed
+    assert.equal(clientSystem.length, 3);
+  });
+});

@@ -775,6 +775,13 @@ export class BaseExecutor {
           activeCredentials.accessToken.startsWith("sk-ant-oat") &&
           !activeCredentials?.apiKey;
 
+        // Passthrough mode gates identity synthesis, header synthesis,
+        // obfuscation, tool cloaking, billing prepend, fingerprint reordering,
+        // and CCH signing across this whole Claude provider path. Declared at
+        // this scope so both the in-block prepend and the later fingerprint/CCH
+        // steps (siblings of the if below) can read it.
+        const passthroughActive = isPassthroughMode();
+
         if (
           this.provider === "claude" &&
           (isClaudeCodeClient || hasClaudeOAuthToken) &&
@@ -968,34 +975,42 @@ export class BaseExecutor {
 
           // system[0] (billing) and system[1] (sentinel) must not carry
           // cache_control — that belongs on upstream prompt blocks at [2..].
-          const dayStamp = new Date().toISOString().slice(0, 10);
-          const buildHash = buildHashFor(CLAUDE_CODE_VERSION, dayStamp);
-          const billingLine = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.${buildHash}; cc_entrypoint=cli; cch=00000;`;
-          const SENTINEL = "You are Claude Code, Anthropic's official CLI for Claude.";
+          // In passthrough mode, the upstream CC client already includes its own
+          // billing header (system[0]) and sentinel (system[1]) with a correctly
+          // computed CCH. Preserve them as-is; only prepend when synthesizing.
+          if (!passthroughActive) {
+            const dayStamp = new Date().toISOString().slice(0, 10);
+            const buildHash = buildHashFor(CLAUDE_CODE_VERSION, dayStamp);
+            const billingLine = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.${buildHash}; cc_entrypoint=cli; cch=00000;`;
+            const SENTINEL = "You are Claude Code, Anthropic's official CLI for Claude.";
 
-          const sysBlocks: Array<Record<string, unknown>> = Array.isArray(tb.system)
-            ? (tb.system as Array<Record<string, unknown>>)
-            : typeof tb.system === "string"
-              ? [{ type: "text", text: tb.system }]
-              : [];
+            const sysBlocks: Array<Record<string, unknown>> = Array.isArray(tb.system)
+              ? (tb.system as Array<Record<string, unknown>>)
+              : typeof tb.system === "string"
+                ? [{ type: "text", text: tb.system }]
+                : [];
 
-          // Strip any pre-existing billing/sentinel before re-prepending — keeps
-          // retries idempotent and avoids stacking that breaks prompt-cache prefix
-          // matching (see issue #1712).
-          for (let i = sysBlocks.length - 1; i >= 0; i--) {
-            const t = sysBlocks[i]?.text;
-            if (typeof t === "string" && t.startsWith("x-anthropic-billing-header:")) {
-              sysBlocks.splice(i, 1);
+            // Strip any pre-existing billing/sentinel before re-prepending — keeps
+            // retries idempotent and avoids stacking that breaks prompt-cache prefix
+            // matching (see issue #1712).
+            for (let i = sysBlocks.length - 1; i >= 0; i--) {
+              const t = sysBlocks[i]?.text;
+              if (typeof t === "string" && t.startsWith("x-anthropic-billing-header:")) {
+                sysBlocks.splice(i, 1);
+              }
             }
-          }
-          for (let i = sysBlocks.length - 1; i >= 0; i--) {
-            const t = sysBlocks[i]?.text;
-            if (typeof t === "string" && t.startsWith(SENTINEL)) {
-              sysBlocks.splice(i, 1);
+            for (let i = sysBlocks.length - 1; i >= 0; i--) {
+              const t = sysBlocks[i]?.text;
+              if (typeof t === "string" && t.startsWith(SENTINEL)) {
+                sysBlocks.splice(i, 1);
+              }
             }
+            sysBlocks.unshift(
+              { type: "text", text: billingLine },
+              { type: "text", text: SENTINEL }
+            );
+            tb.system = sysBlocks;
           }
-          sysBlocks.unshift({ type: "text", text: billingLine }, { type: "text", text: SENTINEL });
-          tb.system = sysBlocks;
 
           // Run the configurable system-transforms pipeline for the native
           // `claude` provider (issue #2260 / comment 4459544580). The default
@@ -1164,7 +1179,10 @@ export class BaseExecutor {
 
         // CCH signing — replaces the cch=00000 placeholder in the billing
         // header with an xxHash64 integrity token over the serialized body.
-        if (isClaudeCodeCompatible(this.provider) || this.provider === "claude") {
+        if (
+          !passthroughActive &&
+          (isClaudeCodeCompatible(this.provider) || this.provider === "claude")
+        ) {
           bodyString = await signRequestBody(bodyString);
         }
 
