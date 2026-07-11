@@ -64,7 +64,7 @@ export function applyCodexClientIdentityHeaders(
   headers: Record<string, string>,
   identity?: CodexClientIdentity | null
 ): void {
-  if (!identity) return;
+  if (!identity || isCodexPassthroughMode()) return;
   headers["session_id"] = identity.sessionId;
   headers["x-client-request-id"] = identity.sessionId;
   headers["x-codex-window-id"] = identity.windowId;
