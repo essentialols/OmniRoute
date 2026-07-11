@@ -5,6 +5,13 @@ import { normalizeCodexSessionId } from "./codexClient.ts";
 const CODEX_INSTALLATION_SALT = "omniroute-codex-installation";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const PASSTHROUGH_TRUTHY = new Set(["1", "true", "yes", "on"]);
+
+export function isCodexPassthroughMode(): boolean {
+  const val = (process.env.CODEX_PASSTHROUGH_MODE ?? "").trim().toLowerCase();
+  return PASSTHROUGH_TRUTHY.has(val);
+}
+
 export type CodexClientIdentity = {
   sessionId: string;
   turnId: string;
