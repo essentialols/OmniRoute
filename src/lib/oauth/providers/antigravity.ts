@@ -11,6 +11,21 @@ import { extractCodeAssistOnboardTierId } from "@omniroute/open-sse/services/cod
 // hang forever — the dashboard "just spins". Mirrors the AbortSignal.timeout
 // pattern already used by antigravityProjectBootstrap.ts.
 const POSTEXCHANGE_TIMEOUT_MS = 8_000;
+// Total budget for the BLOCKING onboarding path (account owns no project yet). Bounded so a
+// slow/unreachable upstream can never hang the OAuth login, which is what the original
+// fire-and-forget design was guarding against.
+const ONBOARD_TOTAL_BUDGET_MS = 30_000;
+const ONBOARD_POLL_INTERVAL_MS = 5_000;
+
+/** `cloudaicompanionProject` is either a bare string or an object carrying `id`. */
+export function extractCloudaicompanionProjectId(value: unknown): string {
+  const raw = (value as Record<string, unknown> | undefined)?.cloudaicompanionProject;
+  if (typeof raw === "string") return raw.trim();
+  if (raw && typeof raw === "object" && typeof (raw as Record<string, unknown>).id === "string") {
+    return ((raw as Record<string, unknown>).id as string).trim();
+  }
+  return "";
+}
 
 async function fetchFirstOk(endpoints: string[], init: RequestInit, timeoutMs?: number) {
   let lastError: unknown = null;
@@ -103,6 +118,7 @@ export const antigravity = {
 
     let projectId = "";
     let tierId = "legacy-tier";
+    let loadSucceeded = false;
     try {
       const loadRes = await fetchFirstOk(
         ANTIGRAVITY_CONFIG.loadCodeAssistEndpoints,
@@ -110,36 +126,63 @@ export const antigravity = {
         POSTEXCHANGE_TIMEOUT_MS
       );
       const data = await loadRes.json();
-      projectId = data.cloudaicompanionProject?.id || data.cloudaicompanionProject || "";
+      projectId = extractCloudaicompanionProjectId(data);
       tierId = extractCodeAssistOnboardTierId(data);
+      loadSucceeded = true;
     } catch (e) {
       console.log("Failed to load code assist:", e);
     }
 
-    // Fire-and-forget onboarding — it must NOT block the OAuth login response.
-    // The previous inline `await` loop (up to 10×5s, each fetch un-timed) made the
-    // `/exchange` request hang forever when an upstream was slow/unreachable, so the
-    // dashboard "just spun". Onboarding is also performed lazily at request time by
-    // antigravityProjectBootstrap.ts, so backgrounding it here is safe. Matches the
-    // 9router web flow. (#5180-followup / antigravity login hang)
-    if (projectId) {
-      const onboardInBackground = async () => {
-        for (let i = 0; i < 10; i++) {
-          try {
-            const onboardRes = await fetchFirstOk(
-              ANTIGRAVITY_CONFIG.onboardUserEndpoints,
-              { method: "POST", headers, body: JSON.stringify({ tier_id: tierId, metadata }) },
-              POSTEXCHANGE_TIMEOUT_MS
-            );
-            const result = await onboardRes.json();
-            if (result.done === true) break;
-          } catch {
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 5000));
+    // Poll onboardUser (a long-running operation) until it reports `done`, and return the
+    // project id Google provisions in the LRO response envelope.
+    const runOnboarding = async (budgetMs: number): Promise<string> => {
+      const deadline = Date.now() + budgetMs;
+      do {
+        let result: Record<string, unknown>;
+        try {
+          const onboardRes = await fetchFirstOk(
+            ANTIGRAVITY_CONFIG.onboardUserEndpoints,
+            { method: "POST", headers, body: JSON.stringify({ tier_id: tierId, metadata }) },
+            POSTEXCHANGE_TIMEOUT_MS
+          );
+          result = await onboardRes.json();
+        } catch {
+          return "";
         }
-      };
-      void onboardInBackground().catch(() => {});
+        const provisioned =
+          extractCloudaicompanionProjectId(result.response) ||
+          extractCloudaicompanionProjectId(result);
+        if (provisioned) return provisioned;
+        if (result.done === true) return "";
+        await new Promise((resolve) => setTimeout(resolve, ONBOARD_POLL_INTERVAL_MS));
+      } while (Date.now() < deadline);
+      return "";
+    };
+
+    if (loadSucceeded && !projectId) {
+      // loadCodeAssist answered but the account owns no cloudaicompanionProject: it never
+      // completed Gemini Code Assist onboarding. onboardUser (free tier) is the ONLY way it
+      // can ever get one, and persisting a connection with an empty projectId produces a dead
+      // account that 422s ("Missing Google projectId") on every single request. We onboard
+      // ONLY when loadCodeAssist actually succeeded with an empty project. If it stalled or
+      // errored we do not know the account's real state, so we leave projectId empty (the
+      // request-time bootstrap retries) rather than block the login on a 30s onboard loop.
+      //
+      // The previous `if (projectId)` guard inverted this: it onboarded only when a project
+      // ALREADY existed and skipped onboarding in precisely the case that required it. Its
+      // comment claimed onboarding was "also performed lazily at request time by
+      // antigravityProjectBootstrap.ts", which was never true: the bootstrap only ever
+      // called loadCodeAssist. So an un-onboarded Google account could never be provisioned
+      // by any code path.
+      //
+      // Await it here (bounded by ONBOARD_TOTAL_BUDGET_MS) because the login is worthless
+      // without a project. The budget preserves the "never hang the OAuth login" guarantee
+      // that motivated the fire-and-forget design.
+      projectId = await runOnboarding(ONBOARD_TOTAL_BUDGET_MS);
+    } else if (projectId) {
+      // A project already exists: onboardUser is just an idempotent refresh, so keep it
+      // fire-and-forget and never block the login on it. (#5180-followup / login hang)
+      void runOnboarding(ONBOARD_TOTAL_BUDGET_MS).catch(() => {});
     }
 
     return { userInfo, projectId, tierId };
