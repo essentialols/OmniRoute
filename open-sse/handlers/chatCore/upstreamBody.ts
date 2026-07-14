@@ -16,6 +16,8 @@ import {
 } from "../../services/payloadRules.ts";
 import { getEffectiveToolLimit, getKnownToolLimit } from "../../services/toolLimitDetector.ts";
 import { providerSupportsCaching } from "../../utils/cacheControlPolicy.ts";
+import { stripUnsupportedToolFields } from "../../config/providerFieldStrips.ts";
+import { normalizeOpenAICompatMessages } from "./openaiCompatMessages.ts";
 import { FORMATS } from "../../translator/formats.ts";
 
 type LoggerLike = { debug?: (...args: unknown[]) => void } | null | undefined;
@@ -139,6 +141,27 @@ async function injectPromptCacheKey(
   return bodyToSend;
 }
 
+// Normalize an OpenAI-format upstream body for strict OpenAI-compatible executors.
+//
+// Only runs for targetFormat === "openai" (gemini/claude have dedicated handling), and
+// only rewrites when something is unroutable as-is. Fixes Codex/Responses-API injections
+// that strict OpenAI-compat upstreams reject:
+//  - text-only multipart content arrays -> string (llm7 "does not support vision input");
+//  - adjacent system messages (from developer -> system normalization) merged into one
+//    (uncloseai "System message must be at the beginning");
+//  - tool fields the provider cannot accept (cohere parallel_tool_calls 422; publicai
+//    tools/tool_choice 400 without --enable-auto-tool-choice).
+function normalizeOpenAICompatUpstreamBody(
+  bodyToSend: Body,
+  provider: string | null | undefined,
+  targetFormat: string
+): Body {
+  if (targetFormat !== FORMATS.OPENAI) return bodyToSend;
+  let next = normalizeOpenAICompatMessages(bodyToSend) as Body;
+  next = stripUnsupportedToolFields(next, provider);
+  return next;
+}
+
 export async function prepareUpstreamBody(opts: {
   translatedBody: Body;
   modelToCall: string;
@@ -184,6 +207,7 @@ export async function prepareUpstreamBody(opts: {
   bodyToSend = truncateToolList(bodyToSend, provider, bypassDefaultToolLimit ?? false, log);
   bodyToSend = backfillQwenOAuthUser(bodyToSend, provider, credentials, log);
   bodyToSend = await injectPromptCacheKey(bodyToSend, provider, targetFormat);
+  bodyToSend = normalizeOpenAICompatUpstreamBody(bodyToSend, provider, targetFormat);
 
   return bodyToSend;
 }

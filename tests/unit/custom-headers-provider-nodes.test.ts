@@ -260,6 +260,50 @@ test("DefaultExecutor.buildHeaders applies customHeaders from providerSpecificDa
   assert.equal(headers["Authorization"], "Bearer test-key");
 });
 
+test("DefaultExecutor.buildHeaders: customHeaders User-Agent wins over forwarded client User-Agent (Pollinations 1010 fix)", () => {
+  const executor = new DefaultExecutor("openai-compatible-test");
+
+  const headers = executor.buildHeaders(
+    {
+      providerSpecificData: {
+        baseUrl: "https://text.pollinations.ai",
+        customHeaders: {
+          "User-Agent": "Mozilla/5.0",
+          Referer: "https://github.com/pollinations",
+        },
+      },
+    },
+    true,
+    // Client (e.g. a browser or Codex) forwards its own browser User-Agent.
+    {
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    }
+  ) as Record<string, string>;
+
+  // The node's configured User-Agent must be authoritative, not the forwarded client UA.
+  assert.equal(headers["User-Agent"], "Mozilla/5.0");
+  assert.equal(headers["Referer"], "https://github.com/pollinations");
+});
+
+test("DefaultExecutor.buildHeaders: forwarded client User-Agent is kept when no custom User-Agent is set", () => {
+  const executor = new DefaultExecutor("openai-compatible-test");
+
+  const headers = executor.buildHeaders(
+    {
+      providerSpecificData: {
+        baseUrl: "https://proxy.example.com/v1",
+        customHeaders: { "X-Custom": "v" },
+      },
+    },
+    true,
+    { "user-agent": "opencode/1.2.3" }
+  ) as Record<string, string>;
+
+  assert.equal(headers["User-Agent"], "opencode/1.2.3");
+  assert.equal(headers["X-Custom"], "v");
+});
+
 test("DefaultExecutor.buildHeaders does NOT override auth headers with customHeaders", () => {
   const executor = new DefaultExecutor("openai-compatible-test");
 
