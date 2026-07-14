@@ -96,15 +96,36 @@ function backfillQwenOAuthUser(
   return bodyToSend;
 }
 
-// Inject prompt_cache_key only for providers that support it.
+// Normalize the OpenAI `prompt_cache_key` cache-routing hint per provider capability.
+//
+// Two responsibilities for OpenAI-format upstreams:
+//  1. STRIP a client-supplied key for providers that do not support caching. Responses-API
+//     clients (notably the Codex CLI) always send a session-scoped `prompt_cache_key`, but
+//     strict OpenAI-compatible upstreams that never implemented it reject the whole request
+//     with a 400 (e.g. Groq: "property 'prompt_cache_key' is unsupported"). Cerebras/Mistral
+//     silently ignore it today, but stripping is the correct, provider-agnostic normalization.
+//  2. INJECT a stable key for caching-capable providers when the client didn't supply one
+//     (unchanged behavior). `codex`/`xai`/`nvidia` are excluded from injection: codex injects
+//     its own downstream, and xai/nvidia reject the field. For the latter two, step 1 also
+//     strips any client-supplied key since providerSupportsCaching() is false for them.
 async function injectPromptCacheKey(
   bodyToSend: Body,
   provider: string | null | undefined,
   targetFormat: string
 ): Promise<Body> {
+  if (targetFormat !== FORMATS.OPENAI) return bodyToSend;
+
+  if (!providerSupportsCaching(provider)) {
+    if (bodyToSend.prompt_cache_key !== undefined || bodyToSend.promptCacheKey !== undefined) {
+      const cleaned = { ...bodyToSend };
+      delete cleaned.prompt_cache_key;
+      delete cleaned.promptCacheKey;
+      return cleaned;
+    }
+    return bodyToSend;
+  }
+
   if (
-    targetFormat === FORMATS.OPENAI &&
-    providerSupportsCaching(provider) &&
     !bodyToSend.prompt_cache_key &&
     Array.isArray(bodyToSend.messages) &&
     !["nvidia", "codex", "xai"].includes(provider)
