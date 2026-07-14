@@ -49,6 +49,7 @@ import { VeniceWebExecutor } from "./venice-web.ts";
 import { V0VercelWebExecutor } from "./v0-vercel-web.ts";
 import { KimiWebExecutor } from "./kimi-web.ts";
 import { DoubaoWebExecutor } from "./doubao-web.ts";
+import { ZaiWebExecutor } from "./zai-web.ts";
 import { QwenWebExecutor } from "./qwen-web.ts";
 import { ZaiWebExecutor } from "./zai-web.ts";
 import { KimiExecutor } from "./kimi.ts";
@@ -149,6 +150,8 @@ const executors = {
   "kimi-coding": new KimiExecutor(), // Alias
   "doubao-web": new DoubaoWebExecutor(),
   db: new DoubaoWebExecutor(), // Alias
+  "zai-web": new ZaiWebExecutor(),
+  zw: new ZaiWebExecutor(), // Alias
   "qwen-web": new QwenWebExecutor(),
   qw: new QwenWebExecutor(), // Alias
   "zai-web": new ZaiWebExecutor(),
@@ -230,6 +233,7 @@ export { YuanbaoWebExecutor } from "./yuanbao-web.ts";
 export { T3ChatWebExecutor } from "./t3-chat-web.ts";
 export { InnerAiExecutor } from "./inner-ai.ts";
 export { QwenWebExecutor } from "./qwen-web.ts";
+export { ZaiWebExecutor } from "./zai-web.ts";
 export { TheOldLlmExecutor } from "./theoldllm.ts";
 export { ChipotleExecutor } from "./chipotle.ts";
 export { LMArenaExecutor } from "./lmarena.ts";

@@ -1,26 +1,46 @@
 /**
- * ZaiWebExecutor — Z.ai Web Chat (chat.z.ai, free web-session/cookie auth)
+ * ZaiWebExecutor — Z.ai Web Chat (chat.z.ai, free web-session / guest-token auth)
  *
  * Distinct from the existing API-key `zai`/`glm`/`glm-cn`/`glmt` providers
  * (Anthropic/OpenAI-compatible `api.z.ai`, see `providers/apikey/regional.ts`).
  * This executor targets the *consumer chat* frontend at chat.z.ai — the same
- * product family as `chatglm.cn` (Zhipu AI), but the international domain —
- * so users without an API key can drive it for free via their browser session,
- * modeled on the `chatglm-web` credential entry (#4056) and the `doubao-web` /
- * `venice-web` cookie executors.
+ * product family as `chatglm.cn` (Zhipu AI), international domain — so users
+ * can drive it for free from their browser session (or, with no account at
+ * all, via the anonymous guest token the SPA itself mints on load).
  *
- * Endpoint: POST https://chat.z.ai/api/chat/completions
- * Auth:     full Cookie header from chat.z.ai (must contain the `token` JWT).
- *           Sent both as `Cookie` and as `Authorization: Bearer <token>` —
- *           the SPA's own fetch client sets both, and stripping either one
- *           has been reported (upstream repos) to 401 the request.
+ * Endpoint: POST https://chat.z.ai/api/v2/chat/completions
+ *           (the legacy `/api/chat/completions` v1 path now 404s; the live SPA
+ *            uses v2 — confirmed by direct probe 2026-07.)
+ * Version:  `X-FE-Version` header is MANDATORY — omitting it returns a 426
+ *           `"client version (unknown) is outdated. Minimum required: 1.0.91"`
+ *           SSE frame. Default `1.0.91`; override with `ZAI_WEB_FE_VERSION`
+ *           (live SPA currently ships `prod-fe-1.1.75`).
+ * Auth:     three tiers, tried in order —
+ *           1. A pasted chat.z.ai Cookie header (registered account) → highest
+ *              model tier (GLM-5.1 / GLM-5.2 / GLM-5-Turbo …). Sent both as
+ *              `Cookie` and as `Authorization: Bearer <token>`; stripping either
+ *              has been reported (upstream repos) to 401 the request.
+ *           2. A bare JWT pasted as the credential (no `token=` prefix).
+ *           3. No credential at all → auto-mint an anonymous guest token via
+ *              `GET /api/v1/auths/` (fully programmatic, `role:guest`). Guest
+ *              level only reaches `glm-4.7`; other models return a 403
+ *              `"Model not available for current user level"` SSE frame.
+ * Captcha:  chat.z.ai hard-gates every completion behind an Aliyun invisible
+ *           CAPTCHA — a request without a valid `captcha_verify_param`/signature
+ *           returns a `FRONTEND_CAPTCHA_REQUIRED` SSE frame. That param can only
+ *           be minted inside a browser (the shared-relay-proxy Playwright bridge
+ *           did this). This executor forwards a param when one is supplied
+ *           (`ZAI_WEB_CAPTCHA_PARAM` env, `credentials.providerSpecificData
+ *           .captchaVerifyParam`, or an `x-zai-captcha` client header) so it
+ *           works the moment a token is available, but cannot forge one itself.
  * Response: SSE. Frames are z.ai's internal envelope
  *           `{"type":"chat:completion","data":{"delta_content":"...","phase":"answer","done":false}}`
  *           — mirrored from the shared Zhipu chatglm.cn/chat.z.ai frontend
- *           protocol. Some deployments/models pass through an already
- *           OpenAI-shaped `{"choices":[{"delta":{"content":"..."}}]}` frame
- *           instead, so the parser accepts both shapes defensively.
+ *           protocol. Some deployments/models instead pass through an already
+ *           OpenAI-shaped `{"choices":[{"delta":{"content":"..."}}]}` frame, so
+ *           the parser accepts both shapes defensively.
  */
+import { randomUUID } from "node:crypto";
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import {
   makeExecutorErrorResult as makeErrorResult,
@@ -29,9 +49,19 @@ import {
 } from "../utils/error.ts";
 
 const BASE_URL = "https://chat.z.ai";
-const CHAT_URL = `${BASE_URL}/api/chat/completions`;
+const CHAT_URL = `${BASE_URL}/api/v2/chat/completions`;
+const AUTH_URL = `${BASE_URL}/api/v1/auths/`;
+const DEFAULT_FE_VERSION = "1.0.91";
+/** Guest tier can only reach glm-4.7; use it as the safe default model. */
+const DEFAULT_MODEL = "glm-4.7";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
+
+/** Resolve the X-FE-Version to send (env override wins, else the tested default). */
+export function resolveFeVersion(): string {
+  const env = (process.env.ZAI_WEB_FE_VERSION || "").trim();
+  return env || DEFAULT_FE_VERSION;
+}
 
 /** Extract the `token` cookie value (JWT) from a full Cookie header string. */
 export function extractZaiToken(rawCookie: string): string {
@@ -41,6 +71,34 @@ export function extractZaiToken(rawCookie: string): string {
   if (match) return match[1].trim();
   // Users may paste the bare JWT with no `token=` prefix.
   return cookie.includes(";") || cookie.includes("=") ? "" : cookie;
+}
+
+/**
+ * Mint an anonymous guest token from chat.z.ai. Returns the JWT string, or ""
+ * if the endpoint is unreachable / shape-changed. Guest tokens are heavily
+ * rate-limited (a handful of rapid calls trips the WAF), so callers should
+ * prefer a real cookie when one is available.
+ */
+export async function mintGuestToken(signal?: AbortSignal | null): Promise<string> {
+  try {
+    const resp = await fetch(AUTH_URL, {
+      method: "GET",
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "application/json",
+        Origin: BASE_URL,
+        Referer: `${BASE_URL}/`,
+        "X-FE-Version": resolveFeVersion(),
+      },
+      signal: signal ?? undefined,
+    });
+    if (!resp.ok) return "";
+    const data = (await resp.json()) as Record<string, unknown>;
+    const token = data?.token;
+    return typeof token === "string" ? token : "";
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -86,6 +144,26 @@ function parseInternalEnvelopeFrame(
     };
   }
   if (done) return { content: "", reasoning: "", done: true };
+  return null;
+}
+
+/**
+ * Extract an upstream error detail from a z.ai SSE frame, if it carries one.
+ * Guest-level rejections (403), CAPTCHA gates (FRONTEND_CAPTCHA_REQUIRED) and
+ * outdated-client (426) all arrive as `{data:{error:{detail,code}}}` frames
+ * with HTTP 200, so we surface them to the caller rather than returning an
+ * empty completion.
+ */
+export function extractZaiError(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object") return null;
+  const frame = raw as Record<string, unknown>;
+  const data = (frame.data ?? {}) as Record<string, unknown>;
+  const inner = (data.data ?? data) as Record<string, unknown>;
+  const err = (inner.error ?? data.error ?? frame.error) as Record<string, unknown> | undefined;
+  if (err && typeof err === "object") {
+    const detail = err.detail ?? err.error_code ?? err.code;
+    if (detail != null) return String(detail);
+  }
   return null;
 }
 
@@ -138,6 +216,22 @@ function parseSsePayload(data: string): ZaiDelta | null {
   } catch {
     return null;
   }
+}
+
+/** Scan an SSE body for an upstream error frame (best-effort, first match wins). */
+function scanSseForError(text: string): string | null {
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("data:")) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      const err = extractZaiError(JSON.parse(payload));
+      if (err) return err;
+    } catch {
+      /* ignore non-JSON frames */
+    }
+  }
+  return null;
 }
 
 /**
@@ -196,40 +290,61 @@ export class ZaiWebExecutor extends BaseExecutor {
     super("zai-web", { id: "zai-web", baseUrl: BASE_URL });
   }
 
-  private buildZaiHeaders(rawCookie: string, token: string): Record<string, string> {
+  private buildZaiHeaders(rawCookie: string, token: string, captcha: string): Record<string, string> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
       "User-Agent": USER_AGENT,
       Origin: BASE_URL,
       Referer: `${BASE_URL}/`,
+      "X-FE-Version": resolveFeVersion(),
     };
     if (rawCookie) headers.Cookie = rawCookie;
     if (token) headers.Authorization = `Bearer ${token}`;
+    if (captcha) headers["x-signature"] = captcha;
     return headers;
   }
 
   private buildRequestBody(
     messages: Array<{ role: string; content: unknown }>,
-    modelId: string
+    modelId: string,
+    captcha: string
   ): Record<string, unknown> {
-    return {
+    const body: Record<string, unknown> = {
       stream: true,
       model: modelId,
       messages: foldMessages(messages),
+      chat_id: randomUUID(),
+      id: randomUUID(),
       params: {},
       features: {
         image_generation: false,
         web_search: false,
         auto_web_search: false,
+        enable_thinking: false,
       },
     };
+    // Forward a CAPTCHA verify param when one is supplied; chat.z.ai rejects
+    // completions without it (FRONTEND_CAPTCHA_REQUIRED).
+    if (captcha) (body.params as Record<string, unknown>).captcha_verify_param = captcha;
+    return body;
+  }
+
+  /** Resolve a CAPTCHA verify param from env / providerSpecificData / client header. */
+  private resolveCaptcha(input: ExecuteInput): string {
+    const fromEnv = (process.env.ZAI_WEB_CAPTCHA_PARAM || "").trim();
+    if (fromEnv) return fromEnv;
+    const psd = input.credentials?.providerSpecificData as Record<string, unknown> | undefined;
+    const fromPsd = psd?.captchaVerifyParam;
+    if (typeof fromPsd === "string" && fromPsd.trim()) return fromPsd.trim();
+    const fromHeader = input.clientHeaders?.["x-zai-captcha"];
+    if (typeof fromHeader === "string" && fromHeader.trim()) return fromHeader.trim();
+    return "";
   }
 
   /** Drain the streaming response body into an OpenAI-shaped SSE ReadableStream. */
   private buildStreamingBody(
     sourceBody: ReadableStream<Uint8Array>,
-    modelId: string,
     emitChunk: ChunkEmitter,
     signal: AbortSignal | null | undefined
   ): ReadableStream {
@@ -261,9 +376,10 @@ export class ZaiWebExecutor extends BaseExecutor {
   /** Drain the response body and aggregate all deltas into a single answer/reasoning pair. */
   private async collectNonStreaming(
     sourceBody: ReadableStream<Uint8Array>
-  ): Promise<{ answer: string; reasoning: string }> {
+  ): Promise<{ answer: string; reasoning: string; error: string | null }> {
     let answer = "";
     let reasoning = "";
+    let error: string | null = null;
     try {
       await drainSseDeltas(sourceBody, (delta) => {
         if (delta.reasoning) reasoning += delta.reasoning;
@@ -273,7 +389,7 @@ export class ZaiWebExecutor extends BaseExecutor {
     } catch {
       /* best-effort — return what we have */
     }
-    return { answer, reasoning };
+    return { answer, reasoning, error };
   }
 
   /** POST the chat request upstream. Returns either the upstream Response or an error result. */
@@ -289,7 +405,7 @@ export class ZaiWebExecutor extends BaseExecutor {
         method: "POST",
         headers: reqHeaders,
         body: JSON.stringify(reqBody),
-        signal,
+        signal: signal ?? undefined,
       });
     } catch (err) {
       return {
@@ -333,21 +449,31 @@ export class ZaiWebExecutor extends BaseExecutor {
     const { body, credentials, signal, stream: wantStream } = input;
     const bodyObj = (body || {}) as Record<string, unknown>;
 
+    // Tier 1/2: a pasted cookie or bare JWT. Tier 3: mint an anonymous guest token.
     const rawCookie = normalizeCookie(String(credentials?.apiKey ?? "").trim());
-    const token = extractZaiToken(rawCookie);
-    if (!rawCookie && !token) {
-      return makeErrorResult(
-        400,
-        "Missing Z.ai session — paste the full Cookie header from chat.z.ai (must contain token=<JWT>).",
-        body,
-        CHAT_URL
-      );
+    let token = extractZaiToken(rawCookie);
+    let cookieHeader = rawCookie;
+    if (!token && !rawCookie) {
+      token = await mintGuestToken(signal);
+      cookieHeader = token ? `token=${token}` : "";
+      if (!token) {
+        return makeErrorResult(
+          502,
+          "Z.ai guest-token mint failed and no chat.z.ai Cookie was supplied. Paste the full Cookie header from chat.z.ai (must contain token=<JWT>) or retry (guest endpoint is rate-limited).",
+          body,
+          AUTH_URL
+        );
+      }
+    } else if (!token && rawCookie) {
+      // Cookie header present but without a recognizable `token=`; still send it.
+      token = "";
     }
 
+    const captcha = this.resolveCaptcha(input);
     const messages = (bodyObj.messages as Array<{ role: string; content: unknown }>) || [];
-    const modelId = (bodyObj.model as string) || "glm-4.6";
-    const reqBody = this.buildRequestBody(messages, modelId);
-    const reqHeaders = this.buildZaiHeaders(rawCookie, token);
+    const modelId = (bodyObj.model as string) || DEFAULT_MODEL;
+    const reqBody = this.buildRequestBody(messages, modelId, captcha);
+    const reqHeaders = this.buildZaiHeaders(cookieHeader, token, captcha);
 
     const fetched = await this.fetchUpstream(reqHeaders, reqBody, body, signal);
     if ("errorResult" in fetched) return fetched.errorResult;
@@ -355,11 +481,11 @@ export class ZaiWebExecutor extends BaseExecutor {
 
     const id = `chatcmpl-zai-${Date.now()}`;
     const created = Math.floor(Date.now() / 1000);
-    const sourceBody = upstream.body ?? new ReadableStream({ start: (c) => c.close() });
     const emitChunk = this.makeChunkEmitter(id, created, modelId);
 
     if (wantStream) {
-      const outStream = this.buildStreamingBody(sourceBody, modelId, emitChunk, signal);
+      const sourceBody = upstream.body ?? new ReadableStream({ start: (c) => c.close() });
+      const outStream = this.buildStreamingBody(sourceBody, emitChunk, signal);
       return {
         response: new Response(outStream, {
           headers: {
@@ -374,7 +500,25 @@ export class ZaiWebExecutor extends BaseExecutor {
       };
     }
 
-    const { answer, reasoning } = await this.collectNonStreaming(sourceBody);
+    // Non-streaming: buffer the whole SSE body once so we can both detect an
+    // upstream error frame (403 user-level / CAPTCHA / 426) and aggregate text.
+    const fullText = await upstream.text().catch(() => "");
+    const upstreamError = scanSseForError(fullText);
+    if (upstreamError) {
+      return makeErrorResult(
+        502,
+        `Z.ai upstream rejected the request: ${upstreamError}`,
+        body,
+        CHAT_URL
+      );
+    }
+    const bufferedStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(fullText));
+        controller.close();
+      },
+    });
+    const { answer, reasoning } = await this.collectNonStreaming(bufferedStream);
     const message: Record<string, unknown> = { role: "assistant", content: answer };
     if (reasoning) message.reasoning_content = reasoning;
     const completion = {

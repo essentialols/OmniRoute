@@ -375,7 +375,7 @@ const RAW_CONFIGS: TokenExtractionConfig[] = [
     { cookieDomain: ".manus.im" }
   ),
 
-  // ── Z.ai Web (#4056) ────────────────────────────────────────
+  // ── Z.ai Web (chat.z.ai, free guest/session) ───────────────
   config(
     "zai-web",
     "Z.ai Web (Free)",

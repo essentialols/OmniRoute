@@ -331,10 +331,11 @@ export const WEB_COOKIE_PROVIDERS = {
     website: "https://chat.z.ai",
     hasFree: true,
     freeNote:
-      "Free consumer web session — GLM chat models via chat.z.ai. Distinct from the API-key zai/glm providers. No subscription required.",
+      "Free consumer web session — GLM chat models via chat.z.ai. Guest tokens are minted automatically; a pasted Cookie unlocks higher tiers. Distinct from the API-key zai/glm providers. No subscription required.",
     subscriptionRisk: true,
     riskNoticeVariant: "webCookie",
-    authHint: "Paste the full Cookie header from chat.z.ai (must include the token=<JWT> cookie)",
+    authHint:
+      "Optional: paste the full Cookie header from chat.z.ai (must include token=<JWT>) to unlock GLM-5.x tiers. Leave empty to use the free guest token (glm-4.7 only). Note: chat.z.ai gates completions behind an invisible CAPTCHA.",
   },
 };
 
