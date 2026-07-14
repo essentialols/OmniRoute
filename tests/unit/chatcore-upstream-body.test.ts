@@ -202,3 +202,82 @@ test("preserves a client-supplied prompt_cache_key for codex passthrough", async
   });
   assert.equal(out.prompt_cache_key, "codex-session-xyz");
 });
+
+// ── Codex OpenAI-compat upstream normalization (system-first / vision / tool fields) ──
+// prepareUpstreamBody applies normalizeOpenAICompatUpstreamBody for targetFormat "openai"
+// only; claude/gemini keep their own dedicated handling.
+
+test("merges adjacent system messages for OpenAI-format upstreams (uncloseai)", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "m",
+      messages: [
+        { role: "system", content: "instructions" },
+        { role: "system", content: [{ type: "text", text: "perm" }] },
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+      ],
+    },
+    modelToCall: "m",
+    provider: "uncloseai",
+    targetFormat: "openai",
+    credentials: null,
+  });
+  const msgs = out.messages as Array<{ role: string; content: unknown }>;
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[0].role, "system");
+  assert.equal(msgs[0].content, "instructions\n\nperm");
+  assert.equal(msgs[1].content, "hi"); // text-only array flattened
+});
+
+test("does NOT touch messages for non-OpenAI targetFormat (claude)", async () => {
+  const messages = [
+    { role: "system", content: "a" },
+    { role: "system", content: [{ type: "text", text: "b" }] },
+    { role: "user", content: [{ type: "text", text: "hi" }] },
+  ];
+  const out = await prepareUpstreamBody({
+    translatedBody: { model: "m", messages },
+    modelToCall: "m",
+    provider: "uncloseai",
+    targetFormat: "claude",
+    credentials: null,
+  });
+  assert.deepEqual(out.messages, messages); // untouched for claude
+});
+
+test("strips parallel_tool_calls for cohere (openai)", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "command-a-03-2025",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ type: "function", function: { name: "shell" } }],
+      tool_choice: "auto",
+      parallel_tool_calls: true,
+    },
+    modelToCall: "command-a-03-2025",
+    provider: "cohere",
+    targetFormat: "openai",
+    credentials: null,
+  });
+  assert.equal(out.parallel_tool_calls, undefined);
+  assert.ok(Array.isArray(out.tools));
+});
+
+test("strips the whole tool trio for publicai (openai)", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "swiss-ai/apertus-8b-instruct",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ type: "function", function: { name: "shell" } }],
+      tool_choice: "auto",
+      parallel_tool_calls: true,
+    },
+    modelToCall: "swiss-ai/apertus-8b-instruct",
+    provider: "publicai",
+    targetFormat: "openai",
+    credentials: null,
+  });
+  assert.equal(out.tools, undefined);
+  assert.equal(out.tool_choice, undefined);
+  assert.equal(out.parallel_tool_calls, undefined);
+});

@@ -454,10 +454,6 @@ export class DefaultExecutor extends BaseExecutor {
       this.provider?.startsWith?.("openai-compatible-") ||
       this.provider?.startsWith?.("anthropic-compatible-");
 
-    if (isCompatibleProvider) {
-      applyCustomHeaders(headers, credentials.providerSpecificData?.customHeaders);
-    }
-
     // Forward client request metadata headers (from OpenCode or similar clients)
     // Allowlist-based: only specific x-opencode-* headers and User-Agent are forwarded
     if (clientHeaders) {
@@ -473,6 +469,17 @@ export class DefaultExecutor extends BaseExecutor {
       if (betaKey && clientBeta) {
         headers[betaKey] = mergeClientAnthropicBeta(headers[betaKey], clientBeta);
       }
+    }
+
+    // Operator-configured custom headers are authoritative: apply them AFTER client
+    // metadata forwarding so a node's explicit User-Agent/Referer win over the
+    // forwarded client User-Agent. A custom node (e.g. Pollinations) sets a stable
+    // `User-Agent` precisely to present a fixed signature upstream; letting the client's
+    // browser User-Agent override it produced a Cloudflare 1010 "browser_signature_banned"
+    // 403 (undici TLS + a browser-claiming UA). Nodes without a custom User-Agent are
+    // unaffected: the forwarded client UA remains.
+    if (isCompatibleProvider) {
+      applyCustomHeaders(headers, credentials.providerSpecificData?.customHeaders);
     }
 
     normalizeAnthropicHeaderVariants(headers);

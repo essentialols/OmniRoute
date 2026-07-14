@@ -22,6 +22,69 @@ export function findOffendingField(bodyText: string): string | null {
   return null;
 }
 
+// Tool-field capability strips (Codex CLI / Responses-API compatibility).
+//
+// Codex always injects `tools`, `tool_choice:"auto"` and `parallel_tool_calls:true`
+// on every request. A few strict OpenAI-compatible upstreams reject those fields and
+// return a 4xx before streaming any content, which surfaces to the Responses client
+// as "stream closed before response.completed" (5x reconnect). These are proactive,
+// provider-capability strips (mirrors the prompt_cache_key/groq precedent) so a codex
+// request completes instead of failing on an unsupported field.
+
+/**
+ * OpenAI-format providers that reject the `parallel_tool_calls` field.
+ * cohere's OpenAI-compatibility endpoint returns HTTP 422
+ * "unprocessable entity: parallel_tool_calls is not supported".
+ */
+export const PROVIDERS_WITHOUT_PARALLEL_TOOL_CALLS: ReadonlySet<string> = new Set(["cohere"]);
+
+/**
+ * OpenAI-format providers whose upstream cannot do tool calling at all, so the whole
+ * `tools`/`tool_choice`/`parallel_tool_calls` trio must be dropped. publicai serves
+ * apertus via a litellm/vLLM backend that is not started with
+ * `--enable-auto-tool-choice`, so ANY request carrying tools (with or without an
+ * explicit tool_choice) 400s with
+ * `"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser`.
+ */
+export const PROVIDERS_WITHOUT_TOOL_CALLING: ReadonlySet<string> = new Set(["publicai"]);
+
+/**
+ * Drop tool-related request fields the given OpenAI-format provider cannot accept.
+ * Returns a new object only when something was stripped; otherwise returns `body`
+ * unchanged (referential no-op for the common case).
+ */
+export function stripUnsupportedToolFields<T extends Record<string, unknown>>(
+  body: T,
+  provider: string | null | undefined
+): T {
+  if (!body || typeof body !== "object") return body;
+  const id = (provider ?? "").trim().toLowerCase();
+  if (!id) return body;
+
+  if (PROVIDERS_WITHOUT_TOOL_CALLING.has(id)) {
+    if (
+      body.tools !== undefined ||
+      body.tool_choice !== undefined ||
+      body.parallel_tool_calls !== undefined
+    ) {
+      const next: Record<string, unknown> = { ...body };
+      delete next.tools;
+      delete next.tool_choice;
+      delete next.parallel_tool_calls;
+      return next as T;
+    }
+    return body;
+  }
+
+  if (PROVIDERS_WITHOUT_PARALLEL_TOOL_CALLS.has(id) && body.parallel_tool_calls !== undefined) {
+    const next: Record<string, unknown> = { ...body };
+    delete next.parallel_tool_calls;
+    return next as T;
+  }
+
+  return body;
+}
+
 /** Immutably drop request fields Groq rejects with a 400. */
 export function stripGroqUnsupportedFields<T extends Record<string, unknown>>(body: T): T {
   if (!body || typeof body !== "object") return body;
