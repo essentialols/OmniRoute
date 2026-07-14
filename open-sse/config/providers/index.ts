@@ -20,6 +20,7 @@ import { inclusionaiProvider } from "./registry/inclusionai/index.ts";
 import { glmProvider } from "./registry/glm/index.ts";
 import { glmtProvider } from "./registry/glm/t/index.ts";
 import { glm_cnProvider } from "./registry/glm/cn/index.ts";
+import { glm_webProvider } from "./registry/glm/web/index.ts";
 import { traeProvider } from "./registry/trae/index.ts";
 import { muse_spark_webProvider } from "./registry/muse-spark-web/index.ts";
 import { kilocodeProvider } from "./registry/kilocode/index.ts";
@@ -206,6 +207,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   glm: glmProvider,
   glmt: glmtProvider,
   "glm-cn": glm_cnProvider,
+  "glm-web": glm_webProvider,
   trae: traeProvider,
   "muse-spark-web": muse_spark_webProvider,
   kilocode: kilocodeProvider,
