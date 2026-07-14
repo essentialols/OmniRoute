@@ -120,23 +120,22 @@ export const NOAUTH_PROVIDERS = {
       text: "Augment (Auggie CLI) requires the `auggie` binary installed and authenticated locally (`auggie login`). OmniRoute spawns it as a subprocess and never sees or stores your Augment credentials.",
     },
   },
-  "glm-web": {
-    id: "glm-web",
-    alias: "glm-web",
-    name: "GLM Web (Zhipu Free)",
+  brave: {
+    id: "brave",
+    name: "Brave Leo",
     icon: "auto_awesome",
-    color: "#3859FF",
-    textIcon: "GW",
-    website: "https://chatglm.cn",
+    color: "#FB542B",
+    textIcon: "🦁",
+    website: "https://brave.com/leo/",
     noAuth: true,
     hasFree: true,
     serviceKinds: ["llm"],
     freeNote:
-      "Free GLM (Zhipu 智谱清言) via chatglm.cn. No API key: the executor auto-mints a ~24h guest token per request. Rate limits apply.",
+      "Free, anonymous access to Brave Leo (Claude 3 Haiku, GLM, Qwen, Llama, GPT-OSS) via the Brave Services Gateway. No Brave account or API key required.",
     authHint:
-      "No credentials required. Optionally paste a chatglm.cn chatglm_refresh_token cookie (DevTools > Application > Cookies) for higher rate limits, or leave empty to use the free guest token.",
+      "No credentials required. The executor HMAC-signs each request with public keys extracted from the Brave desktop binary. Rate-limited (~5s between requests).",
     notice: {
-      text: "GLM Web uses the free chatglm.cn consumer webchat with an auto-generated guest token (no signup). This is NOT the paid api.z.ai / bigmodel.cn API. Rate limits apply.",
+      text: "Brave Leo uses Brave's hosted AI endpoint (ai-chat.bsg.brave.com) with anonymous per-request signing. No signup needed. If Brave rotates its signing keys, override via BRAVE_SERVICES_KEY / BRAVE_AICHAT_KEY / BRAVE_LEO_KEY_ID env vars.",
     },
   },
 };

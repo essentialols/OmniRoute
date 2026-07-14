@@ -182,6 +182,22 @@ const EMBEDDED_DEFAULTS = {
     13, 92, 15, 89, 66, 91, 76, 70, 72, 29, 71, 70, 3, 65, 93, 84, 72, 23, 28, 87, 92, 88, 15, 95,
     91, 22, 71, 87, 20, 66, 67, 86, 13, 81, 81, 21,
   ],
+  // Brave Leo — Brave Services Gateway service key (public, extracted from the
+  // Brave desktop binary; sent as the static `x-brave-key` / `BraveServiceKey`
+  // header). Public client identifier, not a user secret. Override via env
+  // BRAVE_SERVICES_KEY if Brave rotates it.
+  brave_services: [
+    30, 23, 26, 11, 24, 21, 55, 5, 47, 88, 21, 36, 56, 32, 47, 8, 90, 34, 101, 37, 31, 7, 12, 7, 87,
+    35, 3, 86, 26, 72, 76, 23,
+  ],
+  // Brave Leo — AI-chat HMAC signing key (public, extracted from the Brave
+  // desktop binary; used to HMAC-SHA256 the request digest). Public by design.
+  // Override via env BRAVE_AICHAT_KEY if Brave rotates it.
+  brave_aichat: [
+    12, 91, 12, 8, 16, 86, 68, 67, 84, 78, 70, 70, 7, 9, 93, 82, 72, 67, 85, 87, 11, 87, 90, 70, 92,
+    70, 17, 83, 29, 73, 70, 85, 9, 91, 2, 21, 64, 5, 92, 12, 89, 94, 19, 11, 67, 67, 6, 78, 65, 77,
+    1, 15, 88, 90, 72, 21, 85, 10, 90, 15, 91, 19, 91, 76,
+  ],
 } as const;
 
 export type EmbeddedDefaultKey = keyof typeof EMBEDDED_DEFAULTS;
