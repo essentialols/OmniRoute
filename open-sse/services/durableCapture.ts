@@ -1,148 +1,109 @@
 /**
- * Durable JSONL traffic capture at the universal fetch choke point.
+ * Durable JSONL traffic capture for the executor fetch boundary (Layer 2).
  *
- * Why this exists: OmniRoute's built-in MITM inspector only sees traffic that
- * flows through the MITM proxy. API-pipeline traffic entering via
- * `/v1/chat/completions` / `/v1/messages` (port 20128) never reaches that hook.
- * This module captures the TRANSFORMED upstream request + the RAW upstream
- * response at the ONE point every provider's upstream call passes through:
- * the `globalThis.fetch` monkey-patch (`open-sse/utils/proxyFetch.ts` →
- * `patchedFetch`), wired via the existing AsyncLocalStorage fetch wrapper in
- * `open-sse/utils/providerRequestLogging.ts::installFetchCapture`.
- *
- * Capturing at the fetch layer (not `BaseExecutor.execute()`) is deliberate:
- * ~9 web executors (deepseek-web, glm-web, kimi-web, perplexity-web,
- * huggingchat, lmarena, antigravity, …) override `execute()` and never call
- * `super`, so a `base.ts` hook silently misses them. Every one of them still
- * dispatches through `globalThis.fetch`, so this seam catches them all.
- *
- * Correlation: every capture line records `correlationId` + `attempt` (+ `leg`,
- * provider, model) read synchronously from the per-request AsyncLocalStorage
- * context set around `executor.execute()` in `chatCore.ts`. This disambiguates
- * one client request's fan-out (combo / fusion / pipeline / retry+rotate).
+ * Why this exists: OmniRoute's built-in MITM inspector
+ * (`src/mitm/inspector/agentBridgeHook.ts`) only sees traffic that flows
+ * through the MITM proxy (port 8080). API-pipeline traffic entering via
+ * `/v1/messages` (port 20128) never reaches that hook. This module captures at
+ * the ONE point every provider's upstream call passes through:
+ * `BaseExecutor.execute()`'s `fetch()`. One hook, all providers, all formats.
  *
  * Output: line-delimited JSONL at
  *   <DATA_DIR|~/.omniroute>/captures/<provider>/<YYYY-MM-DD>.jsonl
- * Files rotate daily by name; retention is left to the operator (e.g. a cron
- * `find … -mtime +N -delete`), so an always-on capture cannot grow unbounded.
+ * Headers are sanitized (`sanitizeHeaders`) and bodies masked (`maskSecret`);
+ * body sizes are capped at the same 1 MiB budget as the inspector buffer.
  *
- * Safety:
- *   - DEFAULT OFF. Capture is a no-op unless the operator opts in with
- *     `OMNIROUTE_RAWCAP=1` (or `=true`). `OMNIROUTE_CAPTURE_DISABLED=1` is an
- *     additional hard kill-switch that wins over the opt-in.
- *   - Auth headers are scrubbed (`sanitizeHeaders` masks authorization/cookie/
- *     api-key/set-cookie, drops hop-by-hop/denylist headers).
- *   - Embedded non-text media inside a body (base64 image/audio/video data
- *     URIs and standalone base64 blobs, e.g. vision `image_url`, `input_audio`,
- *     image/audio outputs `b64_json`) is replaced with a compact size-annotated
- *     placeholder (`redactMediaBlobs`) BEFORE write, leaving all surrounding
- *     text (prompt, roles, tool calls) intact. This catches media in normal
- *     JSON/chat bodies that the endpoint/content-type binary check below misses.
- *   - Bodies are then secret-masked (`maskSecret`) AND PII-redacted
- *     (`redactPIIForCapture`) before ever touching disk. Text is NOT truncated
- *     by default (`OMNIROUTE_CAPTURE_MAX_BODY_KB=0` = unlimited, the default;
- *     "save it all"). Operators may still set a positive KB cap.
- *   - Binary media endpoints (audio/image/video/speech) and binary
- *     content-types are ALSO captured as metadata only (their base64 bodies are
- *     omitted): belt and suspenders with the in-body redaction above.
- *   - The response body is read via `response.clone()` (an independent tee
- *     branch), leaving the ORIGINAL `Response` fully intact for the caller. All
- *     capture work is fire-and-forget and wrapped in try/catch — a capture
- *     failure can never break, block, or mutate the executor path.
+ * Streaming safety: the response body is read via `response.clone()`, whose
+ * body stream is an independent tee branch. `clone()` is used instead of a raw
+ * `response.body.tee()` on purpose — it preserves the ORIGINAL `Response`
+ * object (its `url`, `ok`, `type`, `status`, `headers`, and body) untouched for
+ * the caller, so nothing downstream has to reconstruct a Response. This mirrors
+ * the pattern `base.ts` already relies on for its 400-fallback error reads
+ * (`response.clone().text()`), which proves clone() is safe at this callsite.
+ * All capture work is fire-and-forget and fully wrapped in try/catch so a
+ * capture failure can never break the executor path.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * INTEGRATION (separate PR — do NOT edit base.ts here):
+ *
+ * In `open-sse/executors/base.ts`, inside `execute()`:
+ *
+ *   1. Just before the upstream fetch (line ~1207, `let response = await
+ *      fetchWithStartTimeout(url, fetchOptions);`), record the start time:
+ *
+ *        const __captureStart = Date.now();
+ *
+ *   2. Just before the success return (line ~1295,
+ *      `return { response, url, headers: finalHeaders, transformedBody: ... };`),
+ *      add:
+ *
+ *        captureUpstreamExchange({
+ *          provider: this.provider,
+ *          model,
+ *          clientHeaders,
+ *          requestHeaders: finalHeaders,
+ *          requestBody: bodyString,
+ *          response,
+ *          latencyMs: Date.now() - __captureStart,
+ *        });
+ *
+ *   3. (Optional) in the catch block (line ~1296) before it rethrows/falls
+ *      back, add:
+ *
+ *        captureUpstreamError({
+ *          provider: this.provider,
+ *          model,
+ *          clientHeaders,
+ *          requestHeaders: finalHeaders,
+ *          requestBody: typeof bodyString === "string" ? bodyString : null,
+ *          error: err,
+ *          latencyMs: Date.now() - __captureStart,
+ *        });
+ *
+ *   Both functions return void, never throw, and never mutate `response`.
+ * ─────────────────────────────────────────────────────────────────────────
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { maskSecret } from "@/mitm/maskSecrets";
 import { sanitizeHeaders } from "@/mitm/sanitizeHeaders";
-import { redactPIIForCapture } from "@/lib/piiSanitizer";
 
 const TRUNCATION_MARKER = "\n…(truncated for capture)";
-const BINARY_MEDIA_MARKER = "[binary-media-omitted]";
 const AGENT_BACKEND_HEADER = "x-claude-proxy-subagent-backend";
 const AGENT_MODEL_HEADER = "x-claude-proxy-subagent-model";
 
-// URL paths whose bodies are binary media (base64-inflated, no useful text).
-const BINARY_MEDIA_PATH_RE = /\/(audio|images?|video|speech|transcriptions|translations)(\/|\?|$)/i;
-
-/**
- * Per-request correlation context, set around `executor.execute()` in
- * `chatCore.ts` and read synchronously by the fetch-layer capture.
- */
-export interface CaptureContext {
-  correlationId: string | null;
-  /** Retry/rotate attempt index (0-based) within the current target. */
-  attempt: number;
+export interface CaptureInput {
   provider: string;
   model: string;
-  /** Which execution leg produced this call (primary/stream-recovery/refresh-retry). */
-  leg?: string | null;
-  /** Original client request headers — read for agent attribution only. */
+  /** Original client request headers — read for agent attribution. */
   clientHeaders?: Record<string, string> | null;
-}
-
-/**
- * Input for capturing leg (1) `client_in`: the raw client request exactly as
- * received, BEFORE OmniRoute translates/compresses it. Emitted from the request
- * ingress in `chatCore.ts` (and the `/v1/responses` adapter) under the SAME
- * `correlationId` used for the upstream legs, so all legs of one client request
- * correlate.
- */
-export interface CaptureClientInInput {
-  correlationId: string | null;
-  provider: string;
-  model: string;
-  /** Client endpoint the request arrived on (e.g. `/v1/chat/completions`). */
-  endpoint: string;
-  /** Raw client headers (Headers instance or plain record). Scrubbed on write. */
-  clientHeaders: Headers | Record<string, string | string[] | undefined> | null | undefined;
-  /** Raw client body (object or already-serialized string), pre-translation. */
-  clientBody: unknown;
-  /** Optional attempt index; client_in is normally attempt-independent (0). */
-  attempt?: number;
-}
-
-/**
- * Input for capturing leg (4) `client_out`: the FINAL response OmniRoute returns
- * to the client, AFTER post-processing (decompression, translation back, SSE
- * reframing incl. the Responses-API `TransformStream`). The response is teed
- * with `clone()` the same backpressure-safe way (3) is, and left fully intact.
- */
-export interface CaptureClientOutInput {
-  correlationId: string | null;
-  provider: string;
-  model: string;
-  /** Client endpoint (optional, used only for binary-media detection). */
-  endpoint?: string | null;
-  /** The final client-facing Response. Left fully intact for the caller. */
-  response: Response;
-  attempt?: number;
-}
-
-export interface CaptureFromFetchInput {
-  /** Final upstream URL actually requested. */
-  url: string;
   /** Final headers actually sent upstream. */
   requestHeaders: Record<string, string>;
-  /** Serialized request body actually sent upstream (null if non-text/binary). */
+  /** Serialized request body actually sent upstream. */
   requestBody: string | null;
   /** The upstream Response. Left fully intact for the caller. */
   response: Response;
   latencyMs: number;
 }
 
+export interface CaptureErrorInput {
+  provider: string;
+  model: string;
+  clientHeaders?: Record<string, string> | null;
+  requestHeaders: Record<string, string>;
+  requestBody: string | null;
+  error: unknown;
+  latencyMs: number;
+}
+
 interface CaptureEntry {
   timestamp: string;
-  correlationId: string | null;
-  attempt: number;
-  leg: string | null;
   provider: string;
   model: string;
   agentBackend: string | null;
   agentModel: string | null;
-  url: string;
   requestHeaders: Record<string, string>;
   requestBody: string | null;
   responseStatus: number | null;
@@ -152,30 +113,15 @@ interface CaptureEntry {
   error: string | null;
 }
 
-/**
- * DEFAULT OFF. Effective gate: opt-in via `OMNIROUTE_RAWCAP`, unless the hard
- * kill-switch `OMNIROUTE_CAPTURE_DISABLED=1` is set (which always wins).
- */
-export function isCaptureEnabled(): boolean {
-  if (process.env.OMNIROUTE_CAPTURE_DISABLED === "1") return false;
-  const raw = process.env.OMNIROUTE_RAWCAP;
-  return raw === "1" || raw === "true";
+function isDisabled(): boolean {
+  return process.env.OMNIROUTE_CAPTURE_DISABLED === "1";
 }
 
-/**
- * Body size budget in bytes. DEFAULT is unlimited ("save it all"): after media→
- * placeholder redaction bodies are text-only, so the user's explicit choice is
- * to keep full text. `OMNIROUTE_CAPTURE_MAX_BODY_KB=0` (or unset) means
- * unlimited; a positive KB value re-enables a hard cap for operators who want
- * one. Returns `Infinity` for unlimited (arithmetic-safe in `capString` /
- * `readCappedStream`, which then never truncate).
- */
 function maxBodyBytes(): number {
   const raw = process.env.OMNIROUTE_CAPTURE_MAX_BODY_KB ?? process.env.INSPECTOR_MAX_BODY_KB;
-  if (raw === undefined || raw === null || raw === "") return Number.POSITIVE_INFINITY;
-  const kb = Number(raw);
-  if (!Number.isFinite(kb) || kb <= 0) return Number.POSITIVE_INFINITY;
-  return Math.max(1, Math.floor(kb)) * 1024;
+  const kb = raw ? Number(raw) : NaN;
+  const resolved = Number.isFinite(kb) && kb > 0 ? kb : 1024;
+  return Math.max(1, Math.floor(resolved)) * 1024;
 }
 
 function baseCaptureDir(): string {
@@ -210,23 +156,6 @@ function headerLookup(
   return null;
 }
 
-/**
- * Scrub headers for capture. `sanitizeHeaders` masks authorization/api-key,
- * drops denylist headers, and hard-redacts `set-cookie`, but the REQUEST
- * `cookie` header can carry a short session/CSRF id that `maskSecret`'s
- * length heuristics miss. Hard-redact it here so no cookie secret is ever
- * persisted to a capture file.
- */
-function scrubHeadersForCapture(
-  headers: Record<string, string | string[] | undefined>
-): Record<string, string> {
-  const out = sanitizeHeaders(headers);
-  for (const key of Object.keys(out)) {
-    if (key.toLowerCase() === "cookie") out[key] = "[REDACTED]";
-  }
-  return out;
-}
-
 function headersToRecord(headers: Headers): Record<string, string> {
   const record: Record<string, string> = {};
   headers.forEach((value, key) => {
@@ -235,129 +164,9 @@ function headersToRecord(headers: Headers): Record<string, string> {
   return record;
 }
 
-/**
- * Normalize an incoming client header carrier to a plain record. Client
- * requests reach OmniRoute either as a `Headers` instance (fetch/Web) or as a
- * plain object (Node/worker), and `chatCore` already treats both shapes; the
- * capture layer must too.
- */
-function toHeaderRecord(
-  headers: Headers | Record<string, string | string[] | undefined> | null | undefined
-): Record<string, string | string[] | undefined> {
-  if (!headers) return {};
-  const maybeHeaders = headers as Headers;
-  if (typeof maybeHeaders.forEach === "function" && typeof maybeHeaders.get === "function") {
-    return headersToRecord(maybeHeaders);
-  }
-  return headers as Record<string, string | string[] | undefined>;
-}
-
-/** Serialize a client body (object or already-serialized string) for capture. */
-function serializeBody(body: unknown): string | null {
-  if (body == null) return null;
-  if (typeof body === "string") return body;
-  try {
-    return JSON.stringify(body);
-  } catch {
-    return null;
-  }
-}
-
 function capString(value: string, limit: number): string {
   if (value.length <= limit) return value;
   return value.slice(0, limit) + TRUNCATION_MARKER;
-}
-
-// ── In-body media redaction ──
-//
-// A normal chat/JSON body (content-type application/json) can embed non-text
-// media as base64: vision inputs (`image_url.url` = `data:image/png;base64,…`,
-// `input_audio.data`, multimodal parts) and image/audio OUTPUTS (`b64_json`,
-// data URIs). Those blobs are huge and hold no useful text, and the user does
-// not want them persisted. We replace them, at the SERIALIZED-string level
-// (regex over the JSON text, no parse, robust to any schema), with a compact
-// size-annotated placeholder, preserving every surrounding byte of real text.
-
-/** Minimum base64 run treated as encoded binary (~192 bytes); shorter stays text. */
-const MEDIA_MIN_BASE64_LEN = 256;
-
-// data:<image|audio|video>/<subtype>;base64,<blob>
-const DATA_URI_MEDIA_RE =
-  /data:(image|audio|video)\/([A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*);base64,([A-Za-z0-9+/]+={0,2})/gi;
-
-// Any JSON string value that is a long, continuous, pure-base64 run (no spaces /
-// punctuation): standalone base64 media in `b64_json`, `input_audio.data`,
-// `audio.data`, a raw `image_url.url`, etc. Real prose never looks like this.
-const QUOTED_BASE64_RE = new RegExp(`"([A-Za-z0-9+/]{${MEDIA_MIN_BASE64_LEN},}={0,2})"`, "g");
-
-/** Approximate decoded byte size of a base64 string, in whole KB (min 1). */
-function approxBase64KB(base64Len: number): number {
-  const bytes = Math.floor((base64Len * 3) / 4);
-  return Math.max(1, Math.round(bytes / 1024));
-}
-
-/**
- * Replace embedded base64 image/audio/video inside a serialized body with a
- * size-annotated placeholder (`[binary image/png ~<KB>KB omitted]`), leaving all
- * surrounding text intact. Idempotent: a placeholder contains no `;base64,`
- * marker and no long base64 run, so re-running never re-matches (text-safe).
- */
-function redactMediaBlobs(body: string): string {
-  if (!body || body.length < MEDIA_MIN_BASE64_LEN) return body;
-  let out = body.replace(DATA_URI_MEDIA_RE, (_m, type: string, subtype: string, blob: string) => {
-    return `[binary ${type}/${subtype} ~${approxBase64KB(blob.length)}KB omitted]`;
-  });
-  out = out.replace(QUOTED_BASE64_RE, (_m, blob: string) => {
-    return `"[binary data ~${approxBase64KB(blob.length)}KB omitted]"`;
-  });
-  return out;
-}
-
-/**
- * Redact in-body media to a placeholder, mask secrets, redact PII, then cap.
- * Used for both request and response bodies. Media redaction runs FIRST so a
- * huge base64 blob never consumes the (optional) size budget, and the cap
- * (unlimited by default) then applies to text only. Cap is applied LAST.
- */
-function scrubBody(value: string | null | undefined, limit: number): string | null {
-  if (typeof value !== "string" || value.length === 0) return null;
-  const deMedia = redactMediaBlobs(value);
-  const scrubbed = redactPIIForCapture(maskSecret(deMedia));
-  return capString(scrubbed, limit);
-}
-
-function isBinaryMediaUrl(url: string): boolean {
-  try {
-    return BINARY_MEDIA_PATH_RE.test(new URL(url).pathname);
-  } catch {
-    return BINARY_MEDIA_PATH_RE.test(url);
-  }
-}
-
-function isBinaryContentType(contentType: string | null): boolean {
-  if (!contentType) return false;
-  const ct = contentType.toLowerCase();
-  return (
-    ct.startsWith("audio/") ||
-    ct.startsWith("image/") ||
-    ct.startsWith("video/") ||
-    ct.startsWith("application/octet-stream")
-  );
-}
-
-/**
- * Binary-ness of a CLIENT REQUEST body, decided by its content-type (the
- * correct signal for `client_in`; unlike `isBinaryMediaUrl`, which reads the
- * upstream URL/endpoint and is meant for the response side). A file upload
- * (`multipart/form-data`, e.g. audio transcription/translation) or a raw
- * audio/image/video POST is binary and captured as metadata only; a JSON
- * request (chat, embeddings, moderations, image GENERATION, TTS `audio/speech`)
- * is text and its body is captured (with in-body base64 media redacted).
- */
-export function isBinaryRequestContentType(contentType: string | null): boolean {
-  if (!contentType) return false;
-  const ct = contentType.toLowerCase();
-  return ct.startsWith("multipart/form-data") || isBinaryContentType(ct);
 }
 
 /**
@@ -419,20 +228,25 @@ async function writeEntry(entry: CaptureEntry): Promise<void> {
   await writeChain;
 }
 
-function baseEntry(ctx: CaptureContext, input: CaptureFromFetchInput): CaptureEntry {
+function baseEntry(
+  input: Pick<
+    CaptureInput,
+    "provider" | "model" | "clientHeaders" | "requestHeaders" | "requestBody" | "latencyMs"
+  >
+): CaptureEntry {
   const limit = maxBodyBytes();
+  const requestBody =
+    typeof input.requestBody === "string" && input.requestBody.length > 0
+      ? maskSecret(capString(input.requestBody, limit))
+      : null;
   return {
     timestamp: new Date().toISOString(),
-    correlationId: ctx.correlationId ?? null,
-    attempt: ctx.attempt,
-    leg: ctx.leg ?? null,
-    provider: ctx.provider,
-    model: ctx.model,
-    agentBackend: headerLookup(ctx.clientHeaders, AGENT_BACKEND_HEADER),
-    agentModel: headerLookup(ctx.clientHeaders, AGENT_MODEL_HEADER),
-    url: input.url,
-    requestHeaders: scrubHeadersForCapture(input.requestHeaders),
-    requestBody: scrubBody(input.requestBody, limit),
+    provider: input.provider,
+    model: input.model,
+    agentBackend: headerLookup(input.clientHeaders, AGENT_BACKEND_HEADER),
+    agentModel: headerLookup(input.clientHeaders, AGENT_MODEL_HEADER),
+    requestHeaders: sanitizeHeaders(input.requestHeaders),
+    requestBody,
     responseStatus: null,
     responseHeaders: null,
     responseBody: null,
@@ -441,46 +255,16 @@ function baseEntry(ctx: CaptureContext, input: CaptureFromFetchInput): CaptureEn
   };
 }
 
-// ── AsyncLocalStorage correlation context ──
-
-const captureContextStore = new AsyncLocalStorage<CaptureContext>();
-
 /**
- * Run `fn` with a capture correlation context in scope, so any upstream fetch
- * it triggers is recorded with the right correlationId/attempt/provider/model.
- * When capture is OFF this is a zero-overhead pass-through (no context set).
+ * Capture a completed upstream exchange. Fire-and-forget: schedules the write
+ * on a microtask, returns immediately, never throws, never mutates `response`.
  */
-export function runWithCaptureContext<T>(ctx: CaptureContext, fn: () => T): T {
-  if (!isCaptureEnabled()) return fn();
-  return captureContextStore.run(ctx, fn);
-}
-
-export function getCaptureContext(): CaptureContext | null {
-  return captureContextStore.getStore() ?? null;
-}
-
-/**
- * Capture a completed upstream exchange observed at the fetch layer.
- * Fire-and-forget: reads status/headers + correlation synchronously, defers
- * only the response-body read onto a microtask. Never throws, never mutates
- * `input.response`. No-op unless capture is enabled AND a correlation context
- * is active (which scopes capture to provider upstream calls).
- */
-export function captureUpstreamFromFetch(input: CaptureFromFetchInput): void {
-  if (!isCaptureEnabled()) return;
-  const ctx = getCaptureContext();
-  if (!ctx) return;
+export function captureUpstreamExchange(input: CaptureInput): void {
+  if (isDisabled()) return;
   try {
-    const entry = baseEntry(ctx, input);
+    const entry = baseEntry(input);
     entry.responseStatus = input.response.status;
-    entry.responseHeaders = scrubHeadersForCapture(headersToRecord(input.response.headers));
-
-    const contentType = input.response.headers.get("content-type");
-    if (isBinaryMediaUrl(input.url) || isBinaryContentType(contentType)) {
-      entry.responseBody = BINARY_MEDIA_MARKER;
-      void writeEntry(entry).catch(() => {});
-      return;
-    }
+    entry.responseHeaders = sanitizeHeaders(headersToRecord(input.response.headers));
 
     // clone() tees the body internally, leaving input.response fully intact.
     const clone = input.response.clone();
@@ -494,7 +278,7 @@ export function captureUpstreamFromFetch(input: CaptureFromFetchInput): void {
         } else {
           body = capString(await clone.text().catch(() => ""), limit);
         }
-        entry.responseBody = scrubBody(body, limit);
+        entry.responseBody = body.length > 0 ? maskSecret(body) : null;
         await writeEntry(entry);
       } catch {
         // best-effort — never surface capture failures
@@ -506,105 +290,14 @@ export function captureUpstreamFromFetch(input: CaptureFromFetchInput): void {
 }
 
 /**
- * Capture leg (1) `client_in`: the raw client request as received, BEFORE
- * OmniRoute translates/compresses it. Unlike the fetch-layer legs (2)(3), this
- * does NOT read the AsyncLocalStorage context — the caller passes `correlationId`
- * (+ provider/model) explicitly, because ingress runs before the executor scope
- * is entered. Fire-and-forget: never throws, never blocks or mutates the request
- * path. No-op unless capture is enabled (default OFF; see `isCaptureEnabled`).
+ * Capture a failed upstream exchange (fetch threw / timed out). Fire-and-forget.
  */
-export function captureClientIn(input: CaptureClientInInput): void {
-  if (!isCaptureEnabled()) return;
+export function captureUpstreamError(input: CaptureErrorInput): void {
+  if (isDisabled()) return;
   try {
-    const limit = maxBodyBytes();
-    const headers = toHeaderRecord(input.clientHeaders);
-    // The client request's binary-ness is decided by its CONTENT-TYPE, not the
-    // endpoint path: a multipart file upload (audio transcription/translation)
-    // is binary and stored as metadata only, while a JSON request on a "media"
-    // endpoint (image GENERATION prompt, TTS input text) is real text and IS
-    // captured (any embedded base64 is stripped by scrubBody's media redaction).
-    const contentType = headerLookup(headers as Record<string, string> | null, "content-type");
-    const isBinary = isBinaryRequestContentType(contentType);
-    const bodyStr = serializeBody(input.clientBody);
-    const entry: CaptureEntry = {
-      timestamp: new Date().toISOString(),
-      correlationId: input.correlationId ?? null,
-      attempt: input.attempt ?? 0,
-      leg: "client_in",
-      provider: input.provider,
-      model: input.model,
-      agentBackend: headerLookup(headers as Record<string, string> | null, AGENT_BACKEND_HEADER),
-      agentModel: headerLookup(headers as Record<string, string> | null, AGENT_MODEL_HEADER),
-      url: input.endpoint,
-      requestHeaders: scrubHeadersForCapture(headers),
-      requestBody: isBinary ? BINARY_MEDIA_MARKER : scrubBody(bodyStr, limit),
-      responseStatus: null,
-      responseHeaders: null,
-      responseBody: null,
-      latencyMs: 0,
-      error: null,
-    };
+    const entry = baseEntry(input);
+    entry.error = input.error instanceof Error ? input.error.message : String(input.error);
     void writeEntry(entry).catch(() => {});
-  } catch {
-    // best-effort — never surface capture failures
-  }
-}
-
-/**
- * Capture leg (4) `client_out`: the FINAL response OmniRoute returns to the
- * client, AFTER all post-processing. Tees the body via `response.clone()` +
- * `readCappedStream` (the same backpressure-safe branch (3) uses), so the real
- * client stream is never blocked, broken, or reordered. Fire-and-forget: never
- * throws, never mutates `input.response`. No-op unless capture is enabled.
- */
-export function captureClientOut(input: CaptureClientOutInput): void {
-  if (!isCaptureEnabled()) return;
-  try {
-    const { response } = input;
-    const limit = maxBodyBytes();
-    const entry: CaptureEntry = {
-      timestamp: new Date().toISOString(),
-      correlationId: input.correlationId ?? null,
-      attempt: input.attempt ?? 0,
-      leg: "client_out",
-      provider: input.provider,
-      model: input.model,
-      agentBackend: null,
-      agentModel: null,
-      url: input.endpoint ?? "",
-      requestHeaders: {},
-      requestBody: null,
-      responseStatus: response.status,
-      responseHeaders: scrubHeadersForCapture(headersToRecord(response.headers)),
-      responseBody: null,
-      latencyMs: 0,
-      error: null,
-    };
-
-    const contentType = response.headers.get("content-type");
-    if ((input.endpoint && isBinaryMediaUrl(input.endpoint)) || isBinaryContentType(contentType)) {
-      entry.responseBody = BINARY_MEDIA_MARKER;
-      void writeEntry(entry).catch(() => {});
-      return;
-    }
-
-    // clone() tees the body internally, leaving input.response fully intact.
-    const clone = response.clone();
-
-    void (async () => {
-      try {
-        let body: string;
-        if (clone.body) {
-          body = await readCappedStream(clone.body, limit);
-        } else {
-          body = capString(await clone.text().catch(() => ""), limit);
-        }
-        entry.responseBody = scrubBody(body, limit);
-        await writeEntry(entry);
-      } catch {
-        // best-effort — never surface capture failures
-      }
-    })();
   } catch {
     // best-effort — never surface capture failures
   }
