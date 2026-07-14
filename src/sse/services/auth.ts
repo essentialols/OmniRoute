@@ -437,21 +437,26 @@ function resolveTerminalConnectionStatus(
   result: { permanent?: boolean; creditsExhausted?: boolean },
   providerErrorType: string | null = null
 ): string | null {
-  if (result.creditsExhausted || status === 402) return "credits_exhausted";
+  // Recoverable project-config / oauth-token issues are never terminal.
   if (
     providerErrorType === PROVIDER_ERROR_TYPES.PROJECT_ROUTE_ERROR ||
     providerErrorType === PROVIDER_ERROR_TYPES.OAUTH_INVALID_TOKEN
   ) {
     return null;
   }
+  // Explicit "credits/balance exhausted" body signal maps to a terminal state
+  // (won't recover until credits are added). A bare 402 (payment required) with
+  // NO such body signal is treated as a recoverable cooldown below: a single 402
+  // blip must not terminally deactivate the whole credential pool.
+  if (result.creditsExhausted) return "credits_exhausted";
   if (result.permanent || providerErrorType === PROVIDER_ERROR_TYPES.FORBIDDEN) {
     return "banned";
   }
-  if (
-    providerErrorType === PROVIDER_ERROR_TYPES.ACCOUNT_DEACTIVATED ||
-    providerErrorType === PROVIDER_ERROR_TYPES.UNAUTHORIZED ||
-    status === 401
-  ) {
+  // Only an explicit account-deactivation body makes a 401 terminal. A bare 401
+  // (generic UNAUTHORIZED, e.g. a transient token hiccup) is RECOVERABLE: put
+  // this ONE connection into a short, lazy-recovering cooldown (handled by the
+  // caller) instead of terminally expiring every credential for the provider.
+  if (providerErrorType === PROVIDER_ERROR_TYPES.ACCOUNT_DEACTIVATED) {
     return "expired";
   }
   return null;
@@ -2099,7 +2104,28 @@ export async function markAccountUnavailable(
       result as { permanent?: boolean; creditsExhausted?: boolean },
       providerErrorType
     );
-    const cooldownMs = terminalStatus ? 0 : rawCooldownMs;
+    // Resilience: a bare 401/402 (no explicit dead-key body signal) is no longer
+    // terminal (see resolveTerminalConnectionStatus). The default error rules map
+    // these statuses to cooldownMs 0 (which used to be fine because the terminal
+    // status took the connection out). Now that the connection stays recoverable,
+    // apply a short lazy-recovering cooldown so it is skipped briefly instead of
+    // hot-looping the failing credential, while its siblings keep serving.
+    // oauth-invalid-token and project-route errors are intentionally kept
+    // cooldown-free so the connection stays immediately selectable for a token
+    // refresh / project fix; the floor below must not touch them.
+    const isIntentionalNoCooldownRecoverable =
+      providerErrorType === PROVIDER_ERROR_TYPES.OAUTH_INVALID_TOKEN ||
+      providerErrorType === PROVIDER_ERROR_TYPES.PROJECT_ROUTE_ERROR;
+    let recoverableRawCooldownMs = rawCooldownMs;
+    if (
+      !terminalStatus &&
+      !isIntentionalNoCooldownRecoverable &&
+      recoverableRawCooldownMs === 0 &&
+      (status === 401 || status === 402)
+    ) {
+      recoverableRawCooldownMs = effectiveProviderProfile?.baseCooldownMs ?? COOLDOWN_MS.transient;
+    }
+    const cooldownMs = terminalStatus ? 0 : recoverableRawCooldownMs;
 
     // ── #3027: per-model subscription/permission 403 → model-only lockout ──
     if (isPerModelQuotaProvider && status === 403 && provider && model && !terminalStatus) {

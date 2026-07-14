@@ -97,7 +97,7 @@ test("markAccountUnavailable does not overwrite terminal status", async () => {
   });
 
   const result = await auth.markAccountUnavailable(
-    (conn as any).id,
+    (conn as { id: string }).id,
     503,
     "temporary upstream error",
     "openai",
@@ -107,55 +107,111 @@ test("markAccountUnavailable does not overwrite terminal status", async () => {
   assert.equal(result.shouldFallback, true);
   assert.equal(result.cooldownMs, 0);
 
-  const after = await providersDb.getProviderConnectionById((conn as any).id);
+  const after = await providersDb.getProviderConnectionById((conn as { id: string }).id);
   assert.equal(after.testStatus, "credits_exhausted");
 });
 
-test("markAccountUnavailable marks 401 connections as expired without adding cooldown", async () => {
+test("markAccountUnavailable treats a bare 401 as a recoverable cooldown (not terminal)", async () => {
+  // Resilience: a single generic 401 (no explicit account-dead body signal) must
+  // NOT terminally expire the whole credential pool. It cools down ONE connection
+  // and recovers lazily. Explicit deactivation bodies are still terminal (below).
   await resetStorage();
 
   const conn = await providersDb.createProviderConnection({
     provider: "openai",
     authType: "apikey",
-    apiKey: "sk-expired",
+    apiKey: "sk-unauth",
     isActive: true,
     testStatus: "active",
   });
 
   const result = await auth.markAccountUnavailable(
-    (conn as any).id,
+    (conn as { id: string }).id,
     401,
     "unauthorized",
     "openai",
     "gpt-4.1"
   );
-  const after = await providersDb.getProviderConnectionById((conn as any).id);
+  const after = await providersDb.getProviderConnectionById((conn as { id: string }).id);
 
   assert.equal(result.shouldFallback, true);
-  assert.equal(result.cooldownMs, 0);
-  assert.equal(after.testStatus, "expired");
-  assert.ok(!after.rateLimitedUntil);
+  assert.ok(result.cooldownMs > 0, "bare 401 should get a recoverable cooldown, not 0");
+  assert.equal(after.testStatus, "unavailable");
+  assert.ok(after.rateLimitedUntil, "recoverable cooldown must set rateLimitedUntil");
 });
 
-test("markAccountUnavailable marks 402 connections as credits_exhausted without adding cooldown", async () => {
+test("markAccountUnavailable treats a bare 402 as a recoverable cooldown (not terminal)", async () => {
   await resetStorage();
 
   const conn = await providersDb.createProviderConnection({
     provider: "openai",
     authType: "apikey",
-    apiKey: "sk-credits",
+    apiKey: "sk-402",
     isActive: true,
     testStatus: "active",
   });
 
   const result = await auth.markAccountUnavailable(
-    (conn as any).id,
+    (conn as { id: string }).id,
     402,
-    "payment required",
+    "upstream returned 402",
     "openai",
     "gpt-4.1"
   );
-  const after = await providersDb.getProviderConnectionById((conn as any).id);
+  const after = await providersDb.getProviderConnectionById((conn as { id: string }).id);
+
+  assert.equal(result.shouldFallback, true);
+  assert.ok(result.cooldownMs > 0, "bare 402 should get a recoverable cooldown, not 0");
+  assert.equal(after.testStatus, "unavailable");
+  assert.ok(after.rateLimitedUntil, "recoverable cooldown must set rateLimitedUntil");
+});
+
+test("markAccountUnavailable keeps 401 terminal when the body says the account is deactivated", async () => {
+  await resetStorage();
+
+  const conn = await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    apiKey: "sk-deactivated",
+    isActive: true,
+    testStatus: "active",
+  });
+
+  const result = await auth.markAccountUnavailable(
+    (conn as { id: string }).id,
+    401,
+    "Your account has been deactivated",
+    "openai",
+    "gpt-4.1"
+  );
+  const after = await providersDb.getProviderConnectionById((conn as { id: string }).id);
+
+  assert.equal(result.shouldFallback, true);
+  assert.equal(result.cooldownMs, 0);
+  // Explicit deactivation body → permanent ban (terminal), pool-recovery blocked.
+  assert.equal(after.testStatus, "banned");
+  assert.ok(!after.rateLimitedUntil);
+});
+
+test("markAccountUnavailable keeps 402 terminal when the body says the balance is exhausted", async () => {
+  await resetStorage();
+
+  const conn = await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    apiKey: "sk-balance",
+    isActive: true,
+    testStatus: "active",
+  });
+
+  const result = await auth.markAccountUnavailable(
+    (conn as { id: string }).id,
+    402,
+    "Insufficient account balance",
+    "openai",
+    "gpt-4.1"
+  );
+  const after = await providersDb.getProviderConnectionById((conn as { id: string }).id);
 
   assert.equal(result.shouldFallback, true);
   assert.equal(result.cooldownMs, 0);
@@ -175,13 +231,13 @@ test("markAccountUnavailable treats API-key 403 as a recoverable cooldown", asyn
   });
 
   const result = await auth.markAccountUnavailable(
-    (conn as any).id,
+    (conn as { id: string }).id,
     403,
     "forbidden",
     "glm",
     "glm-5.1"
   );
-  const after = await providersDb.getProviderConnectionById((conn as any).id);
+  const after = await providersDb.getProviderConnectionById((conn as { id: string }).id);
 
   assert.equal(result.shouldFallback, true);
   assert.ok(result.cooldownMs > 0);
@@ -202,14 +258,14 @@ test("markAccountUnavailable keeps Grok Web alias 403 errors mode-local", async 
   });
 
   const result = await auth.markAccountUnavailable(
-    (conn as any).id,
+    (conn as { id: string }).id,
     403,
     "forbidden",
     "gw",
     "heavy"
   );
-  const after = await providersDb.getProviderConnectionById((conn as any).id);
-  const lockout = accountFallback.getModelLockoutInfo("gw", (conn as any).id, "heavy");
+  const after = await providersDb.getProviderConnectionById((conn as { id: string }).id);
+  const lockout = accountFallback.getModelLockoutInfo("gw", (conn as { id: string }).id, "heavy");
 
   assert.equal(result.shouldFallback, true);
   assert.ok(result.cooldownMs > 0);
@@ -231,13 +287,13 @@ test("markAccountUnavailable keeps project-route 403 errors non-terminal", async
   });
 
   const result = await auth.markAccountUnavailable(
-    (conn as any).id,
+    (conn as { id: string }).id,
     403,
     "The service has not been used in project",
     "openai",
     "gpt-4.1"
   );
-  const after = await providersDb.getProviderConnectionById((conn as any).id);
+  const after = await providersDb.getProviderConnectionById((conn as { id: string }).id);
 
   assert.equal(result.shouldFallback, true);
   assert.equal(result.cooldownMs, 0);
@@ -258,13 +314,13 @@ test("markAccountUnavailable keeps oauth-invalid 401 errors non-terminal", async
   });
 
   const result = await auth.markAccountUnavailable(
-    (conn as any).id,
+    (conn as { id: string }).id,
     401,
     "Invalid authentication credentials provided",
     "openai",
     "gpt-4.1"
   );
-  const after = await providersDb.getProviderConnectionById((conn as any).id);
+  const after = await providersDb.getProviderConnectionById((conn as { id: string }).id);
 
   assert.equal(result.shouldFallback, true);
   assert.equal(result.cooldownMs, 0);
