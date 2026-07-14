@@ -17,7 +17,7 @@ import { isFeatureFlagEnabled, resolveFeatureFlag } from "@/shared/utils/feature
 
 const isEnabled = () => isFeatureFlagEnabled("PII_RESPONSE_SANITIZATION");
 const VALID_MODES = ["redact", "warn", "block", "off"] as const;
-type PiiMode = typeof VALID_MODES[number];
+type PiiMode = (typeof VALID_MODES)[number];
 
 const getMode = (): PiiMode => {
   const value = resolveFeatureFlag("PII_RESPONSE_SANITIZATION_MODE");
@@ -52,19 +52,22 @@ const PII_PATTERNS: PIIPattern[] = [
   },
   {
     name: "credit_card",
-    regex: /(?<=^|[^A-Za-z0-9])(?:\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}|\d{4}[-\s]?\d{6}[-\s]?\d{4,5})(?=$|[^A-Za-z0-9])/g,
+    regex:
+      /(?<=^|[^A-Za-z0-9])(?:\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}|\d{4}[-\s]?\d{6}[-\s]?\d{4,5})(?=$|[^A-Za-z0-9])/g,
     replacement: "[CC_REDACTED]",
     severity: "high",
   },
   {
     name: "phone_us",
-    regex: /(?<=^|[^A-Za-z0-9])(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?=$|[^A-Za-z0-9])/g,
+    regex:
+      /(?<=^|[^A-Za-z0-9])(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?=$|[^A-Za-z0-9])/g,
     replacement: "[PHONE_REDACTED]",
     severity: "medium",
   },
   {
     name: "phone_br",
-    regex: /(?<=^|[^A-Za-z0-9])(?:\+?55[-.\s]?)?\(?\d{2}\)?[-.\s]?(?:9\d{4}|[2-5]\d{3})[-.\s]?\d{4}(?=$|[^A-Za-z0-9])/g,
+    regex:
+      /(?<=^|[^A-Za-z0-9])(?:\+?55[-.\s]?)?\(?\d{2}\)?[-.\s]?(?:9\d{4}|[2-5]\d{3})[-.\s]?\d{4}(?=$|[^A-Za-z0-9])/g,
     replacement: "[PHONE_REDACTED]",
     severity: "medium",
   },
@@ -88,7 +91,8 @@ const PII_PATTERNS: PIIPattern[] = [
   },
   {
     name: "ipv6_address",
-    regex: /(?<=^|[^A-Za-z0-9:])(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){7}|(?:[0-9a-fA-F]{1,4}:){1,7}:|::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}|::|[0-9a-fA-F]{1,4}::(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){2}:(?:[0-9a-fA-F]{1,4}:){0,4}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){3}:(?:[0-9a-fA-F]{1,4}:){0,3}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){4}:(?:[0-9a-fA-F]{1,4}:){0,2}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){5}:(?:[0-9a-fA-F]{1,4}:){0,1}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){6}:[0-9a-fA-F]{1,4})(?=$|[^A-Za-z0-9])(?!:[0-9a-fA-F:])/g,
+    regex:
+      /(?<=^|[^A-Za-z0-9:])(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){7}|(?:[0-9a-fA-F]{1,4}:){1,7}:|::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}|::|[0-9a-fA-F]{1,4}::(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){2}:(?:[0-9a-fA-F]{1,4}:){0,4}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){3}:(?:[0-9a-fA-F]{1,4}:){0,3}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){4}:(?:[0-9a-fA-F]{1,4}:){0,2}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){5}:(?:[0-9a-fA-F]{1,4}:){0,1}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){6}:[0-9a-fA-F]{1,4})(?=$|[^A-Za-z0-9])(?!:[0-9a-fA-F:])/g,
     replacement: "[IP_REDACTED]",
     severity: "low",
   },
@@ -122,8 +126,15 @@ export interface SanitizeResult {
 /**
  * Scan and optionally redact PII from LLM response text.
  */
-export function sanitizePII(text: string, isStreaming = false): SanitizeResult {
-  if (!isEnabled() || !text || typeof text !== "string") {
+export function sanitizePII(
+  text: string,
+  isStreaming = false,
+  forceEnabled?: boolean
+): SanitizeResult {
+  // `forceEnabled` lets a per-provider trust-tier decision (see piiTrust.ts)
+  // override the global feature flag. When undefined, the global flag governs.
+  const enabled = forceEnabled ?? isEnabled();
+  if (!enabled || !text || typeof text !== "string") {
     return { text, detections: [], redacted: false };
   }
 
@@ -142,8 +153,15 @@ export function sanitizePII(text: string, isStreaming = false): SanitizeResult {
     "\u2060", // Word Joiner
     "\u00AD", // Soft Hyphen
     // Bidirectional formatting controls
-    "\u202A", "\u202B", "\u202C", "\u202D", "\u202E",
-    "\u2066", "\u2067", "\u2068", "\u2069"
+    "\u202A",
+    "\u202B",
+    "\u202C",
+    "\u202D",
+    "\u202E",
+    "\u2066",
+    "\u2067",
+    "\u2068",
+    "\u2069",
   ]);
   const cleanToOrig: number[] = [];
   let cleanText = "";
@@ -277,18 +295,24 @@ export function sanitizePII(text: string, isStreaming = false): SanitizeResult {
 /**
  * Sanitize a streaming chunk (text content only).
  */
-export function sanitizePIIChunk(chunk: string, isStopSignal = false): string {
-  if (!isEnabled()) return chunk;
+export function sanitizePIIChunk(
+  chunk: string,
+  isStopSignal = false,
+  forceEnabled?: boolean
+): string {
+  const enabled = forceEnabled ?? isEnabled();
+  if (!enabled) return chunk;
   // If it's a stop signal, we are flushing the final chunk, so we shouldn't treat it as a partial streaming buffer (force redaction)
-  const { text } = sanitizePII(chunk, !isStopSignal);
+  const { text } = sanitizePII(chunk, !isStopSignal, forceEnabled);
   return text;
 }
 
 /**
  * Sanitize PII in a full response object (OpenAI-compatible format).
  */
-export function sanitizePIIResponse(response: any): any {
-  if (!isEnabled() || !response) return response;
+export function sanitizePIIResponse(response: any, forceEnabled?: boolean): any {
+  const enabled = forceEnabled ?? isEnabled();
+  if (!enabled || !response) return response;
 
   try {
     const visited = new WeakSet();
@@ -299,7 +323,7 @@ export function sanitizePIIResponse(response: any): any {
       }
       if (!obj) return obj;
       if (typeof obj === "string") {
-        return sanitizePII(obj).text;
+        return sanitizePII(obj, false, forceEnabled).text;
       }
       if (typeof obj === "object") {
         if (visited.has(obj)) {
@@ -314,7 +338,20 @@ export function sanitizePIIResponse(response: any): any {
         } else {
           for (const key of Object.keys(obj)) {
             // Skip known non-PII system metadata keys to optimize performance
-            if (["id", "model", "object", "created", "finish_reason", "finishReason", "role", "type", "index", "stop_reason"].includes(key)) {
+            if (
+              [
+                "id",
+                "model",
+                "object",
+                "created",
+                "finish_reason",
+                "finishReason",
+                "role",
+                "type",
+                "index",
+                "stop_reason",
+              ].includes(key)
+            ) {
               continue;
             }
             obj[key] = deepSanitize(obj[key], depth + 1);
@@ -332,7 +369,7 @@ export function sanitizePIIResponse(response: any): any {
     // Fail secure — try raw string sanitization instead of failing open
     try {
       const serialized = JSON.stringify(response);
-      const { text: sanitized } = sanitizePII(serialized);
+      const { text: sanitized } = sanitizePII(serialized, false, forceEnabled);
       return JSON.parse(sanitized);
     } catch (fallbackErr) {
       // Suppress err.message — never surface upstream error detail to the client

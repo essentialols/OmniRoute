@@ -35,6 +35,7 @@ import {
   ANTIGRAVITY_PRE_RESPONSE_TIMEOUT_CODE,
 } from "@omniroute/open-sse/config/constants.ts";
 import { getTargetFormat } from "@omniroute/open-sse/services/provider.ts";
+import { parseModel } from "@omniroute/open-sse/services/model.ts";
 import {
   getModelTargetFormat,
   PROVIDER_ID_TO_ALIAS,
@@ -300,11 +301,7 @@ export async function handleChat(
       }
     }
     if (b.max_tokens !== undefined) {
-      if (
-        typeof b.max_tokens !== "number" ||
-        !Number.isInteger(b.max_tokens) ||
-        b.max_tokens < 1
-      ) {
+      if (typeof b.max_tokens !== "number" || !Number.isInteger(b.max_tokens) || b.max_tokens < 1) {
         return badParam("max_tokens", "must be a positive integer");
       }
     }
@@ -424,6 +421,10 @@ export async function handleChat(
     log,
     method: request.method,
     model: modelStr,
+    // Destination provider (when the model string carries a concrete provider
+    // prefix) so PII masking can apply the per-provider trust tier. Combos /
+    // bare aliases resolve to null here and are masked per-target downstream.
+    provider: parseModel(modelStr).provider,
     stream: body?.stream === true,
   });
   if (preCallGuardrails.blocked) {
