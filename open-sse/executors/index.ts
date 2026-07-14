@@ -8,6 +8,7 @@ import { TraeExecutor } from "./trae.ts";
 import { DefaultExecutor } from "./default.ts";
 import { BedrockExecutor } from "./bedrock.ts";
 import { GlmExecutor } from "./glm.ts";
+import { GlmWebExecutor } from "./glm-web.ts";
 import { PollinationsExecutor } from "./pollinations.ts";
 import { CloudflareAIExecutor } from "./cloudflare-ai.ts";
 import { OpencodeExecutor } from "./opencode.ts";
@@ -74,6 +75,7 @@ const executors = {
   glm: new GlmExecutor("glm"),
   "glm-cn": new GlmExecutor("glm-cn"),
   glmt: new GlmExecutor("glmt"),
+  "glm-web": new GlmWebExecutor(),
   cu: new CursorExecutor(), // Alias for cursor
   "azure-openai": new AzureOpenAIExecutor(),
   "command-code": new CommandCodeExecutor(),
@@ -191,6 +193,7 @@ export { TraeExecutor } from "./trae.ts";
 export { DefaultExecutor } from "./default.ts";
 export { BedrockExecutor } from "./bedrock.ts";
 export { GlmExecutor } from "./glm.ts";
+export { GlmWebExecutor } from "./glm-web.ts";
 export { PollinationsExecutor } from "./pollinations.ts";
 export { CloudflareAIExecutor } from "./cloudflare-ai.ts";
 export { OpencodeExecutor } from "./opencode.ts";
