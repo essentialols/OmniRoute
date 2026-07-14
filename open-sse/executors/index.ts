@@ -59,6 +59,7 @@ import { GrokCliExecutor } from "./grok-cli.ts";
 import { CodeBuddyCnExecutor } from "./codebuddy-cn.ts";
 import { ZenmuxFreeExecutor } from "./zenmux-free.ts";
 import { XaiExecutor } from "./xai.ts";
+import { BraveLeoExecutor } from "./brave-leo.ts";
 
 const executors = {
   antigravity: new AntigravityExecutor(),
@@ -165,6 +166,7 @@ const executors = {
   zmf: new ZenmuxFreeExecutor(), // Alias for zenmux-free
   auggie: new AuggieExecutor(),
   xai: new XaiExecutor(),
+  brave: new BraveLeoExecutor(),
 };
 
 const defaultCache = new Map();
@@ -233,3 +235,4 @@ export { GrokCliExecutor } from "./grok-cli.ts";
 export { CodeBuddyCnExecutor } from "./codebuddy-cn.ts";
 export { ZenmuxFreeExecutor } from "./zenmux-free.ts";
 export { XaiExecutor } from "./xai.ts";
+export { BraveLeoExecutor } from "./brave-leo.ts";
