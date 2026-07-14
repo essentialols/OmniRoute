@@ -16,7 +16,10 @@ import {
 } from "../../services/payloadRules.ts";
 import { getEffectiveToolLimit, getKnownToolLimit } from "../../services/toolLimitDetector.ts";
 import { providerSupportsCaching } from "../../utils/cacheControlPolicy.ts";
-import { stripUnsupportedToolFields } from "../../config/providerFieldStrips.ts";
+import {
+  stripUnsupportedToolFields,
+  stripHeavyCodexToolsForBudget,
+} from "../../config/providerFieldStrips.ts";
 import { normalizeOpenAICompatMessages } from "./openaiCompatMessages.ts";
 import { FORMATS } from "../../translator/formats.ts";
 
@@ -159,6 +162,10 @@ function normalizeOpenAICompatUpstreamBody(
   if (targetFormat !== FORMATS.OPENAI) return bodyToSend;
   let next = normalizeOpenAICompatMessages(bodyToSend) as Body;
   next = stripUnsupportedToolFields(next, provider);
+  // Drop codex's heavy sub-agent orchestration tool group for providers whose per-request
+  // token budget cannot fit the full codex tool catalog (e.g. Groq free tier's 12k TPM cap,
+  // which 413s a ~12.9k-token codex request before streaming).
+  next = stripHeavyCodexToolsForBudget(next, provider);
   return next;
 }
 
