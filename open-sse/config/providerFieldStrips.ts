@@ -85,6 +85,44 @@ export function stripUnsupportedToolFields<T extends Record<string, unknown>>(
   return body;
 }
 
+/**
+ * Reactive counterpart to the proactive strips above: detect an upstream 4xx that means
+ * "this model cannot do tool calling (or rejects the multipart content tools imply)".
+ * Model-precise and provider-agnostic, so it catches per-model gaps a provider-wide list
+ * cannot (e.g. llm7 serves both tool-capable models AND gemma3:27b, which returns
+ * "Model 'gemma3:27b' does not support tools." / "does not support vision input.").
+ * Also covers the litellm/vLLM auto-tool-choice message. Matched case-insensitively.
+ */
+const TOOL_UNSUPPORTED_PATTERNS: readonly RegExp[] = [
+  /does not support tools/i,
+  /does not support (?:vision|image) input/i,
+  /tool(?:s| calling| use)? (?:is |are )?not supported/i,
+  /tool choice requires --enable-auto-tool-choice/i,
+  /enable-auto-tool-choice/i,
+];
+
+/** True when an upstream error body indicates the model cannot accept tools/tool_choice. */
+export function isToolUnsupportedError(bodyText: string): boolean {
+  if (typeof bodyText !== "string" || !bodyText) return false;
+  return TOOL_UNSUPPORTED_PATTERNS.some((re) => re.test(bodyText));
+}
+
+/**
+ * Drop the entire tool-calling trio from a body in place. Returns true when any field was
+ * present (i.e. a retry is worthwhile). Used by the reactive base.ts downgrade.
+ */
+export function stripAllToolFields(body: Record<string, unknown>): boolean {
+  if (!body || typeof body !== "object") return false;
+  const had =
+    body.tools !== undefined ||
+    body.tool_choice !== undefined ||
+    body.parallel_tool_calls !== undefined;
+  delete body.tools;
+  delete body.tool_choice;
+  delete body.parallel_tool_calls;
+  return had;
+}
+
 /** Immutably drop request fields Groq rejects with a 400. */
 export function stripGroqUnsupportedFields<T extends Record<string, unknown>>(body: T): T {
   if (!body || typeof body !== "object") return body;

@@ -4,7 +4,12 @@ import {
   normalizeAnthropicHeaderVariants,
 } from "../config/anthropicHeaders.ts";
 import { applyContextEditingToBody } from "../config/contextEditing.ts";
-import { findOffendingField, stripGroqUnsupportedFields } from "../config/providerFieldStrips.ts";
+import {
+  findOffendingField,
+  stripGroqUnsupportedFields,
+  isToolUnsupportedError,
+  stripAllToolFields,
+} from "../config/providerFieldStrips.ts";
 import { applyFingerprint, isCliCompatEnabled } from "../config/cliFingerprints.ts";
 import { supportsClaudeMaxEffort, supportsXHighEffort } from "../config/providerModels.ts";
 import { getThinkingBudgetConfig, ThinkingMode } from "../services/thinkingBudget.ts";
@@ -678,6 +683,9 @@ export class BaseExecutor {
     // field-downgrade below, so each known field is stripped at most once across
     // all fallback URLs (bounded retry loop).
     const strippedFields = new Set<string>();
+    // Guards the reactive "model does not support tools" downgrade so the whole
+    // tool trio is stripped at most once across fallback URLs.
+    let toolFieldsStripped = false;
 
     for (let urlIndex = 0; urlIndex < fallbackCount; urlIndex++) {
       const requestCredentials = withForcedResponsesUpstream(
@@ -1355,7 +1363,42 @@ export class BaseExecutor {
             }
             log?.debug?.(
               "FIELD_400",
-              `Upstream 400 rejected ${offending} on ${url} — retrying without it`
+              `Upstream 400 rejected ${offending} on ${url} - retrying without it`
+            );
+            response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
+          }
+        }
+
+        // Reactive tool-support downgrade: some models cannot do tool calling (e.g.
+        // llm7's gemma3:27b "does not support tools", publicai/apertus without
+        // --enable-auto-tool-choice). They reject the whole request 4xx before any
+        // content, which a streaming Responses client (Codex) sees as "stream closed
+        // before response.completed". Strip the tool trio once and retry so the request
+        // completes as a plain chat. Model-precise: only fires when the upstream itself
+        // reports the model lacks tool support. Covers 400 and 422 (cohere/litellm style).
+        if (
+          !toolFieldsStripped &&
+          (response.status === HTTP_STATUS.BAD_REQUEST ||
+            response.status === HTTP_STATUS.UNPROCESSABLE_ENTITY) &&
+          transformedBody &&
+          typeof transformedBody === "object"
+        ) {
+          const errText = await response
+            .clone()
+            .text()
+            .catch(() => "");
+          if (
+            isToolUnsupportedError(errText) &&
+            stripAllToolFields(transformedBody as Record<string, unknown>)
+          ) {
+            toolFieldsStripped = true;
+            let retryBody = JSON.stringify(transformedBody);
+            if (isClaudeCodeCompatible(this.provider) || this.provider === "claude") {
+              retryBody = await signRequestBody(retryBody);
+            }
+            log?.debug?.(
+              "TOOLS_UNSUPPORTED",
+              `Upstream ${response.status} reports model lacks tool support on ${url} - retrying without tools`
             );
             response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
           }

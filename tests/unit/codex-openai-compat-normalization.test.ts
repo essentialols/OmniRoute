@@ -18,6 +18,8 @@ import {
 } from "../../open-sse/handlers/chatCore/openaiCompatMessages.ts";
 import {
   stripUnsupportedToolFields,
+  isToolUnsupportedError,
+  stripAllToolFields,
   PROVIDERS_WITHOUT_PARALLEL_TOOL_CALLS,
   PROVIDERS_WITHOUT_TOOL_CALLING,
 } from "../../open-sse/config/providerFieldStrips.ts";
@@ -159,4 +161,35 @@ test("stripUnsupportedToolFields: unaffected provider keeps all tool fields (no 
   const out = stripUnsupportedToolFields(body, "mistral");
   assert.equal(out, body); // referential no-op
   assert.equal(out.parallel_tool_calls, true);
+});
+
+test("isToolUnsupportedError matches model-lacks-tools / vision / auto-tool-choice errors", () => {
+  assert.ok(isToolUnsupportedError("Model 'gemma3:27b' does not support tools."));
+  assert.ok(isToolUnsupportedError("Model 'gemma3:27b' does not support vision input."));
+  assert.ok(
+    isToolUnsupportedError(
+      '"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set'
+    )
+  );
+  // Not a tool-support error -> no false positive (cohere parallel is handled proactively).
+  assert.equal(isToolUnsupportedError("parallel_tool_calls is not supported"), false);
+  assert.equal(isToolUnsupportedError("some other 400"), false);
+  assert.equal(isToolUnsupportedError(""), false);
+});
+
+test("stripAllToolFields removes the trio in place and reports whether anything was present", () => {
+  const body: Record<string, unknown> = {
+    model: "m",
+    tools: [{ type: "function" }],
+    tool_choice: "auto",
+    parallel_tool_calls: true,
+    messages: [],
+  };
+  assert.equal(stripAllToolFields(body), true);
+  assert.equal(body.tools, undefined);
+  assert.equal(body.tool_choice, undefined);
+  assert.equal(body.parallel_tool_calls, undefined);
+  assert.deepEqual(body.messages, []); // untouched
+  // No tool fields -> no-op, returns false (do not retry).
+  assert.equal(stripAllToolFields({ model: "m" }), false);
 });
