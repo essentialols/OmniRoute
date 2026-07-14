@@ -602,11 +602,6 @@
       "count": 11
     }
   },
-  "tests/unit/auth-terminal-status.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 15
-    }
-  },
   "tests/unit/autocombo-unification.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
