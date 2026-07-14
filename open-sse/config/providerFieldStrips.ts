@@ -86,6 +86,66 @@ export function stripUnsupportedToolFields<T extends Record<string, unknown>>(
 }
 
 /**
+ * Codex CLI's sub-agent orchestration tool group. Codex injects it on every request as a
+ * Responses-API `namespace` tool (`multi_agent_v1`); the responses→chat translator flattens
+ * it into these five individual Chat functions (`spawn_agent` alone carries a multi-paragraph
+ * delegation guide). Their combined schema is ~2.9k tokens — ~23% of a minimal codex request.
+ * They are codex-internal orchestration primitives that a plain Chat Completions provider
+ * cannot act on, so dropping them for budget-constrained providers is lossless in practice.
+ */
+const CODEX_SUBAGENT_ORCHESTRATION_TOOLS: ReadonlySet<string> = new Set([
+  "spawn_agent",
+  "wait_agent",
+  "close_agent",
+  "resume_agent",
+  "send_input",
+]);
+
+/**
+ * OpenAI-format providers whose per-request token budget is too small to fit codex's full
+ * injected tool catalog. Groq's free tier caps each request at 12,000 tokens-per-minute; a
+ * bare `codex exec` request measures ~12,957 tokens (system instructions ~5.3k + the tool
+ * schemas ~5.5k, of which the sub-agent group is ~2.9k), so groq 413s the whole request
+ * ("Request too large ... Limit 12000, Requested 12957") before streaming — surfacing to the
+ * Codex/Responses client as "stream closed before response.completed" (5x reconnect). Prompt
+ * compression cannot help: it operates on messages/tool-outputs, not tool *definitions* or the
+ * (cache-preserved) system prompt, so it saves ~0 tokens here. Dropping the sub-agent
+ * orchestration group brings the request to ~10k tokens, under the cap.
+ */
+export const PROVIDERS_WITH_LOW_TOOL_TOKEN_BUDGET: ReadonlySet<string> = new Set(["groq"]);
+
+/** Extract a tool's function name from either Chat (`function.name`) or Responses (`name`) shape. */
+function toolFunctionName(tool: unknown): string {
+  if (!tool || typeof tool !== "object") return "";
+  const record = tool as Record<string, unknown>;
+  const fn = record.function as Record<string, unknown> | undefined;
+  const name = fn && typeof fn === "object" ? fn.name : record.name;
+  return typeof name === "string" ? name : "";
+}
+
+/**
+ * Drop codex's heavy sub-agent orchestration tools for providers whose per-request token
+ * budget cannot fit the full codex tool catalog. Returns a new object only when something was
+ * stripped; otherwise returns `body` unchanged (referential no-op for the common case). Never
+ * touches `tool_choice`/`parallel_tool_calls` and leaves every other tool intact, so the model
+ * keeps `exec_command`, file, and MCP tools.
+ */
+export function stripHeavyCodexToolsForBudget<T extends Record<string, unknown>>(
+  body: T,
+  provider: string | null | undefined
+): T {
+  if (!body || typeof body !== "object" || !Array.isArray(body.tools)) return body;
+  const id = (provider ?? "").trim().toLowerCase();
+  if (!PROVIDERS_WITH_LOW_TOOL_TOKEN_BUDGET.has(id)) return body;
+
+  const filtered = body.tools.filter(
+    (tool) => !CODEX_SUBAGENT_ORCHESTRATION_TOOLS.has(toolFunctionName(tool))
+  );
+  if (filtered.length === body.tools.length) return body;
+  return { ...body, tools: filtered };
+}
+
+/**
  * Reactive counterpart to the proactive strips above: detect an upstream 4xx that means
  * "this model cannot do tool calling (or rejects the multipart content tools imply)".
  * Model-precise and provider-agnostic, so it catches per-model gaps a provider-wide list
