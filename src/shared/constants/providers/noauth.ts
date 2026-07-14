@@ -120,4 +120,22 @@ export const NOAUTH_PROVIDERS = {
       text: "Augment (Auggie CLI) requires the `auggie` binary installed and authenticated locally (`auggie login`). OmniRoute spawns it as a subprocess and never sees or stores your Augment credentials.",
     },
   },
+  brave: {
+    id: "brave",
+    name: "Brave Leo",
+    icon: "auto_awesome",
+    color: "#FB542B",
+    textIcon: "🦁",
+    website: "https://brave.com/leo/",
+    noAuth: true,
+    hasFree: true,
+    serviceKinds: ["llm"],
+    freeNote:
+      "Free, anonymous access to Brave Leo (Claude 3 Haiku, GLM, Qwen, Llama, GPT-OSS) via the Brave Services Gateway. No Brave account or API key required.",
+    authHint:
+      "No credentials required. The executor HMAC-signs each request with public keys extracted from the Brave desktop binary. Rate-limited (~5s between requests).",
+    notice: {
+      text: "Brave Leo uses Brave's hosted AI endpoint (ai-chat.bsg.brave.com) with anonymous per-request signing. No signup needed. If Brave rotates its signing keys, override via BRAVE_SERVICES_KEY / BRAVE_AICHAT_KEY / BRAVE_LEO_KEY_ID env vars.",
+    },
+  },
 };

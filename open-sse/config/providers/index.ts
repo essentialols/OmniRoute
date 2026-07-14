@@ -101,6 +101,7 @@ import { haiperProvider } from "./registry/haiper/index.ts";
 import { bytezProvider } from "./registry/bytez/index.ts";
 import { blackboxProvider } from "./registry/blackbox/index.ts";
 import { blackbox_webProvider } from "./registry/blackbox/web/index.ts";
+import { braveProvider } from "./registry/brave/index.ts";
 import { uncloseaiProvider } from "./registry/uncloseai/index.ts";
 import { nscaleProvider } from "./registry/nscale/index.ts";
 import { chatgpt_webProvider } from "./registry/chatgpt-web/index.ts";
@@ -287,6 +288,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   bytez: bytezProvider,
   blackbox: blackboxProvider,
   "blackbox-web": blackbox_webProvider,
+  brave: braveProvider,
   uncloseai: uncloseaiProvider,
   nscale: nscaleProvider,
   "chatgpt-web": chatgpt_webProvider,
