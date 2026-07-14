@@ -2,7 +2,12 @@ import crypto from "node:crypto";
 import { headers } from "next/headers";
 
 import { getLegacyCliTokenSync, getMachineTokenSync } from "@/lib/machineToken";
-import { AUTHZ_HEADER_PEER_LOCALITY } from "@/server/authz/headers";
+import {
+  AUTHZ_HEADER_PEER_LOCALITY,
+  PEER_IP_HEADER,
+  VIA_PROXY_HEADER,
+} from "@/server/authz/headers";
+import { classifyStampedPeerLocality } from "@/server/authz/peerStamp";
 
 const HEADER_NAME = "x-omniroute-cli-token";
 
@@ -62,6 +67,25 @@ async function isLocalCliRequest(request: RequestWithPeer): Promise<boolean> {
   //    remote caller with a stolen CLI token could send Host: 127.0.0.1 to pass.
   const locality = await readHeader(request, AUTHZ_HEADER_PEER_LOCALITY);
   if (locality !== null) return locality === "loopback";
+
+  // 3b. Management routes (e.g. /api/providers) authenticate via requireManagementAuth
+  //     without running the full authz pipeline, so AUTHZ_HEADER_PEER_LOCALITY is
+  //     never stamped for them. The custom Node server (peer-stamp) still stamps the
+  //     token-protected PEER_IP_HEADER / VIA_PROXY_HEADER on every request, so resolve
+  //     locality from those directly — the same trusted signal management.ts uses.
+  //     The token gate makes these unforgeable by a remote caller (they don't know
+  //     this process's OMNIROUTE_PEER_STAMP_TOKEN), and the via-proxy marker still
+  //     downgrades a reverse-proxy hop to "remote".
+  const peerIpHeader = await readHeader(request, PEER_IP_HEADER);
+  if (peerIpHeader) {
+    const viaProxyHeader = await readHeader(request, VIA_PROXY_HEADER);
+    const stampedLocality = classifyStampedPeerLocality(
+      peerIpHeader,
+      viaProxyHeader,
+      process.env.OMNIROUTE_PEER_STAMP_TOKEN
+    );
+    return stampedLocality === "loopback";
+  }
 
   // 4. No trusted locality signal → fail closed.
   return false;
