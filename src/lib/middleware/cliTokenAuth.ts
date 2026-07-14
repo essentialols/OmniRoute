@@ -54,28 +54,25 @@ async function isLocalCliRequest(request: RequestWithPeer): Promise<boolean> {
   const peerAddress = requestPeerAddress(request);
   if (peerAddress) return isLoopback(peerAddress);
 
-  // 2. A forwarded request came through a proxy → it is not a local CLI call.
+  // 2. A forwarded request came through a proxy, so it is not a local CLI call.
   const forwardedPeer =
     firstHeaderIp(await readHeader(request, "cf-connecting-ip")) ||
     firstHeaderIp(await readHeader(request, "x-forwarded-for")) ||
     firstHeaderIp(await readHeader(request, "x-real-ip"));
   if (forwardedPeer) return false;
 
-  // 3. Behind the authz pipeline, trust ONLY the locality verdict the middleware
-  //    stamped from the real TCP peer IP. NEVER derive locality from the Host
-  //    header (new URL(request.url).hostname) — it is client-controlled, so a
-  //    remote caller with a stolen CLI token could send Host: 127.0.0.1 to pass.
-  const locality = await readHeader(request, AUTHZ_HEADER_PEER_LOCALITY);
-  if (locality !== null) return locality === "loopback";
-
-  // 3b. Management routes (e.g. /api/providers) authenticate via requireManagementAuth
-  //     without running the full authz pipeline, so AUTHZ_HEADER_PEER_LOCALITY is
-  //     never stamped for them. The custom Node server (peer-stamp) still stamps the
-  //     token-protected PEER_IP_HEADER / VIA_PROXY_HEADER on every request, so resolve
-  //     locality from those directly — the same trusted signal management.ts uses.
-  //     The token gate makes these unforgeable by a remote caller (they don't know
-  //     this process's OMNIROUTE_PEER_STAMP_TOKEN), and the via-proxy marker still
-  //     downgrades a reverse-proxy hop to "remote".
+  // 3. Preferred signal: resolve locality directly from the token-protected
+  //    PEER_IP_HEADER / VIA_PROXY_HEADER that the custom Node server (peer-stamp)
+  //    stamps from the real TCP peer. This is evaluated FIRST because the authz
+  //    pipeline's own AUTHZ_HEADER_PEER_LOCALITY verdict is unreliable here: the
+  //    Next proxy/middleware runtime does not share this process's runtime
+  //    OMNIROUTE_PEER_STAMP_TOKEN, so it stamps a false "remote" even for a
+  //    genuine loopback call. The route handler runs in the same process as the
+  //    peer-stamp server, so it DOES have the token and can validate the stamp.
+  //    The token gate makes the header unforgeable by a remote caller (they do
+  //    not know the per-process token; the server-stamped value replaces any
+  //    client one), and the via-proxy marker still downgrades a reverse-proxy hop
+  //    to "remote". NEVER derive locality from the client-controlled Host header.
   const peerIpHeader = await readHeader(request, PEER_IP_HEADER);
   if (peerIpHeader) {
     const viaProxyHeader = await readHeader(request, VIA_PROXY_HEADER);
@@ -84,10 +81,17 @@ async function isLocalCliRequest(request: RequestWithPeer): Promise<boolean> {
       viaProxyHeader,
       process.env.OMNIROUTE_PEER_STAMP_TOKEN
     );
-    return stampedLocality === "loopback";
+    if (stampedLocality === "loopback") return true;
+    // A stamped non-loopback peer is authoritative, so it is not a local CLI call.
+    if (stampedLocality === "remote" || stampedLocality === "lan") return false;
   }
 
-  // 4. No trusted locality signal → fail closed.
+  // 4. Fallback: the pipeline-stamped locality verdict (when the raw peer stamp is
+  //    absent but the pipeline ran with a shared token).
+  const locality = await readHeader(request, AUTHZ_HEADER_PEER_LOCALITY);
+  if (locality !== null) return locality === "loopback";
+
+  // 5. No trusted locality signal, so fail closed.
   return false;
 }
 
