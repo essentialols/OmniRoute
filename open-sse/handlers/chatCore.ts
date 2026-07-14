@@ -4513,6 +4513,7 @@ export async function handleChatCore({
     clientResponseFormat,
     echoModel,
     responseHeaders,
+    provider,
   });
 
   // ── Gamification event (fire-and-forget) ──
