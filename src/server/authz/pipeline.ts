@@ -271,11 +271,15 @@ export async function runAuthzPipeline(
   for (const trusted of AUTHZ_TRUSTED_HEADERS) {
     requestHeaders.delete(trusted);
   }
-  // The trusted peer-IP + via-proxy stamps are read by the policy from the
-  // ORIGINAL request (above); strip them from the forwarded headers so the
-  // per-process token never reaches route handlers or upstream providers.
-  requestHeaders.delete(PEER_IP_HEADER);
-  requestHeaders.delete(VIA_PROXY_HEADER);
+  // The trusted peer-IP + via-proxy stamps are FORWARDED to route handlers (not
+  // stripped). Route-level auth (cliTokenAuth) re-validates them with this
+  // process's OMNIROUTE_PEER_STAMP_TOKEN because the pipeline's own
+  // AUTHZ_HEADER_PEER_LOCALITY verdict is unreliable when the Next proxy runtime
+  // does not share the runtime stamp token (it would stamp a false "remote" for a
+  // genuine loopback CLI call). The stamps are token-protected and unforgeable by
+  // a remote caller (the custom server deletes any client value and re-stamps
+  // from the real socket), and executors build upstream requests from scratch, so
+  // these headers never leak to a provider.
 
   requestHeaders.set(AUTHZ_HEADER_ROUTE_CLASS, classification.routeClass);
   requestHeaders.set(AUTHZ_HEADER_REQUEST_ID, requestId);
