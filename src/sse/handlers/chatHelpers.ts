@@ -13,6 +13,8 @@ import {
   PROVIDER_ID_TO_ALIAS,
 } from "@omniroute/open-sse/config/providerModels.ts";
 import { handleChatCore } from "@omniroute/open-sse/handlers/chatCore.ts";
+import { captureClientOut } from "@omniroute/open-sse/services/durableCapture.ts";
+import { OMNIROUTE_RESPONSE_HEADERS } from "@/shared/constants/headers";
 import {
   errorResponse,
   modelCooldownResponse,
@@ -839,6 +841,25 @@ export function withSessionHeader(response: Response, sessionId: string | null):
 
 export function withCorrelationId(response: Response, correlationId: string | null): Response {
   if (!response || !correlationId) return response;
+
+  // Traffic-capture leg (4) client_out: the FINAL response OmniRoute returns to
+  // the client. This is the single unified client egress for BOTH /v1/chat/
+  // completions and /v1/responses (the latter delegates to handleChat), so the
+  // body here is already fully post-processed (decompressed, translated back,
+  // SSE-reframed incl. the Responses-API format). Correlated by the same
+  // correlationId as the upstream legs. Fire-and-forget + gated: a strict no-op
+  // when capture is off (default); tees with clone() so the client stream is
+  // never blocked or reordered.
+  try {
+    captureClientOut({
+      correlationId,
+      provider: response.headers.get(OMNIROUTE_RESPONSE_HEADERS.provider) || "client",
+      model: response.headers.get(OMNIROUTE_RESPONSE_HEADERS.model) || "",
+      response,
+    });
+  } catch {
+    // best-effort: capture must never break the client response path
+  }
 
   try {
     response.headers.set("X-Correlation-Id", correlationId);

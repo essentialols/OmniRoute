@@ -97,7 +97,7 @@ import {
 } from "../services/tokenRefresh.ts";
 import { createRequestLogger } from "../utils/requestLogger.ts";
 import { createPreparedRequestLogger, runWithCapture } from "../utils/providerRequestLogging.ts";
-import { runWithCaptureContext } from "../services/durableCapture.ts";
+import { runWithCaptureContext, captureClientIn } from "../services/durableCapture.ts";
 import { summarizeToolSources } from "../utils/toolSources.ts";
 import { applyResponsesPreviousResponseIdPolicy } from "../utils/responsesStatePolicy.ts";
 import { applyClaudeEffortVariant } from "./chatCore/claudeEffortVariant.ts";
@@ -968,6 +968,21 @@ export async function handleChatCore({
       clientRawRequest.body,
       clientRawRequest.headers
     );
+    // Traffic-capture leg (1) client_in: the raw client request as received,
+    // BEFORE any translate/compress step below (sanitizeChatRequestBody /
+    // translateRequest run later). Correlated by the SAME correlationId as the
+    // upstream legs (2)(3), so a consumer sees all legs of one request. Combo /
+    // fusion fan-out re-enters handleChatCore per target, so client_in repeats
+    // per target under the shared correlationId (same raw body each time).
+    // Fire-and-forget + gated: a strict no-op when capture is off (default).
+    captureClientIn({
+      correlationId,
+      provider,
+      model,
+      endpoint: clientRawRequest.endpoint || "/v1/chat/completions",
+      clientHeaders: clientRawRequest.headers ?? null,
+      clientBody: clientRawRequest.body ?? body,
+    });
   }
 
   log?.debug?.("FORMAT", `${sourceFormat} → ${targetFormat} | stream=${stream}`);

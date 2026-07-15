@@ -76,6 +76,44 @@ export interface CaptureContext {
   clientHeaders?: Record<string, string> | null;
 }
 
+/**
+ * Input for capturing leg (1) `client_in`: the raw client request exactly as
+ * received, BEFORE OmniRoute translates/compresses it. Emitted from the request
+ * ingress in `chatCore.ts` (and the `/v1/responses` adapter) under the SAME
+ * `correlationId` used for the upstream legs, so all legs of one client request
+ * correlate.
+ */
+export interface CaptureClientInInput {
+  correlationId: string | null;
+  provider: string;
+  model: string;
+  /** Client endpoint the request arrived on (e.g. `/v1/chat/completions`). */
+  endpoint: string;
+  /** Raw client headers (Headers instance or plain record). Scrubbed on write. */
+  clientHeaders: Headers | Record<string, string | string[] | undefined> | null | undefined;
+  /** Raw client body (object or already-serialized string), pre-translation. */
+  clientBody: unknown;
+  /** Optional attempt index; client_in is normally attempt-independent (0). */
+  attempt?: number;
+}
+
+/**
+ * Input for capturing leg (4) `client_out`: the FINAL response OmniRoute returns
+ * to the client, AFTER post-processing (decompression, translation back, SSE
+ * reframing incl. the Responses-API `TransformStream`). The response is teed
+ * with `clone()` the same backpressure-safe way (3) is, and left fully intact.
+ */
+export interface CaptureClientOutInput {
+  correlationId: string | null;
+  provider: string;
+  model: string;
+  /** Client endpoint (optional, used only for binary-media detection). */
+  endpoint?: string | null;
+  /** The final client-facing Response. Left fully intact for the caller. */
+  response: Response;
+  attempt?: number;
+}
+
 export interface CaptureFromFetchInput {
   /** Final upstream URL actually requested. */
   url: string;
@@ -179,6 +217,34 @@ function headersToRecord(headers: Headers): Record<string, string> {
     record[key] = value;
   });
   return record;
+}
+
+/**
+ * Normalize an incoming client header carrier to a plain record. Client
+ * requests reach OmniRoute either as a `Headers` instance (fetch/Web) or as a
+ * plain object (Node/worker), and `chatCore` already treats both shapes; the
+ * capture layer must too.
+ */
+function toHeaderRecord(
+  headers: Headers | Record<string, string | string[] | undefined> | null | undefined
+): Record<string, string | string[] | undefined> {
+  if (!headers) return {};
+  const maybeHeaders = headers as Headers;
+  if (typeof maybeHeaders.forEach === "function" && typeof maybeHeaders.get === "function") {
+    return headersToRecord(maybeHeaders);
+  }
+  return headers as Record<string, string | string[] | undefined>;
+}
+
+/** Serialize a client body (object or already-serialized string) for capture. */
+function serializeBody(body: unknown): string | null {
+  if (body == null) return null;
+  if (typeof body === "string") return body;
+  try {
+    return JSON.stringify(body);
+  } catch {
+    return null;
+  }
 }
 
 function capString(value: string, limit: number): string {
@@ -337,6 +403,111 @@ export function captureUpstreamFromFetch(input: CaptureFromFetchInput): void {
     // clone() tees the body internally, leaving input.response fully intact.
     const clone = input.response.clone();
     const limit = maxBodyBytes();
+
+    void (async () => {
+      try {
+        let body: string;
+        if (clone.body) {
+          body = await readCappedStream(clone.body, limit);
+        } else {
+          body = capString(await clone.text().catch(() => ""), limit);
+        }
+        entry.responseBody = scrubBody(body, limit);
+        await writeEntry(entry);
+      } catch {
+        // best-effort — never surface capture failures
+      }
+    })();
+  } catch {
+    // best-effort — never surface capture failures
+  }
+}
+
+/**
+ * Capture leg (1) `client_in`: the raw client request as received, BEFORE
+ * OmniRoute translates/compresses it. Unlike the fetch-layer legs (2)(3), this
+ * does NOT read the AsyncLocalStorage context — the caller passes `correlationId`
+ * (+ provider/model) explicitly, because ingress runs before the executor scope
+ * is entered. Fire-and-forget: never throws, never blocks or mutates the request
+ * path. No-op unless capture is enabled (default OFF; see `isCaptureEnabled`).
+ */
+export function captureClientIn(input: CaptureClientInInput): void {
+  if (!isCaptureEnabled()) return;
+  try {
+    const limit = maxBodyBytes();
+    const headers = toHeaderRecord(input.clientHeaders);
+    const isBinary = isBinaryMediaUrl(input.endpoint);
+    const bodyStr = serializeBody(input.clientBody);
+    const entry: CaptureEntry = {
+      timestamp: new Date().toISOString(),
+      correlationId: input.correlationId ?? null,
+      attempt: input.attempt ?? 0,
+      leg: "client_in",
+      provider: input.provider,
+      model: input.model,
+      agentBackend: headerLookup(
+        headers as Record<string, string> | null,
+        AGENT_BACKEND_HEADER
+      ),
+      agentModel: headerLookup(headers as Record<string, string> | null, AGENT_MODEL_HEADER),
+      url: input.endpoint,
+      requestHeaders: scrubHeadersForCapture(headers),
+      requestBody: isBinary ? BINARY_MEDIA_MARKER : scrubBody(bodyStr, limit),
+      responseStatus: null,
+      responseHeaders: null,
+      responseBody: null,
+      latencyMs: 0,
+      error: null,
+    };
+    void writeEntry(entry).catch(() => {});
+  } catch {
+    // best-effort — never surface capture failures
+  }
+}
+
+/**
+ * Capture leg (4) `client_out`: the FINAL response OmniRoute returns to the
+ * client, AFTER all post-processing. Tees the body via `response.clone()` +
+ * `readCappedStream` (the same backpressure-safe branch (3) uses), so the real
+ * client stream is never blocked, broken, or reordered. Fire-and-forget: never
+ * throws, never mutates `input.response`. No-op unless capture is enabled.
+ */
+export function captureClientOut(input: CaptureClientOutInput): void {
+  if (!isCaptureEnabled()) return;
+  try {
+    const { response } = input;
+    const limit = maxBodyBytes();
+    const entry: CaptureEntry = {
+      timestamp: new Date().toISOString(),
+      correlationId: input.correlationId ?? null,
+      attempt: input.attempt ?? 0,
+      leg: "client_out",
+      provider: input.provider,
+      model: input.model,
+      agentBackend: null,
+      agentModel: null,
+      url: input.endpoint ?? "",
+      requestHeaders: {},
+      requestBody: null,
+      responseStatus: response.status,
+      responseHeaders: scrubHeadersForCapture(headersToRecord(response.headers)),
+      responseBody: null,
+      latencyMs: 0,
+      error: null,
+    };
+
+    const contentType = response.headers.get("content-type");
+    if (
+      (input.endpoint && isBinaryMediaUrl(input.endpoint)) ||
+      isBinaryContentType(contentType)
+    ) {
+      entry.responseBody = BINARY_MEDIA_MARKER;
+      void writeEntry(entry).catch(() => {});
+      return;
+    }
+
+    // clone() tees the body internally, leaving input.response fully intact.
+    const clone = response.clone();
 
     void (async () => {
       try {

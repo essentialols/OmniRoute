@@ -497,19 +497,48 @@ Full OpenAPI schemas: `docs/openapi.yaml` → tag `Traffic Inspector`.
 The Traffic Inspector (above) only sees traffic that flows through the MITM
 proxy. Traffic that enters via the API pipeline (`/v1/chat/completions`,
 `/v1/messages`, …) never reaches that hook. **Durable raw traffic capture** is a
-separate, opt-in sink that records the **transformed upstream request** and the
-**raw upstream response** for that pipeline traffic as line-delimited JSONL.
+separate, opt-in sink that records **all four legs** of that pipeline traffic as
+line-delimited JSONL, giving a true before/after view of one request:
 
-**Seam:** it hooks the single universal fetch choke point
-(`globalThis.fetch` → `open-sse/utils/proxyFetch.ts`), wired through the existing
-`open-sse/utils/providerRequestLogging.ts` fetch wrapper and implemented in
-`open-sse/services/durableCapture.ts`. Because it captures at the fetch layer
-(not `BaseExecutor.execute()`), it also records the ~9 web executors that
-override `execute()` and bypass a `base.ts` hook.
+| Leg  | `leg` tag                                     | What it is                                                            |
+| ---- | --------------------------------------------- | -------------------------------------------------------------------- |
+| ①    | `client_in`                                   | the RAW client request as received, BEFORE OmniRoute translates it   |
+| ②③   | `primary` / `stream-recovery` / `refresh-retry` | the TRANSFORMED upstream request + RAW upstream response (one line)   |
+| ④    | `client_out`                                  | the FINAL response returned to the client, AFTER all post-processing  |
 
-**Correlation:** every line records `correlationId` + `attempt` + `leg`
-(`primary` / `stream-recovery` / `refresh-retry`) + provider + model, so one
-client request's combo / fusion / pipeline / retry+rotate fan-out is linkable.
+The upstream leg (②③) writes the transformed request (`requestBody`) and the raw
+response (`responseBody`) on a **single** fetch-layer line, tagged by execution
+phase, and repeats per `attempt` on combo / fusion / retry+rotate fan-out. The
+client legs (①④) write once per client request.
+
+**Seams:**
+
+- **②③ (upstream)** hook the single universal fetch choke point
+  (`globalThis.fetch` → `open-sse/utils/proxyFetch.ts`), wired through the
+  existing `open-sse/utils/providerRequestLogging.ts` fetch wrapper. Because they
+  capture at the fetch layer (not `BaseExecutor.execute()`), they also record the
+  ~9 web executors that override `execute()` and bypass a `base.ts` hook.
+- **① `client_in`** is emitted at request ingress in
+  `open-sse/handlers/chatCore.ts` (from `clientRawRequest.body`, before
+  `sanitizeChatRequestBody` / `translateRequest`), and (for the `/v1/responses`
+  adapter path) in `open-sse/handlers/responsesHandler.ts` from the raw
+  Responses-API body before conversion.
+- **④ `client_out`** is teed at the single unified client egress
+  `withCorrelationId()` (`src/sse/handlers/chatHelpers.ts`), which both
+  `/v1/chat/completions` and `/v1/responses` pass through, so the body is already
+  fully post-processed (decompressed, translated back, SSE-reframed). The
+  Responses-API `TransformStream` egress in `responsesHandler.ts` is teed too
+  (worker adapter path).
+
+All of it lives in `open-sse/services/durableCapture.ts`.
+
+**Correlation:** every line records `correlationId` + `attempt` + `leg` +
+provider + model. All legs of one client request share the same `correlationId`,
+so a consumer reading the JSONL sees the full before/after: a `client_in` line, a
+`client_out` line, and one or more upstream lines (tagged `primary` /
+`stream-recovery` / `refresh-retry`, each carrying the transformed request +
+raw response) that repeat per `attempt` on combo / fusion / pipeline /
+retry+rotate fan-out.
 
 **Output:** `<DATA_DIR|~/.omniroute>/captures/<provider>/<YYYY-MM-DD>.jsonl`
 (daily file rotation; retention is left to the operator, e.g. a
@@ -527,13 +556,20 @@ client request's combo / fusion / pipeline / retry+rotate fan-out is linkable.
 - Binary media endpoints (audio / image / video / speech) and binary
   content-types are captured as metadata only (body omitted).
 - Capture is fire-and-forget and never blocks, throws into, or mutates the
-  live request/response.
+  live request/response. The `client_out` tee uses `response.clone()`, so the
+  real client stream is never blocked or reordered.
 
 **Known gaps (by design):**
 
 - Browser-backed executors `gemini-web` and `claude-web` drive a real browser
-  page and make no HTTP `fetch`, so no fetch-layer tap can see them.
+  page and make no HTTP `fetch`, so no fetch-layer tap can see them (affects ②③).
 - Cert-pinned / bypassing CLIs are out of scope (handled by a base-URL override).
-- The client-facing legs (raw pre-translation client request `①` and final
-  client response `④`, including the Responses-API `TransformStream`) are a
-  documented follow-up, not yet captured.
+- `client_in` / `client_out` cover the chat and Responses API paths (the two the
+  chat handler serves). Non-chat endpoints that do NOT flow through
+  `handleChatCore` / `withCorrelationId` (standalone embeddings, images, audio,
+  moderations, rerank routes) do not yet emit the client legs; their upstream
+  legs (②③) are still captured at the fetch seam. Extending ①④ to those shared
+  ingress/egress points is a documented follow-up.
+- Early client-side rejections (Zod validation, auth, prompt-injection guard)
+  that return before `handleChatCore` / `withCorrelationId` are not captured as
+  `client_out`.
