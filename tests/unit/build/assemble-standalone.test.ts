@@ -144,6 +144,69 @@ test("async and sync sidecar copy paths produce identical bundle trees", async (
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+// Recursion guard: a prior build:cli leaves a repo-root dist/ that `next build` can
+// trace into the standalone as <standalone>/dist (and, if that dist itself carried a
+// standalone, a re-nested <standalone>/.build/next/standalone). The cpSync at the copy
+// boundary MUST skip both so the assembled dist/ can never contain a nested dist/.
+// Otherwise every build regrows dist/dist/dist/... (GBs, dozens of levels). Regression
+// guard for the dist-recursion fix.
+test("assembleStandalone never copies a nested dist/ (or re-nested standalone) into outDir", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "assemble-norecurse-"));
+  const distDir = path.join(tmp, ".build/next");
+  const outDir = path.join(tmp, "dist");
+  const standalone = path.join(distDir, "standalone");
+
+  // Minimal legitimate standalone tree.
+  fs.mkdirSync(standalone, { recursive: true });
+  fs.writeFileSync(path.join(standalone, "server.js"), "// server");
+  // Legitimate runtime dir the standalone MUST keep.
+  fs.mkdirSync(path.join(standalone, ".build/next/server"), { recursive: true });
+  fs.writeFileSync(path.join(standalone, ".build/next/server/app.js"), "// chunk");
+  fs.writeFileSync(
+    path.join(standalone, ".build/next/required-server-files.json"),
+    JSON.stringify({ config: {} })
+  );
+
+  // Recursion seed #1: a top-level dist/ baked into the standalone by tracing.
+  fs.mkdirSync(path.join(standalone, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(standalone, "dist", "server.js"), "// nested dist server");
+  fs.mkdirSync(path.join(standalone, "dist", "dist"), { recursive: true });
+  // Recursion seed #2: a re-nested standalone under the runtime distDir.
+  fs.mkdirSync(path.join(standalone, ".build/next/standalone"), { recursive: true });
+  fs.writeFileSync(
+    path.join(standalone, ".build/next/standalone", "server.js"),
+    "// re-nested standalone"
+  );
+
+  assembleStandalone({
+    distDir,
+    outDir,
+    projectRoot: tmp,
+    sanitizePaths: false,
+    copyNatives: false,
+  });
+
+  assert.ok(fs.existsSync(path.join(outDir, "server.js")), "top-level server.js copied");
+  assert.ok(
+    !fs.existsSync(path.join(outDir, "dist")),
+    "outDir must NOT contain a nested dist/ (recursion seed #1 skipped)"
+  );
+  assert.ok(
+    !fs.existsSync(path.join(outDir, ".build/next/standalone")),
+    "outDir must NOT contain a re-nested standalone (recursion seed #2 skipped)"
+  );
+  // The legitimate runtime chunks + manifest are preserved.
+  assert.ok(
+    fs.existsSync(path.join(outDir, ".build/next/server/app.js")),
+    "runtime server chunk preserved"
+  );
+  assert.ok(
+    fs.existsSync(path.join(outDir, ".build/next/required-server-files.json")),
+    "required-server-files.json preserved"
+  );
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
 test("the TPROXY addon source is skipped gracefully when it was not built (non-Linux)", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "assemble-skip-"));
   const projectRoot = path.join(tmp, "src-root");
