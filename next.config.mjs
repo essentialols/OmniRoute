@@ -210,7 +210,6 @@ const nextConfig = {
       // standalone, which prepublish then copies back into dist/, compounding
       // into dist/dist/dist/... (~3GB, 35 levels deep) on every build.
       "./dist/**/*",
-      "./.build/**/*",
       "./_tasks/**/*",
       "./_references/**/*",
       "./_ideia/**/*",

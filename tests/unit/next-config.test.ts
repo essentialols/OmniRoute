@@ -106,9 +106,12 @@ test("next config declares Turbopack aliases, runtime assets and server external
     tracingExcludes.includes("./dist/**/*"),
     "dist/ must be excluded from output file tracing (prevents dist/dist recursion)"
   );
+  // .build IS the Next distDir (see distDir above). Excluding it from the NFT
+  // trace strips the standalone's own runtime deps, so every route 500s at
+  // request time. It must NOT be in the tracing excludes.
   assert.ok(
-    tracingExcludes.includes("./.build/**/*"),
-    "./.build/ must be excluded from output file tracing (prevents dist/dist recursion)"
+    !tracingExcludes.includes("./.build/**/*"),
+    "./.build/ (the Next distDir) must NOT be excluded from output file tracing — excluding it strips the standalone's runtime deps"
   );
 
   for (const packageName of [
