@@ -17,7 +17,7 @@ import { isFeatureFlagEnabled, resolveFeatureFlag } from "@/shared/utils/feature
 
 const isEnabled = () => isFeatureFlagEnabled("PII_RESPONSE_SANITIZATION");
 const VALID_MODES = ["redact", "warn", "block", "off"] as const;
-type PiiMode = typeof VALID_MODES[number];
+type PiiMode = (typeof VALID_MODES)[number];
 
 const getMode = (): PiiMode => {
   const value = resolveFeatureFlag("PII_RESPONSE_SANITIZATION_MODE");
@@ -52,19 +52,22 @@ const PII_PATTERNS: PIIPattern[] = [
   },
   {
     name: "credit_card",
-    regex: /(?<=^|[^A-Za-z0-9])(?:\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}|\d{4}[-\s]?\d{6}[-\s]?\d{4,5})(?=$|[^A-Za-z0-9])/g,
+    regex:
+      /(?<=^|[^A-Za-z0-9])(?:\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}|\d{4}[-\s]?\d{6}[-\s]?\d{4,5})(?=$|[^A-Za-z0-9])/g,
     replacement: "[CC_REDACTED]",
     severity: "high",
   },
   {
     name: "phone_us",
-    regex: /(?<=^|[^A-Za-z0-9])(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?=$|[^A-Za-z0-9])/g,
+    regex:
+      /(?<=^|[^A-Za-z0-9])(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?=$|[^A-Za-z0-9])/g,
     replacement: "[PHONE_REDACTED]",
     severity: "medium",
   },
   {
     name: "phone_br",
-    regex: /(?<=^|[^A-Za-z0-9])(?:\+?55[-.\s]?)?\(?\d{2}\)?[-.\s]?(?:9\d{4}|[2-5]\d{3})[-.\s]?\d{4}(?=$|[^A-Za-z0-9])/g,
+    regex:
+      /(?<=^|[^A-Za-z0-9])(?:\+?55[-.\s]?)?\(?\d{2}\)?[-.\s]?(?:9\d{4}|[2-5]\d{3})[-.\s]?\d{4}(?=$|[^A-Za-z0-9])/g,
     replacement: "[PHONE_REDACTED]",
     severity: "medium",
   },
@@ -88,7 +91,8 @@ const PII_PATTERNS: PIIPattern[] = [
   },
   {
     name: "ipv6_address",
-    regex: /(?<=^|[^A-Za-z0-9:])(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){7}|(?:[0-9a-fA-F]{1,4}:){1,7}:|::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}|::|[0-9a-fA-F]{1,4}::(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){2}:(?:[0-9a-fA-F]{1,4}:){0,4}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){3}:(?:[0-9a-fA-F]{1,4}:){0,3}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){4}:(?:[0-9a-fA-F]{1,4}:){0,2}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){5}:(?:[0-9a-fA-F]{1,4}:){0,1}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){6}:[0-9a-fA-F]{1,4})(?=$|[^A-Za-z0-9])(?!:[0-9a-fA-F:])/g,
+    regex:
+      /(?<=^|[^A-Za-z0-9:])(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){7}|(?:[0-9a-fA-F]{1,4}:){1,7}:|::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}|::|[0-9a-fA-F]{1,4}::(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){2}:(?:[0-9a-fA-F]{1,4}:){0,4}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){3}:(?:[0-9a-fA-F]{1,4}:){0,3}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){4}:(?:[0-9a-fA-F]{1,4}:){0,2}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){5}:(?:[0-9a-fA-F]{1,4}:){0,1}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){6}:[0-9a-fA-F]{1,4})(?=$|[^A-Za-z0-9])(?!:[0-9a-fA-F:])/g,
     replacement: "[IP_REDACTED]",
     severity: "low",
   },
@@ -142,8 +146,15 @@ export function sanitizePII(text: string, isStreaming = false): SanitizeResult {
     "\u2060", // Word Joiner
     "\u00AD", // Soft Hyphen
     // Bidirectional formatting controls
-    "\u202A", "\u202B", "\u202C", "\u202D", "\u202E",
-    "\u2066", "\u2067", "\u2068", "\u2069"
+    "\u202A",
+    "\u202B",
+    "\u202C",
+    "\u202D",
+    "\u202E",
+    "\u2066",
+    "\u2067",
+    "\u2068",
+    "\u2069",
   ]);
   const cleanToOrig: number[] = [];
   let cleanText = "";
@@ -275,6 +286,69 @@ export function sanitizePII(text: string, isStreaming = false): SanitizeResult {
 }
 
 /**
+ * Redact PII from a string UNCONDITIONALLY (ignores the runtime PII feature
+ * flag) and NEVER throws.
+ *
+ * This is the redaction entry point for the durable traffic-capture sink
+ * (`open-sse/services/durableCapture.ts`). Capture is a distinct concern from
+ * the proxy's request/response PII policy (Rule #20): even when the operator
+ * lets PII pass through to their self-hosted LLM untouched, a raw JSONL dump
+ * written to disk must not persist that PII verbatim. It reuses the exact same
+ * `PII_PATTERNS` (+ Luhn/CPF/CNPJ checksum validation) as {@link sanitizePII}
+ * so capture redaction stays consistent with the proxy's detectors, but always
+ * runs in redact mode and can never block/mutate live traffic.
+ */
+export function redactPIIForCapture(text: string): string {
+  if (!text || typeof text !== "string") return text;
+
+  interface Range {
+    start: number;
+    end: number;
+    replacement: string;
+  }
+  const ranges: Range[] = [];
+
+  for (const pattern of PII_PATTERNS) {
+    pattern.regex.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.regex.exec(text)) !== null) {
+      const start = match.index;
+      const end = start + match[0].length;
+
+      if (pattern.name === "credit_card" && !isValidLuhn(match[0].replace(/[-\s]/g, ""))) {
+        if (!pattern.regex.global) break;
+        continue;
+      }
+      if (pattern.name === "cpf" && !isValidCPF(match[0])) {
+        if (!pattern.regex.global) break;
+        continue;
+      }
+      if (pattern.name === "cnpj" && !isValidCNPJ(match[0])) {
+        if (!pattern.regex.global) break;
+        continue;
+      }
+
+      ranges.push({ start, end, replacement: pattern.replacement });
+      if (!pattern.regex.global) break;
+    }
+  }
+
+  if (ranges.length === 0) return text;
+
+  // Apply right-to-left so replacements never shift the offsets of pending
+  // ranges; skip any range that overlaps one already applied to its right.
+  ranges.sort((a, b) => b.start - a.start);
+  let out = text;
+  let lastStart = Number.POSITIVE_INFINITY;
+  for (const r of ranges) {
+    if (r.end > lastStart) continue;
+    out = out.slice(0, r.start) + r.replacement + out.slice(r.end);
+    lastStart = r.start;
+  }
+  return out;
+}
+
+/**
  * Sanitize a streaming chunk (text content only).
  */
 export function sanitizePIIChunk(chunk: string, isStopSignal = false): string {
@@ -314,7 +388,20 @@ export function sanitizePIIResponse(response: any): any {
         } else {
           for (const key of Object.keys(obj)) {
             // Skip known non-PII system metadata keys to optimize performance
-            if (["id", "model", "object", "created", "finish_reason", "finishReason", "role", "type", "index", "stop_reason"].includes(key)) {
+            if (
+              [
+                "id",
+                "model",
+                "object",
+                "created",
+                "finish_reason",
+                "finishReason",
+                "role",
+                "type",
+                "index",
+                "stop_reason",
+              ].includes(key)
+            ) {
               continue;
             }
             obj[key] = deepSanitize(obj[key], depth + 1);

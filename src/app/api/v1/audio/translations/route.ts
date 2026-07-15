@@ -21,6 +21,7 @@ import {
 } from "@/app/api/v1/_shared/rateLimit";
 import { attachOmniRouteMetaToResponse } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
+import { withNonChatCapture } from "@/app/api/v1/_shared/captureNonChat";
 
 /**
  * Handle CORS preflight
@@ -40,7 +41,7 @@ export async function OPTIONS() {
  * /v1/audio/transcriptions, output is always English regardless of the
  * source audio language.
  */
-export async function POST(request) {
+async function postHandler(request) {
   let formData;
   try {
     formData = await request.formData();
@@ -130,3 +131,8 @@ export async function POST(request) {
   }
   return response;
 }
+
+export const POST = withNonChatCapture(postHandler, {
+  endpoint: "/v1/audio/translations",
+  providerFallback: "audio",
+});
