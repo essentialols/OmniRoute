@@ -13,10 +13,18 @@ import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { createErrorResponse } from "@/lib/api/errorResponse";
 import { ALL_TARGETS } from "@/mitm/targets/index";
 
-type Params = { params: { id: string } };
+// Next.js 16: dynamic route `params` is a Promise and MUST be awaited. The
+// old synchronous `{ params: { id } }` destructured the Promise itself, so
+// `id` was `undefined` and rows were written to agent_bridge_state with an
+// EMPTY agent_id (breaking provisionDnsEntries host mapping). Awaiting also
+// stays compatible with tests that pass a plain object as params.
+type Params = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, { params }: Params): Promise<Response> {
-  const { id } = params;
+  const { id } = await params;
+  if (!id) {
+    return createErrorResponse({ status: 400, message: "Missing agent id" });
+  }
 
   let body: unknown;
   try {

@@ -1,20 +1,22 @@
 import path from "path";
 import fs from "fs";
 import { resolveMitmDataDir } from "../dataDir.ts";
-import { ANTIGRAVITY_TARGET } from "../targets/antigravity.ts";
 
-// #6494: the proxy terminates TLS locally for all 4 antigravity/cloudcode
-// hosts (see `TARGET_HOSTS` in server.cjs), but the generated cert previously
-// only carried a SAN entry for the first one — every other host served a cert
-// whose CN/SAN didn't match, breaking MITM interception. `ANTIGRAVITY_TARGET.hosts`
-// is the single authoritative host list (kept in lock-step with server.cjs /
-// dnsConfig.ts / mitmToolHosts.ts by their own drift tests) — reuse it here
-// instead of hard-coding a second copy.
-const TARGET_HOSTS: string[] = ANTIGRAVITY_TARGET.hosts;
-const TARGET_HOST = TARGET_HOSTS[0];
+// The MITM listener presents a per-host leaf minted at TLS-handshake time by
+// `server.cjs` (see `_internal/dynamicCert.cjs`). For those leaves to validate
+// on real clients, `server.key`/`server.crt` must be a ROOT CA (CA:TRUE), and
+// the operator trusts THAT CA, not a per-host leaf. A single static leaf (the
+// old behavior) only ever validated one host; every other SNI failed with a
+// hostname mismatch. The #6494 per-host SAN list was a partial workaround that
+// the per-SNI leaf minting now supersedes (server.cjs covers every host,
+// including ones added later, without regenerating the CA). install.ts already
+// trusts this file as "OmniRoute MITM Root CA".
+const CA_NAME = "OmniRoute MITM Root CA";
 
 /**
- * Generate self-signed SSL certificate using selfsigned (pure JS, no openssl needed)
+ * Generate the MITM ROOT CA using selfsigned (pure JS, no openssl needed).
+ * Writes the CA key/cert to `server.key`/`server.crt`; `server.cjs` loads them
+ * and mints per-SNI leaves signed by this CA on demand.
  */
 export async function generateCert(): Promise<{ key: string; cert: string }> {
   const certDir = path.join(resolveMitmDataDir(), "mitm");
@@ -32,24 +34,24 @@ export async function generateCert(): Promise<{ key: string; cert: string }> {
 
   // Dynamic import for optional dependency
   const { default: selfsigned } = await import("selfsigned");
-  const attrs = [{ name: "commonName", value: TARGET_HOST }];
+  const attrs = [{ name: "commonName", value: CA_NAME }];
   const notAfter = new Date();
-  notAfter.setFullYear(notAfter.getFullYear() + 1);
+  // Long-lived CA (10y): reinstalling/re-trusting the CA in the OS store is a
+  // manual (sudo) step, so it must not expire on the old 1-year cadence.
+  notAfter.setFullYear(notAfter.getFullYear() + 10);
   const pems = await selfsigned.generate(attrs, {
     keySize: 2048,
     algorithm: "sha256",
     notAfterDate: notAfter,
     extensions: [
-      {
-        name: "subjectAltName",
-        altNames: TARGET_HOSTS.map((value) => ({ type: 2, value })),
-      },
+      { name: "basicConstraints", cA: true, critical: true },
+      { name: "keyUsage", keyCertSign: true, cRLSign: true, critical: true },
     ],
   });
 
   fs.writeFileSync(keyPath, pems.private);
   fs.writeFileSync(certPath, pems.cert);
 
-  console.log(`✅ Generated SSL certificate for ${TARGET_HOSTS.join(", ")}`);
+  console.log(`✅ Generated MITM root CA (${CA_NAME})`);
   return { key: keyPath, cert: certPath };
 }
