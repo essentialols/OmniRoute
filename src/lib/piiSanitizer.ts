@@ -293,6 +293,69 @@ export function sanitizePII(
 }
 
 /**
+ * Redact PII from a string UNCONDITIONALLY (ignores the runtime PII feature
+ * flag) and NEVER throws.
+ *
+ * This is the redaction entry point for the durable traffic-capture sink
+ * (`open-sse/services/durableCapture.ts`). Capture is a distinct concern from
+ * the proxy's request/response PII policy (Rule #20): even when the operator
+ * lets PII pass through to their self-hosted LLM untouched, a raw JSONL dump
+ * written to disk must not persist that PII verbatim. It reuses the exact same
+ * `PII_PATTERNS` (+ Luhn/CPF/CNPJ checksum validation) as {@link sanitizePII}
+ * so capture redaction stays consistent with the proxy's detectors, but always
+ * runs in redact mode and can never block/mutate live traffic.
+ */
+export function redactPIIForCapture(text: string): string {
+  if (!text || typeof text !== "string") return text;
+
+  interface Range {
+    start: number;
+    end: number;
+    replacement: string;
+  }
+  const ranges: Range[] = [];
+
+  for (const pattern of PII_PATTERNS) {
+    pattern.regex.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.regex.exec(text)) !== null) {
+      const start = match.index;
+      const end = start + match[0].length;
+
+      if (pattern.name === "credit_card" && !isValidLuhn(match[0].replace(/[-\s]/g, ""))) {
+        if (!pattern.regex.global) break;
+        continue;
+      }
+      if (pattern.name === "cpf" && !isValidCPF(match[0])) {
+        if (!pattern.regex.global) break;
+        continue;
+      }
+      if (pattern.name === "cnpj" && !isValidCNPJ(match[0])) {
+        if (!pattern.regex.global) break;
+        continue;
+      }
+
+      ranges.push({ start, end, replacement: pattern.replacement });
+      if (!pattern.regex.global) break;
+    }
+  }
+
+  if (ranges.length === 0) return text;
+
+  // Apply right-to-left so replacements never shift the offsets of pending
+  // ranges; skip any range that overlaps one already applied to its right.
+  ranges.sort((a, b) => b.start - a.start);
+  let out = text;
+  let lastStart = Number.POSITIVE_INFINITY;
+  for (const r of ranges) {
+    if (r.end > lastStart) continue;
+    out = out.slice(0, r.start) + r.replacement + out.slice(r.end);
+    lastStart = r.start;
+  }
+  return out;
+}
+
+/**
  * Sanitize a streaming chunk (text content only).
  */
 export function sanitizePIIChunk(

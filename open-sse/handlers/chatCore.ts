@@ -96,6 +96,7 @@ import {
 } from "../services/tokenRefresh.ts";
 import { createRequestLogger } from "../utils/requestLogger.ts";
 import { createPreparedRequestLogger, runWithCapture } from "../utils/providerRequestLogging.ts";
+import { runWithCaptureContext, captureClientIn } from "../services/durableCapture.ts";
 import { summarizeToolSources } from "../utils/toolSources.ts";
 import { applyResponsesPreviousResponseIdPolicy } from "../utils/responsesStatePolicy.ts";
 import { applyClaudeEffortVariant } from "./chatCore/claudeEffortVariant.ts";
@@ -918,6 +919,26 @@ export async function handleChatCore({
   });
   const pendingScope = { id: pendingRequestId, model, provider, connectionId: pendingConnId };
   const providerRequestCapture = createPreparedRequestLogger(reqLogger, pendingScope);
+  // Traffic-capture correlation scope (steps 2/3): thread correlationId + attempt +
+  // provider/model onto every upstream fetch this request triggers, so combo /
+  // fusion / pipeline / retry+rotate fan-outs are disambiguated on each capture
+  // line. Wraps the existing provider-request logging scope; a zero-overhead
+  // pass-through when capture is off (default; see durableCapture.isCaptureEnabled).
+  const runWithCaptureScope = <T>(
+    meta: { attempt: number; model: string; leg: string },
+    fn: () => Promise<T>
+  ): Promise<T> =>
+    runWithCaptureContext(
+      {
+        correlationId,
+        attempt: meta.attempt,
+        provider,
+        model: meta.model,
+        leg: meta.leg,
+        clientHeaders: buildExecutorClientHeaders(clientRawRequest?.headers, userAgent),
+      },
+      () => runWithCapture(providerRequestCapture, fn)
+    );
   // 0. Log client raw request (before format conversion)
   if (clientRawRequest) {
     reqLogger.logClientRawRequest(
@@ -925,6 +946,21 @@ export async function handleChatCore({
       clientRawRequest.body,
       clientRawRequest.headers
     );
+    // Traffic-capture leg (1) client_in: the raw client request as received,
+    // BEFORE any translate/compress step below (sanitizeChatRequestBody /
+    // translateRequest run later). Correlated by the SAME correlationId as the
+    // upstream legs (2)(3), so a consumer sees all legs of one request. Combo /
+    // fusion fan-out re-enters handleChatCore per target, so client_in repeats
+    // per target under the shared correlationId (same raw body each time).
+    // Fire-and-forget + gated: a strict no-op when capture is off (default).
+    captureClientIn({
+      correlationId,
+      provider,
+      model,
+      endpoint: clientRawRequest.endpoint || "/v1/chat/completions",
+      clientHeaders: clientRawRequest.headers ?? null,
+      clientBody: clientRawRequest.body ?? body,
+    });
   }
 
   log?.debug?.("FORMAT", `${sourceFormat} → ${targetFormat} | stream=${stream}`);
@@ -2331,24 +2367,26 @@ export async function handleChatCore({
                     signal: streamController.signal,
                     log,
                     execute: (signal) =>
-                      runWithCapture(providerRequestCapture, () =>
-                        executor.execute({
-                          model: modelToCall,
-                          body: bodyToSend,
-                          stream: upstreamStream,
-                          credentials: execCreds,
-                          signal,
-                          log,
-                          extendedContext,
-                          upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
-                          clientHeaders: buildExecutorClientHeaders(
-                            clientRawRequest?.headers,
-                            userAgent
-                          ),
-                          onCredentialsRefreshed,
-                          skipUpstreamRetry,
-                          contextEditing: { enabled: contextEditingEnabled },
-                        })
+                      runWithCaptureScope(
+                        { attempt: attempts, model: modelToCall, leg: "primary" },
+                        () =>
+                          executor.execute({
+                            model: modelToCall,
+                            body: bodyToSend,
+                            stream: upstreamStream,
+                            credentials: execCreds,
+                            signal,
+                            log,
+                            extendedContext,
+                            upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
+                            clientHeaders: buildExecutorClientHeaders(
+                              clientRawRequest?.headers,
+                              userAgent
+                            ),
+                            onCredentialsRefreshed,
+                            skipUpstreamRetry,
+                            contextEditing: { enabled: contextEditingEnabled },
+                          })
                       ),
                   });
                 },
@@ -2577,24 +2615,26 @@ export async function handleChatCore({
                         signal: streamController.signal,
                         log,
                         execute: (signal) =>
-                          runWithCapture(providerRequestCapture, () =>
-                            executor.execute({
-                              model: modelToCall,
-                              body,
-                              stream: upstreamStream,
-                              credentials: execCreds,
-                              signal,
-                              log,
-                              extendedContext,
-                              upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
-                              clientHeaders: buildExecutorClientHeaders(
-                                clientRawRequest?.headers,
-                                userAgent
-                              ),
-                              onCredentialsRefreshed,
-                              skipUpstreamRetry,
-                              contextEditing: { enabled: contextEditingEnabled },
-                            })
+                          runWithCaptureScope(
+                            { attempt: attempts, model: modelToCall, leg: "stream-recovery" },
+                            () =>
+                              executor.execute({
+                                model: modelToCall,
+                                body,
+                                stream: upstreamStream,
+                                credentials: execCreds,
+                                signal,
+                                log,
+                                extendedContext,
+                                upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
+                                clientHeaders: buildExecutorClientHeaders(
+                                  clientRawRequest?.headers,
+                                  userAgent
+                                ),
+                                onCredentialsRefreshed,
+                                skipUpstreamRetry,
+                                contextEditing: { enabled: contextEditingEnabled },
+                              })
                           ),
                       });
                       const retryRes = normalizeExecutorResult(retryRaw);
@@ -3075,21 +3115,23 @@ export async function handleChatCore({
       // stay aligned if this block ever runs after a path that mutates body.model (e.g. fallback).
       try {
         const retryModelId = String(translatedBody.model || effectiveModel);
-        const retryResult = await runWithCapture(providerRequestCapture, () =>
-          executor.execute({
-            model: retryModelId,
-            body: translatedBody,
-            stream: upstreamStream,
-            credentials: getExecutionCredentials(),
-            signal: streamController.signal,
-            log,
-            extendedContext,
-            upstreamExtraHeaders: buildUpstreamHeadersForExecute(retryModelId),
-            clientHeaders: buildExecutorClientHeaders(clientRawRequest?.headers, userAgent),
-            onCredentialsRefreshed,
-            skipUpstreamRetry: isCombo,
-            contextEditing: { enabled: contextEditingEnabled },
-          })
+        const retryResult = await runWithCaptureScope(
+          { attempt: 0, model: retryModelId, leg: "refresh-retry" },
+          () =>
+            executor.execute({
+              model: retryModelId,
+              body: translatedBody,
+              stream: upstreamStream,
+              credentials: getExecutionCredentials(),
+              signal: streamController.signal,
+              log,
+              extendedContext,
+              upstreamExtraHeaders: buildUpstreamHeadersForExecute(retryModelId),
+              clientHeaders: buildExecutorClientHeaders(clientRawRequest?.headers, userAgent),
+              onCredentialsRefreshed,
+              skipUpstreamRetry: isCombo,
+              contextEditing: { enabled: contextEditingEnabled },
+            })
         );
 
         if (retryResult.response.ok) {

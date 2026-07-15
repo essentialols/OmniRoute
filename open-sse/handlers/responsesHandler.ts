@@ -9,6 +9,8 @@ import { convertResponsesApiFormat } from "../translator/helpers/responsesApiHel
 import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.ts";
 import { createSseHeartbeatTransform, HEARTBEAT_SHAPES } from "../utils/sseHeartbeat.ts";
 import { SSE_HEARTBEAT_INTERVAL_MS } from "../config/constants.ts";
+import { isCaptureEnabled, captureClientIn, captureClientOut } from "../services/durableCapture.ts";
+import { generateRequestId } from "@/shared/utils/requestId";
 
 /**
  * Handle /v1/responses request
@@ -35,6 +37,26 @@ export async function handleResponsesCore({
   connectionId,
   signal,
 }) {
+  // Traffic-capture correlation id for this /v1/responses request. This adapter
+  // passes `clientRawRequest: null` to handleChatCore (the body is already
+  // converted below), so the raw client_in and final client_out legs are emitted
+  // HERE instead of at the shared chatCore/withCorrelationId seams. Threading the
+  // same id into handleChatCore also stamps the upstream legs (2)(3), so all four
+  // legs of one request correlate. Only allocated when capture is enabled.
+  const captureCorrelationId = isCaptureEnabled() ? generateRequestId() : null;
+
+  // Leg (1) client_in: the raw Responses-API request BEFORE conversion.
+  if (captureCorrelationId) {
+    captureClientIn({
+      correlationId: captureCorrelationId,
+      provider: modelInfo?.provider ?? "",
+      model: modelInfo?.model ?? "",
+      endpoint: "/v1/responses",
+      clientHeaders: null,
+      clientBody: body,
+    });
+  }
+
   // Convert Responses API format to Chat Completions format
   const convertedBody = convertResponsesApiFormat(body, credentials);
 
@@ -54,6 +76,7 @@ export async function handleResponsesCore({
     connectionId,
     userAgent: null,
     comboName: null,
+    correlationId: captureCorrelationId,
   });
 
   if (!result.success || !result.response) {
@@ -78,15 +101,29 @@ export async function handleResponsesCore({
     })
   );
 
+  const finalResponse = new Response(transformedBody, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
+
+  // Leg (4) client_out: the FINAL response AFTER the Responses-API TransformStream
+  // (+ heartbeat) reframing. Teed with clone(), so the client stream is intact.
+  if (captureCorrelationId) {
+    captureClientOut({
+      correlationId: captureCorrelationId,
+      provider: modelInfo?.provider ?? "",
+      model: modelInfo?.model ?? "",
+      endpoint: "/v1/responses",
+      response: finalResponse,
+    });
+  }
+
   return {
     success: true,
-    response: new Response(transformedBody, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
-    }),
+    response: finalResponse,
   };
 }

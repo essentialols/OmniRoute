@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { updatePendingScope, type PendingRequestScope } from "@/lib/usage/pendingRequestScope";
+import { captureUpstreamFromFetch, getCaptureContext } from "../services/durableCapture.ts";
 
 export type ProviderRequestPrepared = {
   url: string;
@@ -141,6 +142,31 @@ function installFetchCapture() {
     if (activeCapture) {
       await captureFetchRequest(activeCapture, input, init);
     }
+
+    // Durable raw traffic capture (②③). Default OFF and gated: `getCaptureContext()`
+    // is non-null only when the operator opted in (`OMNIROUTE_RAWCAP`) AND we are
+    // inside an `executor.execute()` correlation scope. This is the single universal
+    // fetch choke point, so it records the transformed upstream request + raw
+    // upstream response for EVERY provider — including the ~9 web executors that
+    // override `execute()` and bypass a `base.ts` hook. Fully additive: the response
+    // object is returned untouched; capture never blocks, throws, or mutates it.
+    if (getCaptureContext()) {
+      const startedAt = Date.now();
+      const response = await captureState.wrappedInnerFetch!(input, init);
+      try {
+        captureUpstreamFromFetch({
+          url: getFetchUrl(input),
+          requestHeaders: getFetchHeaders(input, init),
+          requestBody: bodyToString(init?.body),
+          response,
+          latencyMs: Date.now() - startedAt,
+        });
+      } catch {
+        // best-effort — a capture failure must never break the request
+      }
+      return response;
+    }
+
     return captureState.wrappedInnerFetch!(input, init);
   }) as typeof fetch;
   globalThis.fetch = captureState.wrappedFetch;
