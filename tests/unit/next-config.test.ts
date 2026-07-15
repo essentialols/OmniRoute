@@ -98,6 +98,18 @@ test("next config declares Turbopack aliases, runtime assets and server external
   );
   assert.ok(tracingExcludes.includes("./_tasks/**/*"));
   assert.ok(tracingExcludes.includes("./tests/**/*"));
+  // Build outputs MUST be excluded from the NFT trace. Tracing them bakes the
+  // prior build's dist/ into the standalone, which prepublish then copies back
+  // into dist/, compounding into dist/dist/dist/... (~3GB, 35 levels) on every
+  // build. Guards against re-introducing the recursion.
+  assert.ok(
+    tracingExcludes.includes("./dist/**/*"),
+    "dist/ must be excluded from output file tracing (prevents dist/dist recursion)"
+  );
+  assert.ok(
+    tracingExcludes.includes("./.build/**/*"),
+    "./.build/ must be excluded from output file tracing (prevents dist/dist recursion)"
+  );
 
   for (const packageName of [
     "thread-stream",
@@ -126,10 +138,7 @@ test("Turbopack aliases @/mitm/manager to the stub ONLY when OMNIROUTE_MITM_STUB
 
     process.env.OMNIROUTE_MITM_STUB = "1";
     const { default: docker } = await loadNextConfig("mitm-docker");
-    assert.equal(
-      docker.turbopack.resolveAlias["@/mitm/manager"],
-      "./src/mitm/manager.stub.ts"
-    );
+    assert.equal(docker.turbopack.resolveAlias["@/mitm/manager"], "./src/mitm/manager.stub.ts");
   } finally {
     if (original === undefined) delete process.env.OMNIROUTE_MITM_STUB;
     else process.env.OMNIROUTE_MITM_STUB = original;
@@ -198,7 +207,11 @@ test("manager.stub.ts exports every name statically imported from @/mitm/manager
   }
   for (const m of stubSrc.matchAll(/export\s*\{([^}]*)\}/g)) {
     for (const part of m[1].split(",")) {
-      const exported = part.trim().split(/\s+as\s+/).pop()?.trim(); // `x as y` exports y
+      const exported = part
+        .trim()
+        .split(/\s+as\s+/)
+        .pop()
+        ?.trim(); // `x as y` exports y
       if (exported) stubExports.add(exported);
     }
   }
