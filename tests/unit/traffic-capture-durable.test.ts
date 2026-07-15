@@ -201,7 +201,10 @@ test("(c) auth headers scrubbed, body PII redacted, and body cap enforced", asyn
   process.env.OMNIROUTE_RAWCAP = "1";
   process.env.OMNIROUTE_CAPTURE_MAX_BODY_KB = "1"; // 1 KiB cap
   const provider = "cap-secure";
-  const bigFiller = "x".repeat(4096); // > 1 KiB, forces truncation
+  // Prose filler (with spaces) so it is NOT mistaken for a base64 media blob by
+  // the in-body media redaction (which strips only long pure-base64 runs); this
+  // keeps the test exercising the size CAP path. > 1 KiB forces truncation.
+  const bigFiller = "lorem ipsum dolor sit amet ".repeat(200);
   const reqBody = JSON.stringify({
     model: "m",
     email: "alice@example.com",
