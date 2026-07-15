@@ -798,7 +798,7 @@ test("Model mapping: pplx-gpt sends current GPT-5.5 internal preference", async 
     });
 
     assert.equal(capturedBody.params.model_preference, "gpt55");
-    assert.equal(capturedBody.params.mode, "search");
+    assert.equal(capturedBody.params.mode, "concise");
   } finally {
     globalThis.fetch = original;
   }
@@ -841,7 +841,7 @@ test("Model mapping: thinking mode uses thinking variant", async () => {
     });
 
     assert.equal(capturedBody.params.model_preference, "claude50sonnetthinking");
-    assert.equal(capturedBody.params.mode, "search");
+    assert.equal(capturedBody.params.mode, "concise");
   } finally {
     globalThis.fetch = original;
   }
