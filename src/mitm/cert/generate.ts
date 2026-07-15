@@ -2,10 +2,19 @@ import path from "path";
 import fs from "fs";
 import { resolveMitmDataDir } from "../dataDir.ts";
 
-const TARGET_HOST = "daily-cloudcode-pa.googleapis.com";
+// The MITM listener presents a per-host leaf minted at TLS-handshake time by
+// `server.cjs` (see `_internal/dynamicCert.cjs`). For those leaves to validate
+// on real clients, `server.key`/`server.crt` must be a ROOT CA (CA:TRUE), and
+// the operator trusts THAT CA, not a per-host leaf. A single static leaf (the
+// old behavior) only ever validated one host; every other SNI failed with a
+// hostname mismatch. install.ts already trusts this file as "OmniRoute MITM
+// Root CA".
+const CA_NAME = "OmniRoute MITM Root CA";
 
 /**
- * Generate self-signed SSL certificate using selfsigned (pure JS, no openssl needed)
+ * Generate the MITM ROOT CA using selfsigned (pure JS, no openssl needed).
+ * Writes the CA key/cert to `server.key`/`server.crt`; `server.cjs` loads them
+ * and mints per-SNI leaves signed by this CA on demand.
  */
 export async function generateCert(): Promise<{ key: string; cert: string }> {
   const certDir = path.join(resolveMitmDataDir(), "mitm");
@@ -23,19 +32,24 @@ export async function generateCert(): Promise<{ key: string; cert: string }> {
 
   // Dynamic import for optional dependency
   const { default: selfsigned } = await import("selfsigned");
-  const attrs = [{ name: "commonName", value: TARGET_HOST }];
+  const attrs = [{ name: "commonName", value: CA_NAME }];
   const notAfter = new Date();
-  notAfter.setFullYear(notAfter.getFullYear() + 1);
+  // Long-lived CA (10y): reinstalling/re-trusting the CA in the OS store is a
+  // manual (sudo) step, so it must not expire on the old 1-year cadence.
+  notAfter.setFullYear(notAfter.getFullYear() + 10);
   const pems = await selfsigned.generate(attrs, {
     keySize: 2048,
     algorithm: "sha256",
     notAfterDate: notAfter,
-    extensions: [{ name: "subjectAltName", altNames: [{ type: 2, value: TARGET_HOST }] }],
+    extensions: [
+      { name: "basicConstraints", cA: true, critical: true },
+      { name: "keyUsage", keyCertSign: true, cRLSign: true, critical: true },
+    ],
   });
 
   fs.writeFileSync(keyPath, pems.private);
   fs.writeFileSync(certPath, pems.cert);
 
-  console.log(`✅ Generated SSL certificate for ${TARGET_HOST}`);
+  console.log(`✅ Generated MITM root CA (${CA_NAME})`);
   return { key: keyPath, cert: certPath };
 }
