@@ -1,4 +1,4 @@
-const DEFAULT_CODEX_CLIENT_VERSION = "0.142.0"; // Update if yours differs
+const DEFAULT_CODEX_CLIENT_VERSION = "0.142.5"; // Update if yours differs (match `codex --version`)
 const DEFAULT_CODEX_USER_AGENT_PLATFORM = "MacOS 24.0.0"; // Match your actual OS
 const DEFAULT_CODEX_USER_AGENT_ARCH = "arm64"; // Match your actual arch
 const CODEX_VERSION_OVERRIDE_ENV = "CODEX_CLIENT_VERSION";

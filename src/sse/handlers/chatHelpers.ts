@@ -15,7 +15,6 @@ import {
 import { handleChatCore } from "@omniroute/open-sse/handlers/chatCore.ts";
 import { captureClientOut } from "@omniroute/open-sse/services/durableCapture.ts";
 import { OMNIROUTE_RESPONSE_HEADERS } from "@/shared/constants/headers";
-import { resolveProviderId } from "@/shared/constants/providers";
 import {
   errorResponse,
   modelCooldownResponse,
@@ -852,14 +851,9 @@ export function withCorrelationId(response: Response, correlationId: string | nu
   // when capture is off (default); tees with clone() so the client stream is
   // never blocked or reordered.
   try {
-    // The response `provider` header carries the public ALIAS (e.g. "cx"), while
-    // the client_in + upstream legs are labeled with the canonical provider ID
-    // (e.g. "codex"). Normalize to the ID here so all four legs of one request
-    // share the same provider label (resolveProviderId is idempotent on IDs).
-    const providerHeader = response.headers.get(OMNIROUTE_RESPONSE_HEADERS.provider);
     captureClientOut({
       correlationId,
-      provider: providerHeader ? resolveProviderId(providerHeader) : "client",
+      provider: response.headers.get(OMNIROUTE_RESPONSE_HEADERS.provider) || "client",
       model: response.headers.get(OMNIROUTE_RESPONSE_HEADERS.model) || "",
       response,
     });

@@ -9,11 +9,7 @@ import { convertResponsesApiFormat } from "../translator/helpers/responsesApiHel
 import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.ts";
 import { createSseHeartbeatTransform, HEARTBEAT_SHAPES } from "../utils/sseHeartbeat.ts";
 import { SSE_HEARTBEAT_INTERVAL_MS } from "../config/constants.ts";
-import {
-  isCaptureEnabled,
-  captureClientIn,
-  captureClientOut,
-} from "../services/durableCapture.ts";
+import { isCaptureEnabled, captureClientIn, captureClientOut } from "../services/durableCapture.ts";
 import { generateRequestId } from "@/shared/utils/requestId";
 
 /**
