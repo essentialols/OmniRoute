@@ -174,7 +174,7 @@ This is a substantial subsystem with its own dedicated operator guide — see **
 | Control          | Action                                                                |
 | ---------------- | --------------------------------------------------------------------- |
 | ⎉ Pause          | Stops rendering new requests; "X new" badge accumulates               |
-| 🗑 Clear         | Clears the UI list (server buffer is not affected)                    |
+| 🗑 Clear          | Clears the UI list (server buffer is not affected)                    |
 | ⬇ Export .har    | Downloads current filtered list as HAR file                           |
 | ● Record session | Starts a named recording session                                      |
 | Profile selector | LLM only / Custom hosts / All                                         |
@@ -489,3 +489,51 @@ Base path: `/api/tools/traffic-inspector/`
 | POST   | `/internal/ingest` | Accepts intercepted request from `server.cjs` passthrough path; requires `INSPECTOR_INTERNAL_INGEST_TOKEN` header |
 
 Full OpenAPI schemas: `docs/openapi.yaml` → tag `Traffic Inspector`.
+
+---
+
+## §11 Durable raw traffic capture (API pipeline, default OFF)
+
+The Traffic Inspector (above) only sees traffic that flows through the MITM
+proxy. Traffic that enters via the API pipeline (`/v1/chat/completions`,
+`/v1/messages`, …) never reaches that hook. **Durable raw traffic capture** is a
+separate, opt-in sink that records the **transformed upstream request** and the
+**raw upstream response** for that pipeline traffic as line-delimited JSONL.
+
+**Seam:** it hooks the single universal fetch choke point
+(`globalThis.fetch` → `open-sse/utils/proxyFetch.ts`), wired through the existing
+`open-sse/utils/providerRequestLogging.ts` fetch wrapper and implemented in
+`open-sse/services/durableCapture.ts`. Because it captures at the fetch layer
+(not `BaseExecutor.execute()`), it also records the ~9 web executors that
+override `execute()` and bypass a `base.ts` hook.
+
+**Correlation:** every line records `correlationId` + `attempt` + `leg`
+(`primary` / `stream-recovery` / `refresh-retry`) + provider + model, so one
+client request's combo / fusion / pipeline / retry+rotate fan-out is linkable.
+
+**Output:** `<DATA_DIR|~/.omniroute>/captures/<provider>/<YYYY-MM-DD>.jsonl`
+(daily file rotation; retention is left to the operator, e.g. a
+`find … -mtime +N -delete` cron).
+
+**Safety:**
+
+- **Default OFF.** Enable with `OMNIROUTE_RAWCAP=1`. `OMNIROUTE_CAPTURE_DISABLED=1`
+  is a hard kill-switch that always wins.
+- Auth headers scrubbed (`authorization` / `x-api-key` masked; `cookie` /
+  `set-cookie` hard-redacted; hop-by-hop / denylist headers dropped).
+- Bodies are secret-masked **and** PII-redacted (`redactPIIForCapture`, reusing
+  the same detectors as `src/lib/piiSanitizer.ts`) before touching disk, then
+  capped at `OMNIROUTE_CAPTURE_MAX_BODY_KB` (default 1024 KB).
+- Binary media endpoints (audio / image / video / speech) and binary
+  content-types are captured as metadata only (body omitted).
+- Capture is fire-and-forget and never blocks, throws into, or mutates the
+  live request/response.
+
+**Known gaps (by design):**
+
+- Browser-backed executors `gemini-web` and `claude-web` drive a real browser
+  page and make no HTTP `fetch`, so no fetch-layer tap can see them.
+- Cert-pinned / bypassing CLIs are out of scope (handled by a base-URL override).
+- The client-facing legs (raw pre-translation client request `①` and final
+  client response `④`, including the Responses-API `TransformStream`) are a
+  documented follow-up, not yet captured.
