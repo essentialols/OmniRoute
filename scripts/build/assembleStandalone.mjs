@@ -504,7 +504,25 @@ export function assembleStandalone({
   // 1. Copy <distDir>/standalone -> outDir (skip when outDir IS the standalone dir — in-place mode)
   fsSync.mkdirSync(resolvedOutDir, { recursive: true });
   if (resolvedOutDir !== standaloneDir) {
-    fsSync.cpSync(standaloneDir, resolvedOutDir, { recursive: true });
+    // Guard against dist/dist/dist/… recursion at the copy boundary. A prior
+    // `npm run build:cli` leaves a repo-root dist/ that the next `next build` can
+    // trace into the standalone as <standalone>/dist (a full copy of the repo,
+    // hundreds of MB); copying that into resolvedOutDir (== dist/) compounds into
+    // dist/dist/dist/… (GBs, dozens of levels deep) on every build. If the traced
+    // dist/ itself already contained a standalone, the standalone can also carry a
+    // re-nested <standalone>/<distDir>/standalone. Skip BOTH re-nesting seeds here so
+    // dist/ can NEVER contain a nested dist/ — independent of next.config.mjs's
+    // outputFileTracingExcludes (which only stops one of the two sources). The
+    // legitimate runtime <standalone>/<distDir>/{server,required-server-files.json}
+    // is preserved; only the re-nested standalone dir under it is skipped.
+    const reNestingSeeds = new Set([
+      path.join(standaloneDir, "dist"),
+      path.join(standaloneDir, relDistDir, "standalone"),
+    ]);
+    fsSync.cpSync(standaloneDir, resolvedOutDir, {
+      recursive: true,
+      filter: (src) => !reNestingSeeds.has(path.resolve(src)),
+    });
   }
 
   // 1.5. Standalone server.js is CJS — strip "type":"module" from the copied package.json.
