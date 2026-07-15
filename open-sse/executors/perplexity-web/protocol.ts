@@ -45,17 +45,23 @@ export const PPLX_SUPPORTED_BLOCK_USE_CASES = [
 export const PPLX_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:148.0) Gecko/20100101 Firefox/148.0";
 
+// [mode, model_preference]. The mode is Perplexity's answer/search mode, NOT the
+// model; the model is chosen by model_preference. The web client's valid modes are
+// "concise" and "copilot" (pro search); the legacy "search" mode was retired and now
+// makes the endpoint return status:"FAILED" / "Error in processing query." with an
+// empty answer (surfaced to callers as HTTP 502 "empty content"). "concise" still
+// performs web search + citations, so it is the correct replacement for every model.
 export const MODEL_MAP: Record<string, [string, string]> = {
-  "pplx-auto": ["search", "pplx_pro"],
-  "pplx-sonar": ["search", "experimental"],
-  "pplx-gpt-5.4": ["search", "gpt54"],
-  "pplx-gpt": ["search", "gpt55"],
-  "pplx-gemini": ["search", "gemini31pro_high"],
-  "pplx-sonnet": ["search", "claude50sonnet"],
-  "pplx-opus": ["search", "claude48opus"],
-  "pplx-glm": ["search", "glm_5_2"],
-  "pplx-kimi": ["search", "kimik26instant"],
-  "pplx-nemotron": ["search", "nv_nemotron_3_ultra"],
+  "pplx-auto": ["concise", "pplx_pro"],
+  "pplx-sonar": ["concise", "experimental"],
+  "pplx-gpt-5.4": ["concise", "gpt54"],
+  "pplx-gpt": ["concise", "gpt55"],
+  "pplx-gemini": ["concise", "gemini31pro_high"],
+  "pplx-sonnet": ["concise", "claude50sonnet"],
+  "pplx-opus": ["concise", "claude48opus"],
+  "pplx-glm": ["concise", "glm_5_2"],
+  "pplx-kimi": ["concise", "kimik26instant"],
+  "pplx-nemotron": ["concise", "nv_nemotron_3_ultra"],
 };
 
 export const THINKING_MAP: Record<string, string> = {
