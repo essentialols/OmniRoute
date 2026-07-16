@@ -150,14 +150,17 @@ export const GLMT_REQUEST_DEFAULTS = Object.freeze({
 });
 
 export const GLM_COUNT_TOKENS_TIMEOUT_MS = 3_000;
-export const GLM_CLAUDE_CODE_USER_AGENT = "claude-cli/2.1.195 (external, sdk-cli)";
+export const GLM_CLAUDE_CODE_USER_AGENT = "claude-cli/2.1.207 (external, sdk-cli)";
 export const GLM_ANTHROPIC_BETA = [
   "claude-code-20250219",
+  "oauth-2025-04-20",
   "interleaved-thinking-2025-05-14",
+  "thinking-token-count-2026-05-13",
   "context-management-2025-06-27",
   "prompt-caching-scope-2026-01-05",
-  "advisor-tool-2026-03-01",
+  "mid-conversation-system-2026-04-07",
   "effort-2025-11-24",
+  "extended-cache-ttl-2025-04-11",
 ].join(",");
 
 function asRecord(value: unknown): JsonRecord {
