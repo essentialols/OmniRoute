@@ -21,7 +21,7 @@ export function isPassthroughMode(): boolean {
 
 // ---------- Versions ------------------------------------------------------
 
-export const CLAUDE_CODE_VERSION = "2.1.195";
+export const CLAUDE_CODE_VERSION = "2.1.207";
 /** Bundled @anthropic-ai/sdk version for the pinned CLI release. */
 export const CLAUDE_CODE_STAINLESS_VERSION = "0.94.0";
 
@@ -237,7 +237,7 @@ export async function fetchClaudeBootstrap(accessToken: string): Promise<ClaudeB
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: "application/json",
-        "User-Agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`,
+        "User-Agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, sdk-cli)`,
         "anthropic-beta": "oauth-2025-04-20",
       },
       signal: ctrl.signal,

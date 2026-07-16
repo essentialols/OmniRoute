@@ -1126,7 +1126,7 @@ export class BaseExecutor {
               ),
               "anthropic-dangerous-direct-browser-access": "true",
               "x-app": "cli",
-              "User-Agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`,
+              "User-Agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, sdk-cli)`,
               "X-Stainless-Package-Version": CLAUDE_CODE_STAINLESS_VERSION,
               "X-Stainless-Timeout": "600",
               "accept-encoding": "gzip, deflate, br, zstd",
