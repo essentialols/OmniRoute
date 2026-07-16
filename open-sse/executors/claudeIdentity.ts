@@ -451,12 +451,6 @@ export function selectBetaFlags(
   const flags: string[] = [];
   if (isFullAgent) flags.push("claude-code-20250219");
   flags.push("oauth-2025-04-20");
-  if (isContext1m) {
-    flags.push("context-1m-2025-08-07", "mid-conversation-system-2026-04-07");
-  }
-  // Thinking betas: gated on the client header (#3415). interleaved-thinking forces
-  // interleaved-thinking semantics that conflict with a tool_choice-forced turn,
-  // producing malformed opus tool_use streams when the client never asked for it.
   if (allowThinking) {
     flags.push(
       "interleaved-thinking-2025-05-14",
@@ -465,16 +459,12 @@ export function selectBetaFlags(
     );
   }
   flags.push("context-management-2025-06-27", "prompt-caching-scope-2026-01-05");
-  if (hasStructuredOutput || isFullAgent) flags.push("advisor-tool-2026-03-01");
   if (hasStructuredOutput && !isFullAgent) flags.push("structured-outputs-2025-12-15");
-  // extended-cache-ttl is sent for all full-agent shapes (incl. Haiku); the
-  // heavier afk-mode / advanced-tool-use / effort flags are Opus/Sonnet-only.
-  if (isFullAgent) {
-    flags.push("extended-cache-ttl-2025-04-11", "cache-diagnosis-2026-04-07");
-  }
+  if (isHeavyAgent) flags.push("mid-conversation-system-2026-04-07");
   if (isHeavyAgent && allowHeavy) {
     flags.push("advanced-tool-use-2025-11-20", "effort-2025-11-24");
   }
+  if (isFullAgent) flags.push("extended-cache-ttl-2025-04-11");
   return flags.join(",");
 }
 
