@@ -94,6 +94,7 @@ import { sanitizeReasoningEffortForProvider } from "./base/reasoningEffort.ts";
 // Reasoning-effort sanitation extracted to a pure leaf; re-exported for external
 // importers (mimoThinking service + tests) that import it from "./base.ts".
 export { sanitizeReasoningEffortForProvider } from "./base/reasoningEffort.ts";
+import { caseSensitiveFetch } from "../utils/caseSensitiveFetch.ts";
 
 /**
  * Sanitizes a custom API path to prevent path traversal attacks.
@@ -741,7 +742,11 @@ export class BaseExecutor {
       try {
         // Timeout only covers response start; stream stalls are handled downstream.
         const fetchStartTimeoutMs = this.getTimeoutMs();
-        const fetchWithStartTimeout = async (requestUrl: string, requestOptions: RequestInit) => {
+        const fetchWithStartTimeout = async (
+          requestUrl: string,
+          requestOptions: RequestInit,
+          fetchFn: (u: string, o: RequestInit) => Promise<Response> = fetch
+        ) => {
           const timeoutController = fetchStartTimeoutMs > 0 ? new AbortController() : null;
           let timeoutId: ReturnType<typeof setTimeout> | null = null;
           if (timeoutController) {
@@ -764,7 +769,7 @@ export class BaseExecutor {
             : requestOptions;
 
           try {
-            return await fetch(requestUrl, optionsWithSignal);
+            return await fetchFn(requestUrl, optionsWithSignal);
           } finally {
             if (timeoutId) clearTimeout(timeoutId);
           }
@@ -1254,6 +1259,8 @@ export class BaseExecutor {
           (isCliCompatEnabled(this.provider) ||
             (this.provider === "claude" && (isClaudeCodeClient || hasClaudeOAuthToken)));
         if (shouldFingerprint) {
+          const parsedUrl = new URL(url);
+          headers["Host"] = parsedUrl.host;
           const fingerprinted = applyFingerprint(this.provider, headers, transformedBody);
           finalHeaders = fingerprinted.headers;
           bodyString = fingerprinted.bodyString;
@@ -1303,13 +1310,19 @@ export class BaseExecutor {
             });
           }
         }
+        if (shouldFingerprint) {
+          finalHeaders["Content-Length"] = String(Buffer.byteLength(bodyString, "utf8"));
+        }
         const fetchOptions: RequestInit = {
           method: "POST",
           headers: finalHeaders,
           body: bodyString,
         };
 
-        let response = await fetchWithStartTimeout(url, fetchOptions);
+        const doFetch = shouldFingerprint
+          ? (u: string, o: RequestInit) => caseSensitiveFetch(u, o)
+          : (u: string, o: RequestInit) => fetch(u, o);
+        let response = await fetchWithStartTimeout(url, fetchOptions, doFetch);
 
         // Context Editing 400-fallback for Claude-compatible relays.
         if (

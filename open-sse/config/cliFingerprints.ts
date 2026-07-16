@@ -283,11 +283,11 @@ export function orderHeaders(
     headerMap.set(key.toLowerCase(), [key, value]);
   }
 
-  // Add ordered headers first
+  // Add ordered headers first, using the fingerprint's casing (not the input's)
   for (const orderedKey of headerOrder) {
     const entry = headerMap.get(orderedKey.toLowerCase());
     if (entry) {
-      result[entry[0]] = entry[1];
+      result[orderedKey] = entry[1];
       headerMap.delete(orderedKey.toLowerCase());
     }
   }
