@@ -55,8 +55,10 @@ export function stainlessArch(): string {
   }
 }
 
+const CLAUDE_CODE_NODE_VERSION = "v26.3.0";
+
 export function stainlessRuntimeVersion(): string {
-  return process.version;
+  return CLAUDE_CODE_NODE_VERSION;
 }
 
 // ---------- Bounded-map helper -------------------------------------------

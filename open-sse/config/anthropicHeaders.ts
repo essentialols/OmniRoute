@@ -124,4 +124,4 @@ export function normalizeAnthropicHeaderVariants(headers: Record<string, string>
 export const CLAUDE_CLI_VERSION = process.env.CLAUDE_CLI_VERSION_OVERRIDE || "2.1.207";
 export const CLAUDE_CLI_USER_AGENT = `claude-cli/${CLAUDE_CLI_VERSION} (external, sdk-cli)`;
 export const CLAUDE_CLI_STAINLESS_PACKAGE_VERSION = "0.94.0";
-export const CLAUDE_CLI_STAINLESS_RUNTIME_VERSION = process.version;
+export const CLAUDE_CLI_STAINLESS_RUNTIME_VERSION = "v26.3.0";
