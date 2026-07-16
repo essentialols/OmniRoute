@@ -8,6 +8,7 @@ import { TraeExecutor } from "./trae.ts";
 import { DefaultExecutor } from "./default.ts";
 import { BedrockExecutor } from "./bedrock.ts";
 import { GlmExecutor } from "./glm.ts";
+import { GlmWebExecutor } from "./glm-web.ts";
 import { PollinationsExecutor } from "./pollinations.ts";
 import { CloudflareAIExecutor } from "./cloudflare-ai.ts";
 import { OpencodeExecutor } from "./opencode.ts";
@@ -48,6 +49,7 @@ import { VeniceWebExecutor } from "./venice-web.ts";
 import { V0VercelWebExecutor } from "./v0-vercel-web.ts";
 import { KimiWebExecutor } from "./kimi-web.ts";
 import { DoubaoWebExecutor } from "./doubao-web.ts";
+import { ZaiWebExecutor } from "./zai-web.ts";
 import { QwenWebExecutor } from "./qwen-web.ts";
 import { ZaiWebExecutor } from "./zai-web.ts";
 import { KimiExecutor } from "./kimi.ts";
@@ -59,6 +61,7 @@ import { GrokCliExecutor } from "./grok-cli.ts";
 import { CodeBuddyCnExecutor } from "./codebuddy-cn.ts";
 import { ZenmuxFreeExecutor } from "./zenmux-free.ts";
 import { XaiExecutor } from "./xai.ts";
+import { BraveLeoExecutor } from "./brave-leo.ts";
 
 const executors = {
   antigravity: new AntigravityExecutor(),
@@ -74,6 +77,7 @@ const executors = {
   glm: new GlmExecutor("glm"),
   "glm-cn": new GlmExecutor("glm-cn"),
   glmt: new GlmExecutor("glmt"),
+  "glm-web": new GlmWebExecutor(),
   cu: new CursorExecutor(), // Alias for cursor
   "azure-openai": new AzureOpenAIExecutor(),
   "command-code": new CommandCodeExecutor(),
@@ -146,6 +150,8 @@ const executors = {
   "kimi-coding": new KimiExecutor(), // Alias
   "doubao-web": new DoubaoWebExecutor(),
   db: new DoubaoWebExecutor(), // Alias
+  "zai-web": new ZaiWebExecutor(),
+  zw: new ZaiWebExecutor(), // Alias
   "qwen-web": new QwenWebExecutor(),
   qw: new QwenWebExecutor(), // Alias
   "zai-web": new ZaiWebExecutor(),
@@ -166,6 +172,7 @@ const executors = {
   zmf: new ZenmuxFreeExecutor(), // Alias for zenmux-free
   auggie: new AuggieExecutor(),
   xai: new XaiExecutor(),
+  brave: new BraveLeoExecutor(),
 };
 
 const defaultCache = new Map();
@@ -191,6 +198,7 @@ export { TraeExecutor } from "./trae.ts";
 export { DefaultExecutor } from "./default.ts";
 export { BedrockExecutor } from "./bedrock.ts";
 export { GlmExecutor } from "./glm.ts";
+export { GlmWebExecutor } from "./glm-web.ts";
 export { PollinationsExecutor } from "./pollinations.ts";
 export { CloudflareAIExecutor } from "./cloudflare-ai.ts";
 export { OpencodeExecutor } from "./opencode.ts";
@@ -225,6 +233,7 @@ export { YuanbaoWebExecutor } from "./yuanbao-web.ts";
 export { T3ChatWebExecutor } from "./t3-chat-web.ts";
 export { InnerAiExecutor } from "./inner-ai.ts";
 export { QwenWebExecutor } from "./qwen-web.ts";
+export { ZaiWebExecutor } from "./zai-web.ts";
 export { TheOldLlmExecutor } from "./theoldllm.ts";
 export { ChipotleExecutor } from "./chipotle.ts";
 export { LMArenaExecutor } from "./lmarena.ts";
@@ -233,3 +242,4 @@ export { GrokCliExecutor } from "./grok-cli.ts";
 export { CodeBuddyCnExecutor } from "./codebuddy-cn.ts";
 export { ZenmuxFreeExecutor } from "./zenmux-free.ts";
 export { XaiExecutor } from "./xai.ts";
+export { BraveLeoExecutor } from "./brave-leo.ts";

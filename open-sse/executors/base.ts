@@ -6,14 +6,10 @@ import {
 import { applyContextEditingToBody } from "../config/contextEditing.ts";
 import {
   findOffendingField,
-  detectUnsupportedParam,
   stripGroqUnsupportedFields,
+  isToolUnsupportedError,
+  stripAllToolFields,
 } from "../config/providerFieldStrips.ts";
-import {
-  getParamFilterConfig,
-  addParamToBlocklist,
-  isAutoLearnGloballyEnabled,
-} from "@/lib/db/paramFilters";
 import { applyFingerprint, isCliCompatEnabled } from "../config/cliFingerprints.ts";
 import { supportsClaudeMaxEffort, supportsXHighEffort } from "../config/providerModels.ts";
 import { getThinkingBudgetConfig, ThinkingMode } from "../services/thinkingBudget.ts";
@@ -64,7 +60,9 @@ import {
   buildHashFor,
   buildUserIdJson,
   getSessionId,
+  isPassthroughMode,
   parseUpstreamMetadataUserId,
+  passthroughForwardsRealCcIdentity,
   passthroughUpstreamSessionId,
   resolveAccountUUID,
   resolveCliUserID,
@@ -72,6 +70,7 @@ import {
   stainlessArch,
   stainlessOS,
   stainlessRuntimeVersion,
+  stripPassthroughInjectedContextManagement,
   stripProxyToolPrefix,
 } from "./claudeIdentity.ts";
 import { withForcedResponsesUpstream } from "./forceResponsesUpstream.ts";
@@ -95,6 +94,7 @@ import { sanitizeReasoningEffortForProvider } from "./base/reasoningEffort.ts";
 // Reasoning-effort sanitation extracted to a pure leaf; re-exported for external
 // importers (mimoThinking service + tests) that import it from "./base.ts".
 export { sanitizeReasoningEffortForProvider } from "./base/reasoningEffort.ts";
+import { caseSensitiveFetch } from "../utils/caseSensitiveFetch.ts";
 
 /**
  * Sanitizes a custom API path to prevent path traversal attacks.
@@ -684,6 +684,9 @@ export class BaseExecutor {
     // field-downgrade below, so each known field is stripped at most once across
     // all fallback URLs (bounded retry loop).
     const strippedFields = new Set<string>();
+    // Guards the reactive "model does not support tools" downgrade so the whole
+    // tool trio is stripped at most once across fallback URLs.
+    let toolFieldsStripped = false;
 
     for (let urlIndex = 0; urlIndex < fallbackCount; urlIndex++) {
       const requestCredentials = withForcedResponsesUpstream(
@@ -739,7 +742,11 @@ export class BaseExecutor {
       try {
         // Timeout only covers response start; stream stalls are handled downstream.
         const fetchStartTimeoutMs = this.getTimeoutMs();
-        const fetchWithStartTimeout = async (requestUrl: string, requestOptions: RequestInit) => {
+        const fetchWithStartTimeout = async (
+          requestUrl: string,
+          requestOptions: RequestInit,
+          fetchFn: (u: string, o: RequestInit) => Promise<Response> = fetch
+        ) => {
           const timeoutController = fetchStartTimeoutMs > 0 ? new AbortController() : null;
           let timeoutId: ReturnType<typeof setTimeout> | null = null;
           if (timeoutController) {
@@ -762,7 +769,7 @@ export class BaseExecutor {
             : requestOptions;
 
           try {
-            return await fetch(requestUrl, optionsWithSignal);
+            return await fetchFn(requestUrl, optionsWithSignal);
           } finally {
             if (timeoutId) clearTimeout(timeoutId);
           }
@@ -783,6 +790,24 @@ export class BaseExecutor {
           activeCredentials.accessToken.startsWith("sk-ant-oat") &&
           !activeCredentials?.apiKey;
 
+        // Passthrough mode gates identity synthesis, header synthesis,
+        // obfuscation, tool cloaking, billing prepend, fingerprint reordering,
+        // and CCH signing across this whole Claude provider path. Declared at
+        // this scope so both the in-block prepend and the later fingerprint/CCH
+        // steps (siblings of the if below) can read it.
+        const passthroughActive = isPassthroughMode();
+        // Passthrough only relays a genuine Claude Code client identity verbatim.
+        // A non-CC caller has no real identity / billing / headers to forward, so it
+        // must go through the normal cloaked synthesis path (otherwise its uncloaked
+        // synthesized identity is throttled with a 429). Gate every
+        // synthesis-vs-forward decision on this, not on the raw isPassthroughMode()
+        // env toggle.
+        const passthroughForwardsRealCc =
+          passthroughActive &&
+          passthroughForwardsRealCcIdentity(
+            clientHeaders as Record<string, string | undefined> | null | undefined
+          );
+
         if (
           this.provider === "claude" &&
           (isClaudeCodeClient || hasClaudeOAuthToken) &&
@@ -791,34 +816,41 @@ export class BaseExecutor {
         ) {
           const tb = transformedBody as Record<string, unknown>;
 
-          stripProxyToolPrefix(tb);
-          remapToolNamesInRequest(tb);
-          // Cloak third-party tool names + sanitize invalid tool schemas so
-          // Anthropic does not refuse native Claude OAuth traffic with a
-          // misleading "out of extra usage" placeholder. See Spec E.
-          cloakThirdPartyToolNames(tb);
-          if (Array.isArray(tb.tools)) {
-            tb.tools = sanitizeClaudeToolSchemas(tb.tools);
-          }
-          obfuscateInBody(tb);
-
-          // NOTE (issue #2260): This is the native `claude` provider OAuth path.
-          // It is intentionally NOT routed through applyCcBridgeTransformPipeline.
-          // The native OAuth path already prepends its own billing line + sentinel
-          // (see lines ~744-773 below, dayStamp-based, cc_entrypoint=cli, cch=00000
-          // placeholder, signed at body level). The CC bridge transforms DSL is
-          // wired into buildAndSignClaudeCodeRequest (claudeCodeCompatible.ts step 5b)
-          // which is the anthropic-compatible-cc-* relay path — a different,
-          // separately classified surface. Do not double-prepend here.
-
-          // Real CLI never sets cache_control on tools.
-          if (Array.isArray(tb.tools)) {
-            for (const t of tb.tools as Array<Record<string, unknown>>) {
-              delete t.cache_control;
+          // In passthrough mode, forward the client's tool definitions exactly as
+          // received: no prefix strip, no name remap/cloak, no schema rewrite, no
+          // obfuscation, and no cache_control removal. CC's own tool defs are valid.
+          // Only when genuinely forwarding a real CC identity; a non-CC caller falls
+          // back to full synthesis (which sanitizes tools).
+          if (!passthroughForwardsRealCc) {
+            stripProxyToolPrefix(tb);
+            remapToolNamesInRequest(tb);
+            // Cloak third-party tool names + sanitize invalid tool schemas so
+            // Anthropic does not refuse native Claude OAuth traffic with a
+            // misleading "out of extra usage" placeholder. See Spec E.
+            cloakThirdPartyToolNames(tb);
+            if (Array.isArray(tb.tools)) {
+              tb.tools = sanitizeClaudeToolSchemas(tb.tools);
             }
-            // Also strip OmniRoute provider prefix from versioned built-in tool
-            // model fields (e.g. cc/claude-opus-4-8 → claude-opus-4-8).
-            stripVersionedToolModelPrefix(tb.tools);
+            obfuscateInBody(tb);
+
+            // NOTE (issue #2260): This is the native `claude` provider OAuth path.
+            // It is intentionally NOT routed through applyCcBridgeTransformPipeline.
+            // The native OAuth path already prepends its own billing line + sentinel
+            // (see lines ~744-773 below, dayStamp-based, cc_entrypoint=cli, cch=00000
+            // placeholder, signed at body level). The CC bridge transforms DSL is
+            // wired into buildAndSignClaudeCodeRequest (claudeCodeCompatible.ts step 5b)
+            // which is the anthropic-compatible-cc-* relay path — a different,
+            // separately classified surface. Do not double-prepend here.
+
+            // Real CLI never sets cache_control on tools.
+            if (Array.isArray(tb.tools)) {
+              for (const t of tb.tools as Array<Record<string, unknown>>) {
+                delete t.cache_control;
+              }
+              // Also strip OmniRoute provider prefix from versioned built-in tool
+              // model fields (e.g. cc/claude-opus-4-8 → claude-opus-4-8).
+              stripVersionedToolModelPrefix(tb.tools);
+            }
           }
 
           // Per-request behavior overrides via custom client headers.
@@ -951,7 +983,8 @@ export class BaseExecutor {
           // X-Claude-Code-Session-Id and synthesize per-account: the CC device_id from
           // ~/.claude.json is shared across every account on one machine, which lets
           // Anthropic correlate accounts behind one OmniRoute.
-          const cloakIdentity = isClaudeCodeClient || hasClaudeOAuthToken;
+          const cloakIdentity =
+            (isClaudeCodeClient || hasClaudeOAuthToken) && !passthroughForwardsRealCc;
           const upstreamUserId = cloakIdentity ? null : parseUpstreamMetadataUserId(tb);
           if (upstreamUserId) {
             sessionId = upstreamUserId.session_id;
@@ -976,34 +1009,43 @@ export class BaseExecutor {
 
           // system[0] (billing) and system[1] (sentinel) must not carry
           // cache_control — that belongs on upstream prompt blocks at [2..].
-          const dayStamp = new Date().toISOString().slice(0, 10);
-          const buildHash = buildHashFor(CLAUDE_CODE_VERSION, dayStamp);
-          const billingLine = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.${buildHash}; cc_entrypoint=cli; cch=00000;`;
-          const SENTINEL = "You are Claude Code, Anthropic's official CLI for Claude.";
+          // In passthrough mode, the upstream CC client already includes its own
+          // billing header (system[0]) and sentinel (system[1]) with a correctly
+          // computed CCH. Preserve them as-is; only prepend when synthesizing (which
+          // includes the non-CC passthrough fallback that has no client billing line).
+          if (!passthroughForwardsRealCc) {
+            const dayStamp = new Date().toISOString().slice(0, 10);
+            const buildHash = buildHashFor(CLAUDE_CODE_VERSION, dayStamp);
+            const billingLine = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.${buildHash}; cc_entrypoint=cli; cch=00000;`;
+            const SENTINEL = "You are Claude Code, Anthropic's official CLI for Claude.";
 
-          const sysBlocks: Array<Record<string, unknown>> = Array.isArray(tb.system)
-            ? (tb.system as Array<Record<string, unknown>>)
-            : typeof tb.system === "string"
-              ? [{ type: "text", text: tb.system }]
-              : [];
+            const sysBlocks: Array<Record<string, unknown>> = Array.isArray(tb.system)
+              ? (tb.system as Array<Record<string, unknown>>)
+              : typeof tb.system === "string"
+                ? [{ type: "text", text: tb.system }]
+                : [];
 
-          // Strip any pre-existing billing/sentinel before re-prepending — keeps
-          // retries idempotent and avoids stacking that breaks prompt-cache prefix
-          // matching (see issue #1712).
-          for (let i = sysBlocks.length - 1; i >= 0; i--) {
-            const t = sysBlocks[i]?.text;
-            if (typeof t === "string" && t.startsWith("x-anthropic-billing-header:")) {
-              sysBlocks.splice(i, 1);
+            // Strip any pre-existing billing/sentinel before re-prepending — keeps
+            // retries idempotent and avoids stacking that breaks prompt-cache prefix
+            // matching (see issue #1712).
+            for (let i = sysBlocks.length - 1; i >= 0; i--) {
+              const t = sysBlocks[i]?.text;
+              if (typeof t === "string" && t.startsWith("x-anthropic-billing-header:")) {
+                sysBlocks.splice(i, 1);
+              }
             }
-          }
-          for (let i = sysBlocks.length - 1; i >= 0; i--) {
-            const t = sysBlocks[i]?.text;
-            if (typeof t === "string" && t.startsWith(SENTINEL)) {
-              sysBlocks.splice(i, 1);
+            for (let i = sysBlocks.length - 1; i >= 0; i--) {
+              const t = sysBlocks[i]?.text;
+              if (typeof t === "string" && t.startsWith(SENTINEL)) {
+                sysBlocks.splice(i, 1);
+              }
             }
+            sysBlocks.unshift(
+              { type: "text", text: billingLine },
+              { type: "text", text: SENTINEL }
+            );
+            tb.system = sysBlocks;
           }
-          sysBlocks.unshift({ type: "text", text: billingLine }, { type: "text", text: SENTINEL });
-          tb.system = sysBlocks;
 
           // Run the configurable system-transforms pipeline for the native
           // `claude` provider (issue #2260 / comment 4459544580). The default
@@ -1036,45 +1078,87 @@ export class BaseExecutor {
           // of force-injecting thinking/effort betas it never requested (#3415).
           const clientAnthropicBeta =
             clientHeaders?.["anthropic-beta"] ?? clientHeaders?.["Anthropic-Beta"] ?? null;
-          const ccHeaders: Record<string, string> = {
-            Accept: "application/json",
-            "anthropic-version": "2023-06-01",
-            // #3974: merge the client's allowlisted betas (e.g. tool-search-tool)
-            // on top of the shape-derived set so deferred-tool requests are not
-            // rejected; selectBetaFlags still gates thinking/effort per #3415.
-            "anthropic-beta": mergeClientAnthropicBeta(
-              selectBetaFlags(tb, null, clientAnthropicBeta),
-              clientAnthropicBeta
-            ),
-            "anthropic-dangerous-direct-browser-access": "true",
-            "x-app": "cli",
-            "User-Agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`,
-            "X-Stainless-Package-Version": CLAUDE_CODE_STAINLESS_VERSION,
-            "X-Stainless-Timeout": "600",
-            "accept-encoding": "gzip, deflate, br, zstd",
-            connection: "keep-alive",
-            "x-client-request-id": randomUUID(),
-            "X-Claude-Code-Session-Id": sessionId,
-          };
+          if (passthroughForwardsRealCc && clientHeaders) {
+            // Forward real CC headers verbatim instead of synthesizing.
+            // Only override Accept and auth; everything else comes from the real client.
+            const PASSTHROUGH_HEADER_NAMES = [
+              "User-Agent",
+              "X-Claude-Code-Session-Id",
+              "x-client-request-id",
+              "X-Stainless-Arch",
+              "X-Stainless-Lang",
+              "X-Stainless-OS",
+              "X-Stainless-Package-Version",
+              "X-Stainless-Runtime",
+              "X-Stainless-Runtime-Version",
+              "X-Stainless-Timeout",
+              "X-Stainless-Retry-Count",
+              "anthropic-beta",
+              "anthropic-version",
+              "anthropic-dangerous-direct-browser-access",
+              "x-app",
+              "accept-encoding",
+              "connection",
+            ];
+            const ptHeaders: Record<string, string> = {
+              Accept: "application/json",
+            };
+            for (const name of PASSTHROUGH_HEADER_NAMES) {
+              // Case-insensitive lookup in clientHeaders
+              const val =
+                clientHeaders[name] ??
+                clientHeaders[name.toLowerCase()] ??
+                clientHeaders[name.toUpperCase()];
+              if (typeof val === "string") ptHeaders[name] = val;
+            }
+            // Merge onto existing headers (which already have auth from the provider path)
+            const ptKeysLower = new Set(Object.keys(ptHeaders).map((k) => k.toLowerCase()));
+            for (const key of Object.keys(headers)) {
+              if (ptKeysLower.has(key.toLowerCase())) delete headers[key];
+            }
+            Object.assign(headers, ptHeaders);
+            delete headers["X-Stainless-Helper-Method"];
+          } else {
+            const ccHeaders: Record<string, string> = {
+              Accept: "application/json",
+              "anthropic-version": "2023-06-01",
+              // #3974: merge the client's allowlisted betas (e.g. tool-search-tool)
+              // on top of the shape-derived set so deferred-tool requests are not
+              // rejected; selectBetaFlags still gates thinking/effort per #3415.
+              "anthropic-beta": mergeClientAnthropicBeta(
+                selectBetaFlags(tb, null, clientAnthropicBeta),
+                clientAnthropicBeta
+              ),
+              "anthropic-dangerous-direct-browser-access": "true",
+              "x-app": "cli",
+              "User-Agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, sdk-cli)`,
+              "X-Stainless-Package-Version": CLAUDE_CODE_STAINLESS_VERSION,
+              "X-Stainless-Timeout": "600",
+              "accept-encoding": "gzip, deflate, br, zstd",
+              connection: "keep-alive",
+              "x-client-request-id": randomUUID(),
+              "X-Claude-Code-Session-Id": sessionId,
+            };
 
-          // Drop case variants of the same header name before merging — undici
-          // would otherwise concatenate them (issue #1454).
-          const ccKeysLower = new Set(Object.keys(ccHeaders).map((k) => k.toLowerCase()));
-          for (const key of Object.keys(headers)) {
-            if (ccKeysLower.has(key.toLowerCase())) delete headers[key];
+            // Drop case variants of the same header name before merging — undici
+            // would otherwise concatenate them (issue #1454).
+            const ccKeysLower = new Set(Object.keys(ccHeaders).map((k) => k.toLowerCase()));
+            for (const key of Object.keys(headers)) {
+              if (ccKeysLower.has(key.toLowerCase())) delete headers[key];
+            }
+            Object.assign(headers, ccHeaders);
+            delete headers["X-Stainless-Helper-Method"];
+
+            // Stainless OS/Arch/Runtime are host-derived (Stainless SDK does the
+            // same at runtime). Hardcoding them was a unique-per-deployment tell.
+            headers["X-Stainless-Arch"] = stainlessArch();
+            headers["X-Stainless-Lang"] = "js";
+            headers["X-Stainless-OS"] = stainlessOS();
+            headers["X-Stainless-Runtime"] = "node";
+            headers["X-Stainless-Runtime-Version"] = stainlessRuntimeVersion();
+            headers["X-Stainless-Retry-Count"] = "0";
+            delete headers["X-Stainless-Os"];
           }
-          Object.assign(headers, ccHeaders);
-          delete headers["X-Stainless-Helper-Method"];
-
-          // Stainless OS/Arch/Runtime are host-derived (Stainless SDK does the
-          // same at runtime). Hardcoding them was a unique-per-deployment tell.
-          headers["X-Stainless-Arch"] = stainlessArch();
-          headers["X-Stainless-Lang"] = "js";
-          headers["X-Stainless-OS"] = stainlessOS();
-          headers["X-Stainless-Runtime"] = "node";
-          headers["X-Stainless-Runtime-Version"] = stainlessRuntimeVersion();
-          headers["X-Stainless-Retry-Count"] = "0";
-          delete headers["X-Stainless-Os"];
 
           const overrideTag =
             appliedEffort || appliedThinking
@@ -1159,12 +1243,24 @@ export class BaseExecutor {
           );
         }
 
+        // Passthrough forwards the client's own anthropic-beta verbatim; drop any
+        // injected top-level context_management it does not negotiate, which strict
+        // Anthropic 400s on ("context_management: Extra inputs are not permitted").
+        // No-op for the non-CC synthesis fallback, which negotiates the beta itself.
+        stripPassthroughInjectedContextManagement(
+          transformedBody as Record<string, unknown>,
+          passthroughForwardsRealCc
+        );
+
         let bodyString = JSON.stringify(transformedBody);
 
         const shouldFingerprint =
-          isCliCompatEnabled(this.provider) ||
-          (this.provider === "claude" && (isClaudeCodeClient || hasClaudeOAuthToken));
+          !passthroughForwardsRealCc &&
+          (isCliCompatEnabled(this.provider) ||
+            (this.provider === "claude" && (isClaudeCodeClient || hasClaudeOAuthToken)));
         if (shouldFingerprint) {
+          const parsedUrl = new URL(url);
+          headers["Host"] = parsedUrl.host;
           const fingerprinted = applyFingerprint(this.provider, headers, transformedBody);
           finalHeaders = fingerprinted.headers;
           bodyString = fingerprinted.bodyString;
@@ -1173,6 +1269,13 @@ export class BaseExecutor {
         // CCH signing — replaces the cch=00000 placeholder in the billing
         // header with an xxHash64 integrity token over the serialized body.
         if (isClaudeCodeCompatible(this.provider) || this.provider === "claude") {
+          if (passthroughForwardsRealCc) {
+            // In passthrough mode, the client sent a real CCH computed over its
+            // original body. If compression modified messages, that CCH is now
+            // stale: reset it to the 00000 placeholder so signRequestBody
+            // recomputes the correct value over the final serialized body.
+            bodyString = bodyString.replace(/\bcch=[0-9a-f]{5};/, "cch=00000;");
+          }
           bodyString = await signRequestBody(bodyString);
         }
 
@@ -1207,13 +1310,19 @@ export class BaseExecutor {
             });
           }
         }
+        if (shouldFingerprint) {
+          finalHeaders["Content-Length"] = String(Buffer.byteLength(bodyString, "utf8"));
+        }
         const fetchOptions: RequestInit = {
           method: "POST",
           headers: finalHeaders,
           body: bodyString,
         };
 
-        let response = await fetchWithStartTimeout(url, fetchOptions);
+        const doFetch = shouldFingerprint
+          ? (u: string, o: RequestInit) => caseSensitiveFetch(u, o)
+          : (u: string, o: RequestInit) => fetch(u, o);
+        let response = await fetchWithStartTimeout(url, fetchOptions, doFetch);
 
         // Context Editing 400-fallback for Claude-compatible relays.
         if (
@@ -1267,7 +1376,42 @@ export class BaseExecutor {
             }
             log?.debug?.(
               "FIELD_400",
-              `Upstream 400 rejected ${offending} on ${url} — retrying without it`
+              `Upstream 400 rejected ${offending} on ${url} - retrying without it`
+            );
+            response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
+          }
+        }
+
+        // Reactive tool-support downgrade: some models cannot do tool calling (e.g.
+        // llm7's gemma3:27b "does not support tools", publicai/apertus without
+        // --enable-auto-tool-choice). They reject the whole request 4xx before any
+        // content, which a streaming Responses client (Codex) sees as "stream closed
+        // before response.completed". Strip the tool trio once and retry so the request
+        // completes as a plain chat. Model-precise: only fires when the upstream itself
+        // reports the model lacks tool support. Covers 400 and 422 (cohere/litellm style).
+        if (
+          !toolFieldsStripped &&
+          (response.status === HTTP_STATUS.BAD_REQUEST ||
+            response.status === HTTP_STATUS.UNPROCESSABLE_ENTITY) &&
+          transformedBody &&
+          typeof transformedBody === "object"
+        ) {
+          const errText = await response
+            .clone()
+            .text()
+            .catch(() => "");
+          if (
+            isToolUnsupportedError(errText) &&
+            stripAllToolFields(transformedBody as Record<string, unknown>)
+          ) {
+            toolFieldsStripped = true;
+            let retryBody = JSON.stringify(transformedBody);
+            if (isClaudeCodeCompatible(this.provider) || this.provider === "claude") {
+              retryBody = await signRequestBody(retryBody);
+            }
+            log?.debug?.(
+              "TOOLS_UNSUPPORTED",
+              `Upstream ${response.status} reports model lacks tool support on ${url} - retrying without tools`
             );
             response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
           } else {

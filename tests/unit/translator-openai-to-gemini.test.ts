@@ -463,7 +463,13 @@ test("OpenAI -> Gemini request sanitizes long MCP tool names and strips unsuppor
   assert.equal(longToolParameters.properties?.paths?.items?.["x-ui"], undefined);
 });
 
-test("OpenAI -> Gemini request gives googleSearch precedence over function tools", () => {
+// Gemini rejects the googleSearch built-in mixed with functionDeclarations in the same
+// request. When a client sends BOTH (e.g. the Codex CLI, which always injects a web_search
+// built-in alongside its real function tools), the function declarations must win: dropping
+// them would strip the client's actual tools AND leave functionCallingConfig set with zero
+// declarations, which Gemini rejects with "Function calling config is set without
+// function_declarations." (previously googleSearch took precedence and caused that 400).
+test("OpenAI -> Gemini request keeps function tools when a web_search built-in is also present", () => {
   const result = openaiToGeminiRequest(
     "gemini-2.5-pro",
     {
@@ -483,10 +489,21 @@ test("OpenAI -> Gemini request gives googleSearch precedence over function tools
     false
   );
 
-  assert.deepEqual((result as any).tools, [{ googleSearch: {} }]);
+  const typed = result as unknown as {
+    tools?: Array<{ functionDeclarations?: Array<{ name: string }>; googleSearch?: unknown }>;
+    toolConfig?: unknown;
+  };
+  const tools = typed.tools ?? [];
+  assert.equal(tools.length, 1);
+  assert.deepEqual(
+    (tools[0].functionDeclarations ?? []).map((d) => d.name),
+    ["weather"]
+  );
+  assert.ok(!tools.some((t) => t.googleSearch), "googleSearch must not be mixed in");
+  assert.deepEqual(typed.toolConfig, { functionCallingConfig: { mode: "VALIDATED" } });
 });
 
-test("OpenAI -> Antigravity keeps googleSearch without function calling config", () => {
+test("OpenAI -> Antigravity keeps function tools when a web_search built-in is also present", () => {
   const result = openaiToAntigravityRequest(
     "gemini-2.5-pro",
     {
@@ -506,8 +523,22 @@ test("OpenAI -> Antigravity keeps googleSearch without function calling config",
     { projectId: "proj-search" } as any
   );
 
-  assert.deepEqual((result as any).request?.tools, [{ googleSearch: {} }]);
-  assert.equal(result.request.toolConfig, undefined);
+  const typed = result as unknown as {
+    request?: {
+      tools?: Array<{ functionDeclarations?: Array<{ name: string }>; googleSearch?: unknown }>;
+      toolConfig?: unknown;
+    };
+  };
+  const tools = typed.request?.tools ?? [];
+  assert.equal(tools.length, 1);
+  assert.deepEqual(
+    (tools[0].functionDeclarations ?? []).map((d) => d.name),
+    ["weather"]
+  );
+  assert.ok(!tools.some((t) => t.googleSearch), "googleSearch must not be mixed in");
+  assert.deepEqual(typed.request?.toolConfig, {
+    functionCallingConfig: { mode: "VALIDATED" },
+  });
 });
 
 test("OpenAI -> Gemini helper IDs and JSON parsing stay in the expected format", () => {

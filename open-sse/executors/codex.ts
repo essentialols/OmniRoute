@@ -27,6 +27,7 @@ import {
   applyCodexClientIdentityHeaders,
   applyCodexClientMetadata,
   createCodexClientIdentity,
+  isCodexPassthroughMode,
   type CodexClientIdentity,
 } from "../config/codexIdentity.ts";
 import { getAccessToken } from "../services/tokenRefresh.ts";
@@ -939,11 +940,15 @@ export class CodexExecutor extends BaseExecutor {
         nextInput.signal?.addEventListener("abort", abortHandler, { once: true });
 
         try {
-          ws = await websocketFn(toWebSocketUrl(url), {
-            browser: "chrome_142",
-            os: "windows",
-            headers,
-          });
+          const wsOpts: Record<string, unknown> = { headers };
+          if (!isCodexPassthroughMode()) {
+            // Impersonate Chrome 142 TLS fingerprint when NOT in passthrough mode.
+            // The real Codex CLI is a Rust binary, not Chrome, so no impersonation
+            // is closer to truth than a wrong Chrome fingerprint.
+            wsOpts.browser = "chrome_142";
+            wsOpts.os = "windows";
+          }
+          ws = await websocketFn(toWebSocketUrl(url), wsOpts);
           if (closed) return;
           if (nextInput.signal?.aborted) {
             finishStream({ reason: "client_aborted" });
@@ -1045,31 +1050,36 @@ export class CodexExecutor extends BaseExecutor {
   buildHeaders(credentials: ProviderCredentials, stream = true) {
     const isCompactRequest = isCompactResponsesEndpoint(credentials?.requestEndpointPath);
     const headers = super.buildHeaders(credentials, isCompactRequest ? false : true);
-    headers.Version = getCodexClientVersion();
-    setUserAgentHeader(headers, getCodexUserAgent());
 
-    // Add workspace binding header if workspaceId is persisted
+    if (!isCodexPassthroughMode()) {
+      // Synthesize identity headers only when NOT in passthrough mode.
+      // In passthrough mode the real Codex CLI's headers (Version, User-Agent,
+      // originator, session_id, x-codex-*) flow through untouched.
+      headers.Version = getCodexClientVersion();
+      setUserAgentHeader(headers, getCodexUserAgent());
+
+      const clientIdentity = credentials?.providerSpecificData?.codexClientIdentity as
+        CodexClientIdentity | null | undefined;
+
+      // Originator header — identifies the client type to the Codex backend.
+      // Ref: openai/codex login/src/auth/default_client.rs DEFAULT_ORIGINATOR = "codex_cli_rs"
+      headers["originator"] = "codex_cli_rs";
+
+      // session_id header — enables prompt cache affinity on the Codex backend.
+      // The official Codex client sets this to conversation_id (a stable UUID per session).
+      // Ref: openai/codex codex-api/src/requests/headers.rs build_conversation_headers()
+      const cacheSessionId = this.getPromptCacheSessionId(credentials, null);
+      if (cacheSessionId) {
+        headers["session_id"] = cacheSessionId;
+      }
+      applyCodexClientIdentityHeaders(headers, clientIdentity);
+    }
+
+    // Workspace binding is always needed (it's auth, not identity).
     const workspaceId = credentials?.providerSpecificData?.workspaceId;
     if (typeof workspaceId === "string" && workspaceId) {
       headers["chatgpt-account-id"] = workspaceId;
     }
-    const clientIdentity = credentials?.providerSpecificData?.codexClientIdentity as
-      | CodexClientIdentity
-      | null
-      | undefined;
-
-    // Originator header — identifies the client type to the Codex backend.
-    // Ref: openai/codex login/src/auth/default_client.rs DEFAULT_ORIGINATOR = "codex_cli_rs"
-    headers["originator"] = "codex_cli_rs";
-
-    // session_id header — enables prompt cache affinity on the Codex backend.
-    // The official Codex client sets this to conversation_id (a stable UUID per session).
-    // Ref: openai/codex codex-api/src/requests/headers.rs build_conversation_headers()
-    const cacheSessionId = this.getPromptCacheSessionId(credentials, null);
-    if (cacheSessionId) {
-      headers["session_id"] = cacheSessionId;
-    }
-    applyCodexClientIdentityHeaders(headers, clientIdentity);
 
     return headers;
   }
@@ -1143,6 +1153,10 @@ export class CodexExecutor extends BaseExecutor {
     stream: boolean,
     credentials: ProviderCredentials
   ) {
+    // NOTE: Body transforms in transformRequest are compatibility fixes, not identity
+    // synthesis. They remain active in CODEX_PASSTHROUGH_MODE because:
+    // - GPT-5 rejects system role, store=true, max_tokens, etc.
+    // - Passthrough mode only disables IDENTITY (headers, metadata, UA) synthesis.
     void stream;
     // Do not mutate the caller's payload in place. Combo quality checks and
     // other post-execute paths still inspect the original request body.

@@ -63,7 +63,7 @@ function normalizeHeaders(headers: HeadersInit | undefined): Record<string, stri
 }
 
 /**
- * TLS Client — Chrome 124 TLS fingerprint spoofing via wreq-js
+ * TLS Client — Chrome 142 TLS fingerprint spoofing via wreq-js
  * Singleton instance used to disguise Node.js TLS handshake as Chrome browser.
  *
  * wreq-js natively supports proxy — TLS fingerprinting works through proxy.
@@ -151,7 +151,7 @@ class TlsClient {
 
     const proxy = getProxyFromEnv();
     const sessionOpts: Record<string, unknown> = {
-      browser: "chrome_124",
+      browser: "chrome_142",
       os: "macos",
     };
     if (proxy) {
@@ -160,12 +160,12 @@ class TlsClient {
     }
 
     this.session = await createSessionFn(sessionOpts);
-    console.log("[TlsClient] Session created (Chrome 124 TLS fingerprint)");
+    console.log("[TlsClient] Session created (Chrome 142 TLS fingerprint)");
     return this.session;
   }
 
   /**
-   * Fetch with Chrome 124 TLS fingerprint.
+   * Fetch with Chrome 142 TLS fingerprint.
    * wreq-js Response is already fetch-compatible (headers, text(), json(), clone(), body).
    */
   async fetch(url: string, options: FetchOptions = {}) {

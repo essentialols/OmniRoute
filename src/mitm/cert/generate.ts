@@ -7,10 +7,8 @@ import { resolveMitmDataDir } from "../dataDir.ts";
 // on real clients, `server.key`/`server.crt` must be a ROOT CA (CA:TRUE), and
 // the operator trusts THAT CA, not a per-host leaf. A single static leaf (the
 // old behavior) only ever validated one host; every other SNI failed with a
-// hostname mismatch. The #6494 per-host SAN list was a partial workaround that
-// the per-SNI leaf minting now supersedes (server.cjs covers every host,
-// including ones added later, without regenerating the CA). install.ts already
-// trusts this file as "OmniRoute MITM Root CA".
+// hostname mismatch. install.ts already trusts this file as "OmniRoute MITM
+// Root CA".
 const CA_NAME = "OmniRoute MITM Root CA";
 
 /**

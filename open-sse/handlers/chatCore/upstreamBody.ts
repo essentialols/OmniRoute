@@ -16,6 +16,11 @@ import {
 } from "../../services/payloadRules.ts";
 import { getEffectiveToolLimit, getKnownToolLimit } from "../../services/toolLimitDetector.ts";
 import { providerSupportsCaching } from "../../utils/cacheControlPolicy.ts";
+import {
+  stripUnsupportedToolFields,
+  stripHeavyCodexToolsForBudget,
+} from "../../config/providerFieldStrips.ts";
+import { normalizeOpenAICompatMessages } from "./openaiCompatMessages.ts";
 import { FORMATS } from "../../translator/formats.ts";
 
 type LoggerLike = { debug?: (...args: unknown[]) => void } | null | undefined;
@@ -96,15 +101,36 @@ function backfillQwenOAuthUser(
   return bodyToSend;
 }
 
-// Inject prompt_cache_key only for providers that support it.
+// Normalize the OpenAI `prompt_cache_key` cache-routing hint per provider capability.
+//
+// Two responsibilities for OpenAI-format upstreams:
+//  1. STRIP a client-supplied key for providers that do not support caching. Responses-API
+//     clients (notably the Codex CLI) always send a session-scoped `prompt_cache_key`, but
+//     strict OpenAI-compatible upstreams that never implemented it reject the whole request
+//     with a 400 (e.g. Groq: "property 'prompt_cache_key' is unsupported"). Cerebras/Mistral
+//     silently ignore it today, but stripping is the correct, provider-agnostic normalization.
+//  2. INJECT a stable key for caching-capable providers when the client didn't supply one
+//     (unchanged behavior). `codex`/`xai`/`nvidia` are excluded from injection: codex injects
+//     its own downstream, and xai/nvidia reject the field. For the latter two, step 1 also
+//     strips any client-supplied key since providerSupportsCaching() is false for them.
 async function injectPromptCacheKey(
   bodyToSend: Body,
   provider: string | null | undefined,
   targetFormat: string
 ): Promise<Body> {
+  if (targetFormat !== FORMATS.OPENAI) return bodyToSend;
+
+  if (!providerSupportsCaching(provider)) {
+    if (bodyToSend.prompt_cache_key !== undefined || bodyToSend.promptCacheKey !== undefined) {
+      const cleaned = { ...bodyToSend };
+      delete cleaned.prompt_cache_key;
+      delete cleaned.promptCacheKey;
+      return cleaned;
+    }
+    return bodyToSend;
+  }
+
   if (
-    targetFormat === FORMATS.OPENAI &&
-    providerSupportsCaching(provider) &&
     !bodyToSend.prompt_cache_key &&
     Array.isArray(bodyToSend.messages) &&
     !["nvidia", "codex", "xai"].includes(provider)
@@ -116,6 +142,31 @@ async function injectPromptCacheKey(
     }
   }
   return bodyToSend;
+}
+
+// Normalize an OpenAI-format upstream body for strict OpenAI-compatible executors.
+//
+// Only runs for targetFormat === "openai" (gemini/claude have dedicated handling), and
+// only rewrites when something is unroutable as-is. Fixes Codex/Responses-API injections
+// that strict OpenAI-compat upstreams reject:
+//  - text-only multipart content arrays -> string (llm7 "does not support vision input");
+//  - adjacent system messages (from developer -> system normalization) merged into one
+//    (uncloseai "System message must be at the beginning");
+//  - tool fields the provider cannot accept (cohere parallel_tool_calls 422; publicai
+//    tools/tool_choice 400 without --enable-auto-tool-choice).
+function normalizeOpenAICompatUpstreamBody(
+  bodyToSend: Body,
+  provider: string | null | undefined,
+  targetFormat: string
+): Body {
+  if (targetFormat !== FORMATS.OPENAI) return bodyToSend;
+  let next = normalizeOpenAICompatMessages(bodyToSend) as Body;
+  next = stripUnsupportedToolFields(next, provider);
+  // Drop codex's heavy sub-agent orchestration tool group for providers whose per-request
+  // token budget cannot fit the full codex tool catalog (e.g. Groq free tier's 12k TPM cap,
+  // which 413s a ~12.9k-token codex request before streaming).
+  next = stripHeavyCodexToolsForBudget(next, provider);
+  return next;
 }
 
 export async function prepareUpstreamBody(opts: {
@@ -163,6 +214,7 @@ export async function prepareUpstreamBody(opts: {
   bodyToSend = truncateToolList(bodyToSend, provider, bypassDefaultToolLimit ?? false, log);
   bodyToSend = backfillQwenOAuthUser(bodyToSend, provider, credentials, log);
   bodyToSend = await injectPromptCacheKey(bodyToSend, provider, targetFormat);
+  bodyToSend = normalizeOpenAICompatUpstreamBody(bodyToSend, provider, targetFormat);
 
   return bodyToSend;
 }

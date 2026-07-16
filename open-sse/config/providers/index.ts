@@ -19,6 +19,7 @@ import { llamagateProvider } from "./registry/llamagate/index.ts";
 import { glmProvider } from "./registry/glm/index.ts";
 import { glmtProvider } from "./registry/glm/t/index.ts";
 import { glm_cnProvider } from "./registry/glm/cn/index.ts";
+import { glm_webProvider } from "./registry/glm/web/index.ts";
 import { traeProvider } from "./registry/trae/index.ts";
 import { muse_spark_webProvider } from "./registry/muse-spark-web/index.ts";
 import { lmarenaProvider } from "./registry/lmarena/index.ts";
@@ -101,6 +102,7 @@ import { haiperProvider } from "./registry/haiper/index.ts";
 import { bytezProvider } from "./registry/bytez/index.ts";
 import { blackboxProvider } from "./registry/blackbox/index.ts";
 import { blackbox_webProvider } from "./registry/blackbox/web/index.ts";
+import { braveProvider } from "./registry/brave/index.ts";
 import { uncloseaiProvider } from "./registry/uncloseai/index.ts";
 import { nscaleProvider } from "./registry/nscale/index.ts";
 import { chatgpt_webProvider } from "./registry/chatgpt-web/index.ts";
@@ -132,6 +134,7 @@ import { nanogptProvider } from "./registry/nanogpt/index.ts";
 import { scalewayProvider } from "./registry/scaleway/index.ts";
 import { agentrouterProvider } from "./registry/agentrouter/index.ts";
 import { zaiProvider } from "./registry/zai/index.ts";
+import { zai_webProvider } from "./registry/zai-web/index.ts";
 import { waferProvider } from "./registry/wafer/index.ts";
 import { huggingchatProvider } from "./registry/huggingchat/index.ts";
 import { yuanbao_webProvider } from "./registry/yuanbao-web/index.ts";
@@ -204,6 +207,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   glm: glmProvider,
   glmt: glmtProvider,
   "glm-cn": glm_cnProvider,
+  "glm-web": glm_webProvider,
   trae: traeProvider,
   "muse-spark-web": muse_spark_webProvider,
   lmarena: lmarenaProvider,
@@ -286,6 +290,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   bytez: bytezProvider,
   blackbox: blackboxProvider,
   "blackbox-web": blackbox_webProvider,
+  brave: braveProvider,
   uncloseai: uncloseaiProvider,
   nscale: nscaleProvider,
   "chatgpt-web": chatgpt_webProvider,
@@ -317,6 +322,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   scaleway: scalewayProvider,
   agentrouter: agentrouterProvider,
   zai: zaiProvider,
+  "zai-web": zai_webProvider,
   huggingchat: huggingchatProvider,
   "yuanbao-web": yuanbao_webProvider,
   galadriel: galadrielProvider,

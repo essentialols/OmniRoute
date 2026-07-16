@@ -206,9 +206,11 @@ const nextConfig = {
     // when broad fs/path tracing pulls the whole repository into the NFT graph.
     "/*": [
       "./.git/**/*",
-      // Build outputs: tracing these pulls the prior build's dist/ into the
-      // standalone, which prepublish then copies back into dist/, compounding
-      // into dist/dist/dist/... (~3GB, 35 levels deep) on every build.
+      // Build output: tracing dist/ bakes the prior build's dist/ into the
+      // standalone, which prepublish copies back into dist/, compounding into
+      // dist/dist/dist/... on every build. Do NOT exclude ./.build here; it IS
+      // the distDir, and excluding it strips the standalone's own runtime deps
+      // so every route 500s at request time.
       "./dist/**/*",
       "./_tasks/**/*",
       "./_references/**/*",

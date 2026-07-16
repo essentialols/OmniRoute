@@ -10,9 +10,18 @@
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
+// ---------- Passthrough mode toggle ---------------------------------------
+
+const PASSTHROUGH_TRUTHY = new Set(["1", "true", "yes", "on"]);
+
+export function isPassthroughMode(): boolean {
+  const val = (process.env.CLAUDE_PASSTHROUGH_MODE ?? "").trim().toLowerCase();
+  return PASSTHROUGH_TRUTHY.has(val);
+}
+
 // ---------- Versions ------------------------------------------------------
 
-export const CLAUDE_CODE_VERSION = "2.1.195";
+export const CLAUDE_CODE_VERSION = "2.1.207";
 /** Bundled @anthropic-ai/sdk version for the pinned CLI release. */
 export const CLAUDE_CODE_STAINLESS_VERSION = "0.94.0";
 
@@ -46,8 +55,10 @@ export function stainlessArch(): string {
   }
 }
 
+const CLAUDE_CODE_NODE_VERSION = "v26.3.0";
+
 export function stainlessRuntimeVersion(): string {
-  return process.version;
+  return CLAUDE_CODE_NODE_VERSION;
 }
 
 // ---------- Bounded-map helper -------------------------------------------
@@ -77,6 +88,83 @@ export function passthroughUpstreamSessionId(
   if (typeof raw !== "string") return null;
   const v = raw.trim();
   return UUID_RE.test(v) ? v : null;
+}
+
+// ---------- Passthrough identity-forwarding gate --------------------------
+
+/**
+ * True when passthrough is actually forwarding a *genuine* Claude Code client
+ * identity — i.e. `clientHeaders` carry the CC / Stainless identity markers a
+ * real `claude-cli` session sends. Passthrough exists to relay real CC traffic
+ * verbatim; when the inbound request is NOT a genuine CC client (e.g. a plain
+ * OpenAI-compatible caller) there is no real identity to forward, so the caller
+ * must fall back to the normal cloaked synthesis path instead of shipping an
+ * uncloaked synthesized identity that Anthropic throttles (429). Every
+ * synthesis-vs-forward decision in the Claude path should gate on this, not on
+ * the raw `isPassthroughMode()` env toggle.
+ */
+export function passthroughForwardsRealCcIdentity(
+  clientHeaders: Record<string, string | undefined> | null | undefined
+): boolean {
+  if (!clientHeaders) return false;
+  // Case-insensitive header lookup (inbound headers are normally lowercased, but
+  // do not assume it: match on the lowercased key).
+  const lowered: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(clientHeaders)) lowered[k.toLowerCase()] = v;
+  const get = (n: string): string | undefined => lowered[n.toLowerCase()];
+  // A real CC session forwards its own validated session id.
+  if (passthroughUpstreamSessionId(clientHeaders)) return true;
+  // Stainless SDK marker — every real @anthropic-ai/sdk (claude-cli) client sends it.
+  if (typeof get("x-stainless-package-version") === "string") return true;
+  // CC entrypoint marker.
+  const xApp = get("x-app");
+  if (typeof xApp === "string" && xApp.trim().toLowerCase() === "cli") return true;
+  // claude-code / claude-cli user agent.
+  const ua = get("user-agent");
+  if (
+    typeof ua === "string" &&
+    (ua.toLowerCase().includes("claude-code") || ua.toLowerCase().includes("claude-cli"))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * The Claude OAuth identity-cloak decision. Cloak (synthesize a per-account
+ * identity) for any Claude Code client or OAuth token, EXCEPT when passthrough is
+ * genuinely forwarding a real CC client identity — only then do we relay the
+ * client's own identity verbatim. A non-CC caller in passthrough still gets
+ * cloaked so its request is not throttled.
+ */
+export function shouldCloakClaudeIdentity(opts: {
+  isClaudeCodeClient: boolean;
+  hasClaudeOAuthToken: boolean;
+  passthroughActive: boolean;
+  clientHeaders: Record<string, string | undefined> | null | undefined;
+}): boolean {
+  const forwardsRealCc =
+    opts.passthroughActive && passthroughForwardsRealCcIdentity(opts.clientHeaders);
+  return (opts.isClaudeCodeClient || opts.hasClaudeOAuthToken) && !forwardsRealCc;
+}
+
+/**
+ * Drop a top-level `context_management` from a passthrough request body. When
+ * passthrough forwards a real CC client's own `anthropic-beta` verbatim and that
+ * header does not negotiate `context-management-2025-06-27`, strict Anthropic
+ * rejects a top-level `context_management` with 400
+ * "context_management: Extra inputs are not permitted". OmniRoute's thinking
+ * pairing can inject that field, so it must be stripped before the forwarded
+ * request is signed. No-op when `forwardsRealCcIdentity` is false — the non-CC
+ * fallback runs the full synthesis path, which negotiates the matching beta
+ * itself and is accepted (as the non-passthrough path already is).
+ */
+export function stripPassthroughInjectedContextManagement(
+  body: Record<string, unknown> | null | undefined,
+  forwardsRealCcIdentity: boolean
+): void {
+  if (!forwardsRealCcIdentity || !body || typeof body !== "object") return;
+  delete body.context_management;
 }
 
 // ---------- Session ID (per OAuth account, process lifetime) -------------
@@ -151,7 +239,7 @@ export async function fetchClaudeBootstrap(accessToken: string): Promise<ClaudeB
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: "application/json",
-        "User-Agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`,
+        "User-Agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, sdk-cli)`,
         "anthropic-beta": "oauth-2025-04-20",
       },
       signal: ctrl.signal,
@@ -365,12 +453,6 @@ export function selectBetaFlags(
   const flags: string[] = [];
   if (isFullAgent) flags.push("claude-code-20250219");
   flags.push("oauth-2025-04-20");
-  if (isContext1m) {
-    flags.push("context-1m-2025-08-07", "mid-conversation-system-2026-04-07");
-  }
-  // Thinking betas: gated on the client header (#3415). interleaved-thinking forces
-  // interleaved-thinking semantics that conflict with a tool_choice-forced turn,
-  // producing malformed opus tool_use streams when the client never asked for it.
   if (allowThinking) {
     flags.push(
       "interleaved-thinking-2025-05-14",
@@ -379,16 +461,12 @@ export function selectBetaFlags(
     );
   }
   flags.push("context-management-2025-06-27", "prompt-caching-scope-2026-01-05");
-  if (hasStructuredOutput || isFullAgent) flags.push("advisor-tool-2026-03-01");
   if (hasStructuredOutput && !isFullAgent) flags.push("structured-outputs-2025-12-15");
-  // extended-cache-ttl is sent for all full-agent shapes (incl. Haiku); the
-  // heavier afk-mode / advanced-tool-use / effort flags are Opus/Sonnet-only.
-  if (isFullAgent) {
-    flags.push("extended-cache-ttl-2025-04-11", "cache-diagnosis-2026-04-07");
-  }
+  if (isHeavyAgent) flags.push("mid-conversation-system-2026-04-07");
   if (isHeavyAgent && allowHeavy) {
     flags.push("advanced-tool-use-2025-11-20", "effort-2025-11-24");
   }
+  if (isFullAgent) flags.push("extended-cache-ttl-2025-04-11");
   return flags.join(",");
 }
 

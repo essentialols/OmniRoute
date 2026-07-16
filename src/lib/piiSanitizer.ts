@@ -126,8 +126,15 @@ export interface SanitizeResult {
 /**
  * Scan and optionally redact PII from LLM response text.
  */
-export function sanitizePII(text: string, isStreaming = false): SanitizeResult {
-  if (!isEnabled() || !text || typeof text !== "string") {
+export function sanitizePII(
+  text: string,
+  isStreaming = false,
+  forceEnabled?: boolean
+): SanitizeResult {
+  // `forceEnabled` lets a per-provider trust-tier decision (see piiTrust.ts)
+  // override the global feature flag. When undefined, the global flag governs.
+  const enabled = forceEnabled ?? isEnabled();
+  if (!enabled || !text || typeof text !== "string") {
     return { text, detections: [], redacted: false };
   }
 
@@ -351,18 +358,24 @@ export function redactPIIForCapture(text: string): string {
 /**
  * Sanitize a streaming chunk (text content only).
  */
-export function sanitizePIIChunk(chunk: string, isStopSignal = false): string {
-  if (!isEnabled()) return chunk;
+export function sanitizePIIChunk(
+  chunk: string,
+  isStopSignal = false,
+  forceEnabled?: boolean
+): string {
+  const enabled = forceEnabled ?? isEnabled();
+  if (!enabled) return chunk;
   // If it's a stop signal, we are flushing the final chunk, so we shouldn't treat it as a partial streaming buffer (force redaction)
-  const { text } = sanitizePII(chunk, !isStopSignal);
+  const { text } = sanitizePII(chunk, !isStopSignal, forceEnabled);
   return text;
 }
 
 /**
  * Sanitize PII in a full response object (OpenAI-compatible format).
  */
-export function sanitizePIIResponse(response: any): any {
-  if (!isEnabled() || !response) return response;
+export function sanitizePIIResponse(response: any, forceEnabled?: boolean): any {
+  const enabled = forceEnabled ?? isEnabled();
+  if (!enabled || !response) return response;
 
   try {
     const visited = new WeakSet();
@@ -373,7 +386,7 @@ export function sanitizePIIResponse(response: any): any {
       }
       if (!obj) return obj;
       if (typeof obj === "string") {
-        return sanitizePII(obj).text;
+        return sanitizePII(obj, false, forceEnabled).text;
       }
       if (typeof obj === "object") {
         if (visited.has(obj)) {
@@ -419,7 +432,7 @@ export function sanitizePIIResponse(response: any): any {
     // Fail secure — try raw string sanitization instead of failing open
     try {
       const serialized = JSON.stringify(response);
-      const { text: sanitized } = sanitizePII(serialized);
+      const { text: sanitized } = sanitizePII(serialized, false, forceEnabled);
       return JSON.parse(sanitized);
     } catch (fallbackErr) {
       // Suppress err.message — never surface upstream error detail to the client

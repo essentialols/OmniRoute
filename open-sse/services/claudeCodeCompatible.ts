@@ -42,10 +42,10 @@ export {
   CLAUDE_CODE_COMPATIBLE_REDACT_THINKING_BETA,
   resolveClaudeCodeCompatibleAnthropicBeta,
 } from "./claudeCodeCompatibleBeta.ts";
-export const CLAUDE_CODE_COMPATIBLE_VERSION = "2.1.195";
-export const CLAUDE_CODE_COMPATIBLE_USER_AGENT = "claude-cli/2.1.195 (external, sdk-cli)";
+export const CLAUDE_CODE_COMPATIBLE_VERSION = "2.1.207";
+export const CLAUDE_CODE_COMPATIBLE_USER_AGENT = "claude-cli/2.1.207 (external, sdk-cli)";
 export const CLAUDE_CODE_COMPATIBLE_STAINLESS_PACKAGE_VERSION = "0.94.0";
-export const CLAUDE_CODE_COMPATIBLE_STAINLESS_RUNTIME_VERSION = "v24.3.0";
+export const CLAUDE_CODE_COMPATIBLE_STAINLESS_RUNTIME_VERSION = "v26.3.0";
 export const CONTEXT_1M_BETA_HEADER = "context-1m-2025-08-07";
 const CLAUDE_CODE_COMPATIBLE_DEFAULT_SYSTEM_BLOCKS = [
   {
@@ -205,6 +205,8 @@ export function buildClaudeCodeCompatibleHeaders(
     "X-Stainless-Runtime": "node",
     "X-Stainless-Runtime-Version": CLAUDE_CODE_COMPATIBLE_STAINLESS_RUNTIME_VERSION,
     "accept-encoding": "gzip, deflate, br, zstd",
+    connection: "keep-alive",
+    "x-client-request-id": randomUUID(),
     ...(sessionId ? { "X-Claude-Code-Session-Id": sessionId } : {}),
   };
 }

@@ -40,11 +40,11 @@
  *     JSON/chat bodies that the endpoint/content-type binary check below misses.
  *   - Bodies are then secret-masked (`maskSecret`) AND PII-redacted
  *     (`redactPIIForCapture`) before ever touching disk. Text is NOT truncated
- *     by default (`OMNIROUTE_CAPTURE_MAX_BODY_KB=0` = unlimited, the default;
+ *     by default (`OMNIROUTE_CAPTURE_MAX_BODY_KB=0` = unlimited, the default —
  *     "save it all"). Operators may still set a positive KB cap.
  *   - Binary media endpoints (audio/image/video/speech) and binary
- *     content-types are ALSO captured as metadata only (their base64 bodies are
- *     omitted): belt and suspenders with the in-body redaction above.
+ *     content-types are ALSO captured as metadata only — their base64 bodies are
+ *     omitted (belt and suspenders with the in-body redaction above).
  *   - The response body is read via `response.clone()` (an independent tee
  *     branch), leaving the ORIGINAL `Response` fully intact for the caller. All
  *     capture work is fire-and-forget and wrapped in try/catch — a capture
@@ -275,7 +275,7 @@ function capString(value: string, limit: number): string {
 // `input_audio.data`, multimodal parts) and image/audio OUTPUTS (`b64_json`,
 // data URIs). Those blobs are huge and hold no useful text, and the user does
 // not want them persisted. We replace them, at the SERIALIZED-string level
-// (regex over the JSON text, no parse, robust to any schema), with a compact
+// (regex over the JSON text — no parse, robust to any schema), with a compact
 // size-annotated placeholder, preserving every surrounding byte of real text.
 
 /** Minimum base64 run treated as encoded binary (~192 bytes); shorter stays text. */
@@ -286,7 +286,7 @@ const DATA_URI_MEDIA_RE =
   /data:(image|audio|video)\/([A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*);base64,([A-Za-z0-9+/]+={0,2})/gi;
 
 // Any JSON string value that is a long, continuous, pure-base64 run (no spaces /
-// punctuation): standalone base64 media in `b64_json`, `input_audio.data`,
+// punctuation) — standalone base64 media in `b64_json`, `input_audio.data`,
 // `audio.data`, a raw `image_url.url`, etc. Real prose never looks like this.
 const QUOTED_BASE64_RE = new RegExp(`"([A-Za-z0-9+/]{${MEDIA_MIN_BASE64_LEN},}={0,2})"`, "g");
 
@@ -314,10 +314,10 @@ function redactMediaBlobs(body: string): string {
 }
 
 /**
- * Redact in-body media to a placeholder, mask secrets, redact PII, then cap.
- * Used for both request and response bodies. Media redaction runs FIRST so a
- * huge base64 blob never consumes the (optional) size budget, and the cap
- * (unlimited by default) then applies to text only. Cap is applied LAST.
+ * Redact in-body media → placeholder, mask secrets, redact PII, then cap. Used
+ * for both request and response bodies. Media redaction runs FIRST so a huge
+ * base64 blob never consumes the (optional) size budget, and the cap — unlimited
+ * by default — then applies to text only. Cap is applied LAST.
  */
 function scrubBody(value: string | null | undefined, limit: number): string | null {
   if (typeof value !== "string" || value.length === 0) return null;
@@ -343,21 +343,6 @@ function isBinaryContentType(contentType: string | null): boolean {
     ct.startsWith("video/") ||
     ct.startsWith("application/octet-stream")
   );
-}
-
-/**
- * Binary-ness of a CLIENT REQUEST body, decided by its content-type (the
- * correct signal for `client_in`; unlike `isBinaryMediaUrl`, which reads the
- * upstream URL/endpoint and is meant for the response side). A file upload
- * (`multipart/form-data`, e.g. audio transcription/translation) or a raw
- * audio/image/video POST is binary and captured as metadata only; a JSON
- * request (chat, embeddings, moderations, image GENERATION, TTS `audio/speech`)
- * is text and its body is captured (with in-body base64 media redacted).
- */
-export function isBinaryRequestContentType(contentType: string | null): boolean {
-  if (!contentType) return false;
-  const ct = contentType.toLowerCase();
-  return ct.startsWith("multipart/form-data") || isBinaryContentType(ct);
 }
 
 /**
@@ -518,13 +503,7 @@ export function captureClientIn(input: CaptureClientInInput): void {
   try {
     const limit = maxBodyBytes();
     const headers = toHeaderRecord(input.clientHeaders);
-    // The client request's binary-ness is decided by its CONTENT-TYPE, not the
-    // endpoint path: a multipart file upload (audio transcription/translation)
-    // is binary and stored as metadata only, while a JSON request on a "media"
-    // endpoint (image GENERATION prompt, TTS input text) is real text and IS
-    // captured (any embedded base64 is stripped by scrubBody's media redaction).
-    const contentType = headerLookup(headers as Record<string, string> | null, "content-type");
-    const isBinary = isBinaryRequestContentType(contentType);
+    const isBinary = isBinaryMediaUrl(input.endpoint);
     const bodyStr = serializeBody(input.clientBody);
     const entry: CaptureEntry = {
       timestamp: new Date().toISOString(),

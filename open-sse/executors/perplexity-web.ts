@@ -346,7 +346,9 @@ export class PerplexityWebExecutor extends BaseExecutor {
     let pplxMode: string;
     let modelPref: string;
     if (thinking && THINKING_MAP[model]) {
-      pplxMode = "search";
+      // "concise" (not the retired "search" mode, which now returns FAILED); the
+      // thinking model is selected via model_preference. See MODEL_MAP note.
+      pplxMode = "concise";
       modelPref = THINKING_MAP[model];
       log?.info?.("PPLX-WEB", `Thinking mode → ${model} using ${modelPref}`);
     } else if (MODEL_MAP[model]) {
