@@ -21,9 +21,23 @@ const TOOL_ARG_DELTA_EVENT_TYPES = new Set([
   "response.custom_tool_call_input.delta",
 ]);
 
+// OpenAI Responses API events whose `delta`/`text` field carries the model's
+// chain-of-thought (reasoning), NOT the visible answer. Their text MUST be routed
+// through the reasoning buffer, never the shared visible-content buffer. Otherwise
+// reasoning surfaces inside `response.output_text.*` and gets duplicated by the
+// snapshot re-emit (#responses-stream reasoning leak).
+const REASONING_TEXT_EVENT_TYPES = new Set([
+  "response.reasoning_text.delta",
+  "response.reasoning_text.done",
+  "response.reasoning_summary_text.delta",
+  "response.reasoning_summary_text.done",
+]);
+
 // Resolve a string field's category with awareness of the enclosing SSE event type.
 // The `delta` key is prose only for response.output_text.delta; for the tool-argument
-// delta events it is structured JSON and is treated as toolArgs (passthrough).
+// delta events it is structured JSON and is treated as toolArgs (passthrough); for the
+// reasoning delta/done events the `delta`/`text` payload is reasoning, kept in its own
+// buffer so it never bleeds into the visible answer.
 export function resolveFieldCategory(key: string, eventType?: unknown): FieldCategory {
   if (
     key === "delta" &&
@@ -31,6 +45,13 @@ export function resolveFieldCategory(key: string, eventType?: unknown): FieldCat
     TOOL_ARG_DELTA_EVENT_TYPES.has(eventType)
   ) {
     return "toolArgs";
+  }
+  if (
+    (key === "delta" || key === "text") &&
+    typeof eventType === "string" &&
+    REASONING_TEXT_EVENT_TYPES.has(eventType)
+  ) {
+    return "reasoning";
   }
   return getFieldCategory(key);
 }
@@ -79,7 +100,13 @@ export function createSseTextTransform(
     isSnapshot?: boolean
   ) => string,
   onFlush?: (lastJson: any, isJsonStream?: boolean, lastContentJson?: any) => any,
-  onCancel?: () => void
+  onCancel?: () => void,
+  // Invoked when a final-snapshot event (`*.done` / `*.completed`) is encountered,
+  // BEFORE that event is emitted. Returns properly-framed SSE events (e.g. a
+  // response.output_text.delta carrying the window-held tail) to enqueue first, so the
+  // streamed deltas sum to the full text exactly once and no held-back text is bolted
+  // onto the snapshot payload with a mismatched `event:` line.
+  onSnapshotDrain?: (json: any) => Array<{ type: string; payload: any }>
 ): TransformStream {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder("utf-8");
@@ -262,6 +289,21 @@ export function createSseTextTransform(
           }
 
           lastJson = json;
+
+          // Emit any window-held tail as a PROPERLY-FRAMED delta event before the
+          // snapshot itself, so streamed deltas add up to the full text once and the
+          // tail is never re-emitted onto the snapshot payload (avoids the visible-text
+          // and reasoning duplication / event-line mismatch).
+          if (isSnapshot && onSnapshotDrain) {
+            for (const drain of onSnapshotDrain(json)) {
+              controller.enqueue(
+                encoder.encode(
+                  `event: ${drain.type}\n${prefix}${JSON.stringify(drain.payload)}\n\n`
+                )
+              );
+            }
+          }
+
           if (pendingEventLine) {
             controller.enqueue(encoder.encode(pendingEventLine + "\n"));
             pendingEventLine = "";
