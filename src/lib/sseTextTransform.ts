@@ -12,6 +12,29 @@ export function getFieldCategory(key: string): FieldCategory {
   return CATEGORY_MAP[key] || "content";
 }
 
+// OpenAI Responses API events whose `delta` field carries tool-argument / apply_patch
+// JSON, NOT prose. Only `response.output_text.delta` should be sanitized as text; the
+// tool-argument delta variants must pass through untouched (routing them into the PII
+// rolling-content buffer scrambles them exactly like the item_id/status class did).
+const TOOL_ARG_DELTA_EVENT_TYPES = new Set([
+  "response.function_call_arguments.delta",
+  "response.custom_tool_call_input.delta",
+]);
+
+// Resolve a string field's category with awareness of the enclosing SSE event type.
+// The `delta` key is prose only for response.output_text.delta; for the tool-argument
+// delta events it is structured JSON and is treated as toolArgs (passthrough).
+export function resolveFieldCategory(key: string, eventType?: unknown): FieldCategory {
+  if (
+    key === "delta" &&
+    typeof eventType === "string" &&
+    TOOL_ARG_DELTA_EVENT_TYPES.has(eventType)
+  ) {
+    return "toolArgs";
+  }
+  return getFieldCategory(key);
+}
+
 const STOP_EVENT_TYPES = new Set([
   "response.done",
   "response.completed",
@@ -131,6 +154,13 @@ export function createSseTextTransform(
             // so funneled it into the shared rolling-content buffer and cross-
             // contaminated the sibling `delta` text (fields scrambled, #responses-stream).
             "item_id",
+            // function_call / custom_tool_call correlation id (bare non-snapshot string
+            // on response.output_item.added, openai-responses.ts ~L393/400). Same
+            // scrambling class as item_id; codex relies on it to correlate tool calls.
+            "call_id",
+            // custom_tool_call / custom_tool_call_input.done raw apply_patch payload
+            // (openai-responses.ts ~L392/452/458). Structured patch, must not be PII-split.
+            "input",
             "model",
             "object",
             "created",
@@ -183,7 +213,7 @@ export function createSseTextTransform(
               }
               if (typeof obj[key] === "string") {
                 const val = obj[key];
-                const field: FieldCategory = getFieldCategory(key);
+                const field: FieldCategory = resolveFieldCategory(key, json.type);
                 if (field === "toolArgs" || field === "partialJson") {
                   obj[key] = val;
                   matched = true;

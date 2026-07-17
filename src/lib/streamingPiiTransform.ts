@@ -130,11 +130,14 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
     // Explicitly target formats to prevent metadata corruption and leakage
     const METADATA_KEYS = [
       "id",
-      // Keep aligned with sseTextTransform.ts METADATA_KEYS: `item_id` and
-      // `status` are OpenAI Responses API structural fields (identifier + lifecycle
-      // enum), not model output. Excluding them from the sanitize/buffer path is what
-      // prevents them from cross-contaminating the visible `delta` text.
+      // Keep aligned with sseTextTransform.ts METADATA_KEYS: `item_id`, `call_id`,
+      // `status`, and `input` are OpenAI Responses API structural fields (identifiers,
+      // lifecycle enum, apply_patch payload), not model output. Excluding them from the
+      // sanitize/buffer path is what prevents them from cross-contaminating the visible
+      // `delta` text (item_id/status on the text path, call_id/input on the tool path).
       "item_id",
+      "call_id",
+      "input",
       "model",
       "object",
       "created",
