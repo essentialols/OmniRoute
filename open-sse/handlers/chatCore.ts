@@ -73,6 +73,7 @@ import { defaultClaudeToolType } from "./chatCore/claudeToolDefaults.ts";
 import { injectSystemPrompt, injectCustomSystemPrompt } from "../services/systemPrompt.ts";
 import { translateRequest, needsTranslation } from "../translator/index.ts";
 import { FORMATS } from "../translator/formats.ts";
+import { extractResponsesCustomToolNames } from "../translator/request/openai-responses.ts";
 import { sanitizeKiroTools } from "../utils/kiroSanitizer.ts";
 import { splitMisplacedToolResults } from "../translator/helpers/claudeHelper.ts";
 import {
@@ -4446,6 +4447,18 @@ export async function handleChatCore({
     !isDroidCLI;
   const streamStateBody = finalBody || body;
 
+  // Codex declares its composer/exec tools (exec, apply_patch) with Responses
+  // `type:"custom"`. The request translation converts them to `{ input:string }`
+  // function tools, so the returned tool_calls arrive as ordinary function calls.
+  // Thread the original custom-tool names into the response translator so it re-emits
+  // those tool_calls as Responses `custom_tool_call` items (Codex rejects a
+  // `function_call` for a custom tool: "invoked with incompatible payload"). Extracted
+  // from the untranslated client body; empty for non-Responses clients (harmless).
+  const responsesCustomToolNames =
+    clientResponseFormat === FORMATS.OPENAI_RESPONSES
+      ? extractResponsesCustomToolNames(body)
+      : null;
+
   if (needsResponsesTranslation) {
     // Provider returns openai-responses, translate to openai (Chat Completions) that clients expect
     log?.debug?.("STREAM", `Responses translation mode: openai-responses → openai`);
@@ -4486,7 +4499,8 @@ export async function handleChatCore({
       resolveSuppressThinkClose({
         userAgent: streamUserAgent,
         thinkingMarkerHeader,
-      })
+      }),
+      responsesCustomToolNames
     );
   } else {
     log?.debug?.("STREAM", `Standard passthrough mode`);

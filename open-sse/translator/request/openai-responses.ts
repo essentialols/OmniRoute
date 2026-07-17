@@ -30,6 +30,39 @@ import {
 export { openaiToOpenAIResponsesRequest } from "./openai-responses/toResponses.ts";
 
 /**
+ * Collect the names of tools the Responses client declared with `type:"custom"`
+ * (Codex composer/exec tools, e.g. `exec` and `apply_patch`). The request side
+ * converts these to a `{ input: string }` function schema so the upstream model
+ * emits structured tool_calls; the RESPONSE side must then surface the returned
+ * tool_call as a Responses `custom_tool_call` rather than a `function_call`, or
+ * Codex rejects it ("tool <name> invoked with incompatible payload"). Reads both
+ * the top-level `tools` field and any `additional_tools` input items (newer Codex
+ * composer mode packs its tools there). Returned so the caller can thread the set
+ * into the response-translation state (see openai-responses response translator).
+ */
+export function extractResponsesCustomToolNames(body: unknown): string[] {
+  const root = toRecord(body);
+  const names = new Set<string>();
+  const collect = (toolsValue: unknown) => {
+    for (const toolValue of toArray(toolsValue)) {
+      const tool = toRecord(toolValue);
+      if (toString(tool.type) === "custom") {
+        const name = toString(tool.name).trim();
+        if (name) names.add(name);
+      }
+    }
+  };
+  collect(root.tools);
+  for (const itemValue of toArray(root.input)) {
+    const item = toRecord(itemValue);
+    if (toString(item.type) === "additional_tools" && Array.isArray(item.tools)) {
+      collect(item.tools);
+    }
+  }
+  return [...names];
+}
+
+/**
  * Convert OpenAI Responses API request to OpenAI Chat Completions format
  */
 export function openaiResponsesToOpenAIRequest(
