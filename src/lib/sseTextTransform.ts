@@ -125,9 +125,18 @@ export function createSseTextTransform(
 
           const METADATA_KEYS = [
             "id",
+            // OpenAI Responses API structural identifier repeated on every event
+            // (response.output_text.delta / .content_part.* / .output_item.*).
+            // It is not model output, so it must never be buffered/sanitized: doing
+            // so funneled it into the shared rolling-content buffer and cross-
+            // contaminated the sibling `delta` text (fields scrambled, #responses-stream).
+            "item_id",
             "model",
             "object",
             "created",
+            // Responses API lifecycle enum ("in_progress"/"completed"/...). Structural,
+            // never PII; buffering it leaked "in_progress" into visible deltas.
+            "status",
             "finish_reason",
             "finishReason",
             "role",
