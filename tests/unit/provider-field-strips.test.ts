@@ -5,6 +5,7 @@ import {
   stripGroqUnsupportedFields,
   stripHeavyCodexToolsForBudget,
   canonicalizeTools,
+  anchorJsonSchemaPatterns,
 } from "../../open-sse/config/providerFieldStrips.ts";
 
 test("findOffendingField matches known field names in a 400 body", () => {
@@ -183,4 +184,315 @@ test("canonicalizeTools produces same array order regardless of input order", ()
   const names2 = out2.tools.map((t: Record<string, unknown>) => toolFnName(t));
   assert.deepEqual(names1, names2);
   assert.deepEqual(names1, ["exec", "read"]);
+});
+
+// ── anchorJsonSchemaPatterns ─────────────────────────────────────────────────
+
+test("anchorJsonSchemaPatterns anchors unanchored pattern in tool parameters", () => {
+  const body = {
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "cron",
+          parameters: {
+            type: "object",
+            properties: {
+              schedule: { type: "string", pattern: "[0-9]+ [*] [*] [*] [*]" },
+            },
+          },
+        },
+      },
+    ],
+  };
+  const out = anchorJsonSchemaPatterns(body);
+  const params = (out.tools[0] as Record<string, unknown>).function as Record<string, unknown>;
+  const props = (params.parameters as Record<string, unknown>).properties as Record<
+    string,
+    unknown
+  >;
+  const schedule = props.schedule as Record<string, unknown>;
+  assert.equal(schedule.pattern, "^[0-9]+ [*] [*] [*] [*]$");
+});
+
+test("anchorJsonSchemaPatterns preserves already-anchored patterns", () => {
+  const body = {
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "test",
+          parameters: {
+            type: "object",
+            properties: {
+              field: { type: "string", pattern: "^already-anchored$" },
+            },
+          },
+        },
+      },
+    ],
+  };
+  assert.equal(anchorJsonSchemaPatterns(body), body);
+});
+
+test("anchorJsonSchemaPatterns handles partially anchored patterns", () => {
+  const body = {
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "test",
+          parameters: {
+            type: "object",
+            properties: {
+              onlyStart: { type: "string", pattern: "^foo" },
+              onlyEnd: { type: "string", pattern: "bar$" },
+            },
+          },
+        },
+      },
+    ],
+  };
+  const out = anchorJsonSchemaPatterns(body);
+  const params = (out.tools[0] as Record<string, unknown>).function as Record<string, unknown>;
+  const props = (params.parameters as Record<string, unknown>).properties as Record<
+    string,
+    unknown
+  >;
+  assert.equal((props.onlyStart as Record<string, unknown>).pattern, "^foo$");
+  assert.equal((props.onlyEnd as Record<string, unknown>).pattern, "^bar$");
+});
+
+test("anchorJsonSchemaPatterns is a referential no-op when no patterns exist", () => {
+  const body = {
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "test",
+          parameters: {
+            type: "object",
+            properties: { name: { type: "string" }, age: { type: "number" } },
+          },
+        },
+      },
+    ],
+  };
+  assert.equal(anchorJsonSchemaPatterns(body), body);
+});
+
+test("anchorJsonSchemaPatterns is a referential no-op for body without tools or response_format", () => {
+  const body = { messages: [{ role: "user", content: "hi" }], model: "test" };
+  assert.equal(anchorJsonSchemaPatterns(body), body);
+});
+
+test("anchorJsonSchemaPatterns handles patterns in anyOf/oneOf/allOf", () => {
+  const body = {
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "test",
+          parameters: {
+            anyOf: [
+              { type: "string", pattern: "[a-z]+" },
+              { type: "string", pattern: "^already$" },
+            ],
+          },
+        },
+      },
+    ],
+  };
+  const out = anchorJsonSchemaPatterns(body);
+  const params = (out.tools[0] as Record<string, unknown>).function as Record<string, unknown>;
+  const anyOf = (params.parameters as Record<string, unknown>).anyOf as Record<string, unknown>[];
+  assert.equal(anyOf[0].pattern, "^[a-z]+$");
+  assert.equal(anyOf[1].pattern, "^already$");
+});
+
+test("anchorJsonSchemaPatterns handles patterns in $defs referenced schemas", () => {
+  const body = {
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "test",
+          parameters: {
+            type: "object",
+            $defs: {
+              CronExpr: { type: "string", pattern: "[0-9]+" },
+            },
+            properties: {
+              schedule: { $ref: "#/$defs/CronExpr" },
+            },
+          },
+        },
+      },
+    ],
+  };
+  const out = anchorJsonSchemaPatterns(body);
+  const params = (out.tools[0] as Record<string, unknown>).function as Record<string, unknown>;
+  const defs = (params.parameters as Record<string, unknown>).$defs as Record<string, unknown>;
+  assert.equal((defs.CronExpr as Record<string, unknown>).pattern, "^[0-9]+$");
+});
+
+test("anchorJsonSchemaPatterns handles patterns in items (array schema)", () => {
+  const body = {
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "test",
+          parameters: {
+            type: "object",
+            properties: {
+              tags: { type: "array", items: { type: "string", pattern: "[a-z-]+" } },
+            },
+          },
+        },
+      },
+    ],
+  };
+  const out = anchorJsonSchemaPatterns(body);
+  const params = (out.tools[0] as Record<string, unknown>).function as Record<string, unknown>;
+  const props = (params.parameters as Record<string, unknown>).properties as Record<
+    string,
+    unknown
+  >;
+  const items = (props.tags as Record<string, unknown>).items as Record<string, unknown>;
+  assert.equal(items.pattern, "^[a-z-]+$");
+});
+
+test("anchorJsonSchemaPatterns anchors patternProperties keys", () => {
+  const body = {
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "test",
+          parameters: {
+            type: "object",
+            patternProperties: {
+              "[a-z]+": { type: "string" },
+              "^already-anchored$": { type: "number" },
+            },
+          },
+        },
+      },
+    ],
+  };
+  const out = anchorJsonSchemaPatterns(body);
+  const params = (out.tools[0] as Record<string, unknown>).function as Record<string, unknown>;
+  const pp = (params.parameters as Record<string, unknown>).patternProperties as Record<
+    string,
+    unknown
+  >;
+  const keys = Object.keys(pp);
+  assert.ok(keys.includes("^[a-z]+$"), `expected "^[a-z]+$" in keys, got ${JSON.stringify(keys)}`);
+  assert.ok(
+    keys.includes("^already-anchored$"),
+    `expected "^already-anchored$" in keys, got ${JSON.stringify(keys)}`
+  );
+});
+
+test("anchorJsonSchemaPatterns handles response_format.json_schema.schema", () => {
+  const body = {
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "output",
+        schema: {
+          type: "object",
+          properties: {
+            code: { type: "string", pattern: "[A-Z]{3}-[0-9]{4}" },
+          },
+        },
+      },
+    },
+  };
+  const out = anchorJsonSchemaPatterns(body);
+  const rf = out.response_format as Record<string, unknown>;
+  const js = rf.json_schema as Record<string, unknown>;
+  const props = (js.schema as Record<string, unknown>).properties as Record<string, unknown>;
+  assert.equal((props.code as Record<string, unknown>).pattern, "^[A-Z]{3}-[0-9]{4}$");
+});
+
+test("anchorJsonSchemaPatterns does not mutate the input body", () => {
+  const body = {
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "test",
+          parameters: {
+            type: "object",
+            properties: { f: { type: "string", pattern: "abc" } },
+          },
+        },
+      },
+    ],
+  };
+  const originalTool = body.tools[0];
+  anchorJsonSchemaPatterns(body);
+  assert.equal(body.tools[0], originalTool);
+  const fn = originalTool.function;
+  assert.equal(
+    (fn.parameters.properties.f as Record<string, unknown>).pattern,
+    "abc",
+    "original pattern must not be mutated"
+  );
+});
+
+test("anchorJsonSchemaPatterns handles deeply nested patterns (properties > items > anyOf)", () => {
+  const body = {
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "deep",
+          parameters: {
+            type: "object",
+            properties: {
+              list: {
+                type: "array",
+                items: {
+                  anyOf: [{ type: "string", pattern: "nested[0-9]+" }, { type: "number" }],
+                },
+              },
+            },
+          },
+        },
+      },
+    ],
+  };
+  const out = anchorJsonSchemaPatterns(body);
+  const params = (out.tools[0] as Record<string, unknown>).function as Record<string, unknown>;
+  const props = (params.parameters as Record<string, unknown>).properties as Record<
+    string,
+    unknown
+  >;
+  const items = (props.list as Record<string, unknown>).items as Record<string, unknown>;
+  const anyOf = items.anyOf as Record<string, unknown>[];
+  assert.equal(anyOf[0].pattern, "^nested[0-9]+$");
+});
+
+test("anchorJsonSchemaPatterns handles multiple tools, only modifies those with unanchored patterns", () => {
+  const toolWithPattern = {
+    type: "function",
+    function: {
+      name: "a",
+      parameters: { type: "object", properties: { x: { type: "string", pattern: "foo" } } },
+    },
+  };
+  const toolWithout = {
+    type: "function",
+    function: {
+      name: "b",
+      parameters: { type: "object", properties: { y: { type: "number" } } },
+    },
+  };
+  const body = { tools: [toolWithPattern, toolWithout] };
+  const out = anchorJsonSchemaPatterns(body);
+  assert.notEqual(out.tools[0], toolWithPattern, "tool with pattern should be a new object");
+  assert.equal(out.tools[1], toolWithout, "tool without pattern should be the same reference");
 });

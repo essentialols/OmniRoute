@@ -214,11 +214,7 @@ function anchorPatternsInSchema(schema: unknown, depth = 0): unknown {
       if (p !== v) changed = true;
       result[k] = p;
     } else if (
-      (k === "properties" ||
-        k === "$defs" ||
-        k === "definitions" ||
-        k === "patternProperties" ||
-        k === "dependentSchemas") &&
+      (k === "properties" || k === "$defs" || k === "definitions" || k === "dependentSchemas") &&
       isPlainObj(v)
     ) {
       const cleaned: Record<string, unknown> = {};
@@ -227,6 +223,24 @@ function anchorPatternsInSchema(schema: unknown, depth = 0): unknown {
         const anchored = anchorPatternsInSchema(pv, depth + 1);
         if (anchored !== pv) subChanged = true;
         cleaned[pk] = anchored;
+      }
+      if (subChanged) {
+        changed = true;
+        result[k] = cleaned;
+      } else {
+        result[k] = v;
+      }
+    } else if (k === "patternProperties" && isPlainObj(v)) {
+      const cleaned: Record<string, unknown> = {};
+      let subChanged = false;
+      for (const [pk, pv] of Object.entries(v)) {
+        let anchoredKey = pk;
+        if (!pk.startsWith("^")) anchoredKey = "^" + anchoredKey;
+        if (!pk.endsWith("$")) anchoredKey = anchoredKey + "$";
+        if (anchoredKey !== pk) subChanged = true;
+        const anchoredVal = anchorPatternsInSchema(pv, depth + 1);
+        if (anchoredVal !== pv) subChanged = true;
+        cleaned[anchoredKey] = anchoredVal;
       }
       if (subChanged) {
         changed = true;
@@ -254,8 +268,9 @@ function anchorPatternsInSchema(schema: unknown, depth = 0): unknown {
       Array.isArray(v)
     ) {
       const mapped = v.map((s) => anchorPatternsInSchema(s, depth + 1));
-      if (mapped.some((m, i) => m !== v[i])) changed = true;
-      result[k] = changed ? mapped : v;
+      const arrayChanged = mapped.some((m, i) => m !== v[i]);
+      if (arrayChanged) changed = true;
+      result[k] = arrayChanged ? mapped : v;
     } else {
       result[k] = v;
     }
