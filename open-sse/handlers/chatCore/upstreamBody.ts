@@ -19,9 +19,12 @@ import { providerSupportsCaching } from "../../utils/cacheControlPolicy.ts";
 import {
   stripUnsupportedToolFields,
   stripHeavyCodexToolsForBudget,
+  anchorJsonSchemaPatterns,
+  canonicalizeTools,
 } from "../../config/providerFieldStrips.ts";
 import { normalizeOpenAICompatMessages } from "./openaiCompatMessages.ts";
 import { FORMATS } from "../../translator/formats.ts";
+import { isLocalProvider } from "@/shared/constants/providers";
 
 type LoggerLike = { debug?: (...args: unknown[]) => void } | null | undefined;
 type Body = Record<string, unknown>;
@@ -166,6 +169,15 @@ function normalizeOpenAICompatUpstreamBody(
   // token budget cannot fit the full codex tool catalog (e.g. Groq free tier's 12k TPM cap,
   // which 413s a ~12.9k-token codex request before streaming).
   next = stripHeavyCodexToolsForBudget(next, provider);
+  if (
+    isLocalProvider(provider) ||
+    (typeof provider === "string" && provider.startsWith("openai-compatible"))
+  ) {
+    // Canonicalize tool definitions so identical tool sets always produce the same
+    // token prefix, maximizing llama-server's KV prefix cache hit rate.
+    next = canonicalizeTools(next);
+    next = anchorJsonSchemaPatterns(next);
+  }
   return next;
 }
 
