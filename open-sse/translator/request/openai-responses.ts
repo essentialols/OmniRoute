@@ -47,8 +47,25 @@ export function openaiResponsesToOpenAIRequest(
   const credentialRecord = toRecord(credentials);
   const storeEnabled = isOpenAIResponsesStoreEnabled(credentialRecord.providerSpecificData);
 
+  // Newer Codex CLI (composer / experimental exec mode) does not declare tools at the
+  // top-level `tools` field. It packs them into an `input` item of type
+  // "additional_tools" (role "developer") whose `.tools` array carries the real tool
+  // declarations (exec composer, function tools, MCP `namespace` groups). Extract those
+  // so they flow through the same conversion as top-level tools; otherwise they are
+  // silently dropped, the upstream receives no structured `tools` array, and a native
+  // tool-capable local model (rapid-mlx --enable-auto-tool-choice) never engages its
+  // tool-calling grammar so Codex loops without ever making a real tool call.
+  const additionalTools: unknown[] = [];
+  for (const itemValue of toArray(root.input)) {
+    const item = toRecord(itemValue);
+    if (toString(item.type) === "additional_tools" && Array.isArray(item.tools)) {
+      additionalTools.push(...item.tools);
+    }
+  }
+  const declaredTools = [...toArray(root.tools), ...additionalTools];
+
   // Validate tool types — only function tools can be translated to Chat Completions
-  const tools = toArray(root.tools);
+  const tools = declaredTools;
   if (tools.length > 0) {
     for (const toolValue of tools) {
       const tool = toRecord(toolValue);
@@ -313,6 +330,12 @@ export function openaiResponsesToOpenAIRequest(
       // Skip reasoning items - they are display-only metadata
       continue;
     }
+
+    if (itemType === "additional_tools") {
+      // Tool declarations (Codex composer/exec mode). Already extracted into the
+      // structured tools array above; must NOT leak into the conversation as a message.
+      continue;
+    }
   }
 
   // Flush remainder
@@ -325,9 +348,9 @@ export function openaiResponsesToOpenAIRequest(
     }
   }
 
-  // Convert tools format
-  if (Array.isArray(root.tools)) {
-    result.tools = root.tools
+  // Convert tools format (top-level `tools` merged with any `additional_tools` items).
+  if (declaredTools.length > 0) {
+    result.tools = declaredTools
       .filter((toolValue) => {
         const tool = toRecord(toolValue);
         const toolType = toString(tool.type);
