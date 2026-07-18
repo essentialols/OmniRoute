@@ -138,6 +138,11 @@ type StreamOptions = {
    *  Threaded into the response-translation state so returned tool_calls with these names
    *  are emitted as `custom_tool_call` items instead of `function_call`. */
   customToolNames?: Iterable<string> | null;
+  /** Map of bare sub-tool name -> namespace, built from the Responses request's
+   *  `{type:"namespace"}` tool groups. Threaded into the response-translation state so a
+   *  returned bare tool_call (e.g. Codex Multi-Agent V2 `spawn_agent`) is re-emitted with its
+   *  `namespace` field, letting Codex resolve the namespaced executor (`agents/spawn_agent`). */
+  toolNamespaceByName?: Record<string, string> | null;
   onComplete?: ((payload: StreamCompletePayload) => void) | null;
   onFailure?: ((payload: StreamFailurePayload) => boolean | void | Promise<void>) | null;
 };
@@ -156,6 +161,9 @@ type TranslateState = ReturnType<typeof initState> & {
   /** Tool names declared as Responses `type:"custom"` (Codex exec/apply_patch), threaded
    *  from the request so returned tool_calls are emitted as `custom_tool_call` items. */
   customToolNames?: Set<string> | null;
+  /** Map of bare sub-tool name -> namespace (Responses `{type:"namespace"}` groups), threaded
+   *  from the request so returned bare tool_calls are re-emitted with their `namespace` field. */
+  toolNamespaceByName?: Record<string, string> | null;
   upstreamError?: {
     status: number;
     type: string;
@@ -635,6 +643,7 @@ export function createSSEStream(options: StreamOptions = {}) {
     apiKeyInfo = null,
     body = null,
     customToolNames = null,
+    toolNamespaceByName = null,
     onComplete = null,
     onFailure = null,
     dropResponsesCommentary,
@@ -690,6 +699,7 @@ export function createSSEStream(options: StreamOptions = {}) {
           copilotCompatibleReasoning,
           suppressThinkClose,
           customToolNames: customToolNames ? new Set(customToolNames) : null,
+          toolNamespaceByName: toolNamespaceByName ?? null,
           accumulatedContent: "",
         }
       : null;
@@ -2721,7 +2731,8 @@ export function createSSETransformStreamWithLogger(
   onFailure: ((payload: StreamFailurePayload) => void | Promise<void>) | null = null,
   copilotCompatibleReasoning = false,
   suppressThinkClose = false,
-  customToolNames: Iterable<string> | null = null
+  customToolNames: Iterable<string> | null = null,
+  toolNamespaceByName: Record<string, string> | null = null
 ) {
   return createSSEStream({
     mode: STREAM_MODE.TRANSLATE,
@@ -2735,6 +2746,7 @@ export function createSSETransformStreamWithLogger(
     apiKeyInfo,
     body,
     customToolNames,
+    toolNamespaceByName,
     onComplete,
     onFailure,
     copilotCompatibleReasoning,

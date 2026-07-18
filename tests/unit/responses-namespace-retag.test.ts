@@ -127,3 +127,72 @@ test("transformer is a no-op when no namespace map is supplied", async () => {
   assert.equal(item.name, "spawn_agent");
   assert.equal(item.namespace, undefined);
 });
+
+// The ACTUAL handleChat path uses the openai-responses translator
+// (open-sse/translator/response/openai-responses.ts), NOT the responsesHandler transformer.
+// This locks in the namespace re-tag on THAT path: the chat-to-responses translator emits the
+// function_call `response.output_item.done` item with the reconstructed `namespace` field.
+const { openaiToOpenAIResponsesResponse } =
+  await import("../../open-sse/translator/response/openai-responses.ts");
+
+function freshTranslatorState(toolNamespaceByName: Record<string, string> | null) {
+  return {
+    seq: 0,
+    responseId: "resp_test",
+    created: 0,
+    funcArgsBuf: {},
+    funcNames: {},
+    funcCallIds: {},
+    funcArgsDone: {},
+    funcItemDone: {},
+    msgItemAdded: {},
+    completedOutputItems: [],
+    completedSent: false,
+    customToolNames: null,
+    toolNamespaceByName,
+  } as Record<string, unknown>;
+}
+
+function runTranslatorToolCall(
+  toolName: string,
+  toolNamespaceByName: Record<string, string> | null
+): Record<string, unknown> {
+  const state = freshTranslatorState(toolNamespaceByName);
+  const chunks = [
+    {
+      choices: [
+        {
+          index: 0,
+          delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: toolName } }] },
+        },
+      ],
+    },
+    {
+      choices: [
+        { index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"a":1}' } }] } },
+      ],
+    },
+    { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+  ];
+  const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+  for (const c of chunks) {
+    for (const e of openaiToOpenAIResponsesResponse(c, state)) events.push(e);
+  }
+  for (const e of events) {
+    const item = e.data?.item as Record<string, unknown> | undefined;
+    if (e.event === "response.output_item.done" && item?.type === "function_call") return item;
+  }
+  throw new Error("no function_call output_item.done emitted by openai-responses translator");
+}
+
+test("openai-responses translator (real handleChat path) re-attaches the namespace", () => {
+  const item = runTranslatorToolCall("spawn_agent", { spawn_agent: "agents" });
+  assert.equal(item.name, "spawn_agent");
+  assert.equal(item.namespace, "agents");
+});
+
+test("openai-responses translator leaves plain/MCP tool calls untouched", () => {
+  const item = runTranslatorToolCall("mcp__memory__create", { spawn_agent: "agents" });
+  assert.equal(item.name, "mcp__memory__create");
+  assert.equal(item.namespace, undefined);
+});

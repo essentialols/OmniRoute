@@ -1,5 +1,8 @@
 import { injectMemoryAndSkills } from "./chatCore/memorySkillsInjection.ts";
-import { normalizeOpenAICompatibleTools } from "./chatCore/openaiCompatibleTools.ts";
+import {
+  normalizeOpenAICompatibleTools,
+  buildToolNamespaceMap,
+} from "./chatCore/openaiCompatibleTools.ts";
 import { resolveChatCoreRequestSetup } from "./chatCore/requestSetup.ts";
 import { buildFailureUsageRecord } from "./chatCore/failureUsage.ts";
 import { extractSystemRoleMessages } from "./chatCore/claudeSystemRole.ts";
@@ -4445,6 +4448,18 @@ export async function handleChatCore({
       ? extractResponsesCustomToolNames(body)
       : null;
 
+  // Codex Multi-Agent V2 (and any Responses `{type:"namespace"}` tool group): the request
+  // flatten collapses a namespace group into BARE sub-tools so the chat-only model can call
+  // them, which strips the namespace. Build a `bareName -> namespace` map from the ORIGINAL
+  // (untranslated) client body so the response translator can re-attach the `namespace` field
+  // to returned bare tool_calls; Codex then resolves the namespaced executor
+  // (`agents/spawn_agent`) instead of failing with "unsupported call: spawn_agent". Only
+  // namespace-flattened tools are mapped, so plain/MCP function tools are never re-tagged.
+  const responsesToolNamespaceByName =
+    clientResponseFormat === FORMATS.OPENAI_RESPONSES
+      ? buildToolNamespaceMap((body as { tools?: unknown } | null)?.tools)
+      : null;
+
   if (needsResponsesTranslation) {
     // Provider returns openai-responses, translate to openai (Chat Completions) that clients expect
     log?.debug?.("STREAM", `Responses translation mode: openai-responses → openai`);
@@ -4486,7 +4501,8 @@ export async function handleChatCore({
         userAgent: streamUserAgent,
         thinkingMarkerHeader,
       }),
-      responsesCustomToolNames
+      responsesCustomToolNames,
+      responsesToolNamespaceByName
     );
   } else {
     log?.debug?.("STREAM", `Standard passthrough mode`);

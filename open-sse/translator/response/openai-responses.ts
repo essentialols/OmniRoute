@@ -195,6 +195,21 @@ function isCustomToolCall(state, name): boolean {
   return false;
 }
 
+// Re-attach the namespace to a function_call item whose bare name was flattened out of a
+// Responses `{type:"namespace"}` group on the request. Codex resolves collaboration executors
+// by an EXACT ToolName{namespace, name} and rejects a bare call ("unsupported call: spawn_agent");
+// it reconstructs the namespace from a SEPARATE `namespace` field on the wire function_call item
+// (protocol FunctionCall + router build_tool_call -> ToolName::new(namespace, name)), not by
+// splitting the name. `state.toolNamespaceByName` maps `bareName -> namespace` for the tools that
+// were namespace-flattened, so plain/MCP function tools are never touched.
+function applyToolNamespace(state, item): void {
+  const map = state.toolNamespaceByName;
+  if (!map) return;
+  const name = typeof item.name === "string" ? item.name : "";
+  const ns = name ? map[name] : undefined;
+  if (ns) item.namespace = ns;
+}
+
 // Normalize output_index to a non-negative integer (replaces fragile parseInt calls)
 // Record a finalized item keyed by output_index so buildDenseOutput can sort later
 function recordCompletedItem(state, outputIndex, item) {
@@ -399,24 +414,30 @@ function emitToolCall(state, emit, tc) {
   if (!state.funcCallIds[tcIdx] && newCallId) {
     state.funcCallIds[tcIdx] = newCallId;
 
+    let addedItem: Record<string, unknown>;
+    if (isCustomTool) {
+      addedItem = {
+        id: `fc_${newCallId}`,
+        type: "custom_tool_call",
+        input: "",
+        call_id: newCallId,
+        name: state.funcNames[tcIdx] || "",
+      };
+    } else {
+      addedItem = {
+        id: `fc_${newCallId}`,
+        type: "function_call",
+        arguments: "",
+        call_id: newCallId,
+        name: state.funcNames[tcIdx] || "",
+      };
+      applyToolNamespace(state, addedItem);
+    }
+
     emit("response.output_item.added", {
       type: "response.output_item.added",
       output_index: tcIdx,
-      item: isCustomTool
-        ? {
-            id: `fc_${newCallId}`,
-            type: "custom_tool_call",
-            input: "",
-            call_id: newCallId,
-            name: state.funcNames[tcIdx] || "",
-          }
-        : {
-            id: `fc_${newCallId}`,
-            type: "function_call",
-            arguments: "",
-            call_id: newCallId,
-            name: state.funcNames[tcIdx] || "",
-          },
+      item: addedItem,
     });
   }
 
@@ -497,6 +518,7 @@ function closeToolCall(state, emit, idx, recordAsCompleted = true) {
         call_id: callId,
         name: state.funcNames[idx] || "",
       };
+      applyToolNamespace(state, funcItem);
 
       emit("response.output_item.done", {
         type: "response.output_item.done",
