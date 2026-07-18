@@ -649,6 +649,10 @@ export function initState(sourceFormat) {
       // emitted as `custom_tool_call` items instead of `function_call`. Populated by the
       // stream setup (createSSEStream); null when no custom tools were declared.
       customToolNames: null as Set<string> | null,
+      // Map of bare sub-tool name -> namespace (Responses `{type:"namespace"}` groups), threaded
+      // from the request so returned bare tool_calls (e.g. Multi-Agent V2 `spawn_agent`) are
+      // re-emitted with their `namespace` field. Populated by createSSEStream; null otherwise.
+      toolNamespaceByName: null as Record<string, string> | null,
     };
   }
 
