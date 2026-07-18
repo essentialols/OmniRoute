@@ -69,6 +69,7 @@ RUN --mount=type=cache,id=npm-cache,target=/root/.npm \
 # escape hatch: `--build-arg`/-e OMNIROUTE_USE_TURBOPACK=0.
 # See docs/ops/QUALITY_GATE_PLAYBOOK.md Parte 6.
 ENV OMNIROUTE_USE_TURBOPACK=1
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # Docker containers cannot run the MITM/Agent-Bridge stack (no host DNS/cert
 # access), so keep @/mitm/manager on the graceful stub (#3390). This flag is
