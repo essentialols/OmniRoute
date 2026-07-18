@@ -215,11 +215,25 @@ export async function registerNodejs(): Promise<void> {
     // without this the dashboard mode (auto/custom/adaptive) silently reverts to
     // the passthrough default on every restart. Previously this was only wired into
     // the unused `server-init.ts`, so it never ran in production.
-    const { hydrateThinkingBudgetConfig } = await import(
-      "@omniroute/open-sse/services/thinkingBudget.ts"
-    );
+    const { hydrateThinkingBudgetConfig } =
+      await import("@omniroute/open-sse/services/thinkingBudget.ts");
     if (hydrateThinkingBudgetConfig(settings)) {
       console.log("[STARTUP] Thinking-Budget config restored from settings");
+    }
+
+    // Boot-preload the config-driven message-rewrite rules into the globalThis
+    // frozen snapshot (D3) and start the out-of-band file watcher, so the
+    // synchronous translator hot path always reads a hydrated, hot-reloadable
+    // snapshot. File-first (`~/.omniroute/messageRewriteRules.json`); the DB
+    // override is a later Settings-UI follow-up (D6). Non-fatal.
+    try {
+      const { preloadMessageRewriteRules } =
+        await import("@omniroute/open-sse/services/messageRewriteRules.ts");
+      await preloadMessageRewriteRules((settings as Record<string, unknown>).messageRewriteRules);
+      console.log("[STARTUP] Message-rewrite rules preloaded");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[STARTUP] Could not preload message-rewrite rules (non-fatal):", msg);
     }
 
     const seededModelAliases = await seedDefaultModelAliases();
