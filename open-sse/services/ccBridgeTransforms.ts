@@ -316,7 +316,7 @@ interface RequestBody {
   [key: string]: unknown;
 }
 
-function normalizeSystemToBlocks(system: unknown): SystemBlock[] {
+export function normalizeSystemToBlocks(system: unknown): SystemBlock[] {
   if (system === null || system === undefined) return [];
   if (typeof system === "string") {
     return system.length > 0 ? [{ type: "text", text: system }] : [];
@@ -333,7 +333,7 @@ function normalizeSystemToBlocks(system: unknown): SystemBlock[] {
   return [];
 }
 
-function isTextBlock(block: SystemBlock): block is SystemBlock & { text: string } {
+export function isTextBlock(block: SystemBlock): block is SystemBlock & { text: string } {
   return block.type === "text" && typeof block.text === "string";
 }
 

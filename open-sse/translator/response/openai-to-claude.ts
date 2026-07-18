@@ -128,26 +128,42 @@ export function openaiToClaudeResponse(chunk, state) {
     });
   }
 
-  // Handle regular content
-  if (delta?.content) {
-    stopThinkingBlock(state, results);
+  // Handle regular content. Guard against empty / whitespace-only leading deltas
+  // so a tool-only turn never emits a visible empty text block ("(empty
+  // response)"). The `if (delta?.content)` guard only filtered "" / null; some
+  // OpenAI-compatible upstreams send a truthy-but-blank delta (e.g. "\n" / " ")
+  // before their tool_calls, which opened an empty text block. Mirror + harden
+  // the gemini-to-claude non-empty-text guard: defer opening the FIRST text block
+  // until real (non-whitespace) content arrives, buffering leading whitespace so
+  // a normal text turn still streams byte-identical text.
+  if (typeof delta?.content === "string" && delta.content.length > 0) {
+    if (!state.textBlockStarted && delta.content.trim().length === 0) {
+      // Leading whitespace before any real text (or on a tool-only turn): buffer,
+      // do not open. Flushed with the first real text; dropped if the turn is
+      // tool-only.
+      state.pendingLeadingWhitespace = (state.pendingLeadingWhitespace || "") + delta.content;
+    } else {
+      stopThinkingBlock(state, results);
 
-    if (!state.textBlockStarted) {
-      state.textBlockIndex = state.nextBlockIndex++;
-      state.textBlockStarted = true;
-      state.textBlockClosed = false;
+      if (!state.textBlockStarted) {
+        state.textBlockIndex = state.nextBlockIndex++;
+        state.textBlockStarted = true;
+        state.textBlockClosed = false;
+        results.push({
+          type: "content_block_start",
+          index: state.textBlockIndex,
+          content_block: { type: "text", text: "" },
+        });
+      }
+
+      const buffered = state.pendingLeadingWhitespace || "";
+      state.pendingLeadingWhitespace = "";
       results.push({
-        type: "content_block_start",
+        type: "content_block_delta",
         index: state.textBlockIndex,
-        content_block: { type: "text", text: "" },
+        delta: { type: "text_delta", text: buffered + delta.content },
       });
     }
-
-    results.push({
-      type: "content_block_delta",
-      index: state.textBlockIndex,
-      delta: { type: "text_delta", text: delta.content },
-    });
   }
 
   // Tool calls
@@ -267,7 +283,12 @@ export function openaiToClaudeResponse(chunk, state) {
         results.push({
           type: "content_block_start",
           index: toolInfo.blockIndex,
-          content_block: { type: "tool_use", id: toolInfo.id, name: toolInfo.name || "", input: {} },
+          content_block: {
+            type: "tool_use",
+            id: toolInfo.id,
+            name: toolInfo.name || "",
+            input: {},
+          },
         });
       }
 
