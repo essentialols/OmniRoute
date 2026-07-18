@@ -180,6 +180,21 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
   return events;
 }
 
+// Codex custom/composer tools (exec, apply_patch, …) are declared by the client with
+// Responses `type:"custom"`. The request translator records that set and threads it onto
+// `state.customToolNames`, so the response side knows which returned tool_calls must be
+// surfaced as `custom_tool_call` items (streamed via custom_tool_call_input.* events)
+// rather than `function_call`. `apply_patch` is always treated as custom even when the
+// set was not threaded, preserving the #1007 default. (#4862 exec composer follow-up.)
+function isCustomToolCall(state, name): boolean {
+  if (!name) return false;
+  if (name === "apply_patch") return true;
+  const set = state.customToolNames;
+  if (set instanceof Set) return set.has(name);
+  if (Array.isArray(set)) return set.includes(name);
+  return false;
+}
+
 // Normalize output_index to a non-negative integer (replaces fragile parseInt calls)
 // Record a finalized item keyed by output_index so buildDenseOutput can sort later
 function recordCompletedItem(state, outputIndex, item) {
@@ -374,10 +389,12 @@ function emitToolCall(state, emit, tc) {
 
   if (funcName) state.funcNames[tcIdx] = funcName;
 
-  // Codex custom tools (apply_patch) are surfaced to the client as custom_tool_call items
-  // and stream their raw patch via custom_tool_call_input.* events instead of the
-  // function_call_arguments.* events used for regular function tools. (#1007)
-  const isCustomTool = (state.funcNames[tcIdx] || funcName) === "apply_patch";
+  // Codex custom tools (exec, apply_patch, …) are surfaced to the client as
+  // custom_tool_call items and stream their raw input via custom_tool_call_input.*
+  // events instead of the function_call_arguments.* events used for regular function
+  // tools. Which names are custom is threaded from the request via state.customToolNames.
+  // (#1007 / #4862)
+  const isCustomTool = isCustomToolCall(state, state.funcNames[tcIdx] || funcName);
 
   if (!state.funcCallIds[tcIdx] && newCallId) {
     state.funcCallIds[tcIdx] = newCallId;
@@ -431,12 +448,12 @@ function closeToolCall(state, emit, idx, recordAsCompleted = true) {
   if (callId && !state.funcItemDone[idx]) {
     const normalizedIndex = normalizeOutputIndex(idx);
     const args = state.funcArgsBuf[idx] || "{}";
-    const isCustomTool = (state.funcNames[idx] || "") === "apply_patch";
+    const isCustomTool = isCustomToolCall(state, state.funcNames[idx] || "");
 
     let funcItem;
     if (isCustomTool) {
       // The model produced JSON {"input":"..."} against the normalized custom-tool schema.
-      // Unwrap it back to the raw patch string the Codex runtime expects. (#1007)
+      // Unwrap it back to the raw input string the Codex runtime expects. (#1007 / #4862)
       let rawInput = args;
       try {
         const parsed = JSON.parse(args);

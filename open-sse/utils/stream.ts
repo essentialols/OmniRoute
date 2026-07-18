@@ -134,6 +134,10 @@ type StreamOptions = {
   connectionId?: string | null;
   apiKeyInfo?: unknown;
   body?: unknown;
+  /** Tool names the Responses client declared as `type:"custom"` (Codex exec/apply_patch).
+   *  Threaded into the response-translation state so returned tool_calls with these names
+   *  are emitted as `custom_tool_call` items instead of `function_call`. */
+  customToolNames?: Iterable<string> | null;
   onComplete?: ((payload: StreamCompletePayload) => void) | null;
   onFailure?: ((payload: StreamFailurePayload) => boolean | void | Promise<void>) | null;
 };
@@ -149,6 +153,9 @@ type TranslateState = ReturnType<typeof initState> & {
   suppressThinkClose?: boolean;
   /** Accumulated message content for call log response body */
   accumulatedContent?: string;
+  /** Tool names declared as Responses `type:"custom"` (Codex exec/apply_patch), threaded
+   *  from the request so returned tool_calls are emitted as `custom_tool_call` items. */
+  customToolNames?: Set<string> | null;
   upstreamError?: {
     status: number;
     type: string;
@@ -627,6 +634,7 @@ export function createSSEStream(options: StreamOptions = {}) {
     connectionId = null,
     apiKeyInfo = null,
     body = null,
+    customToolNames = null,
     onComplete = null,
     onFailure = null,
     dropResponsesCommentary,
@@ -681,6 +689,7 @@ export function createSSEStream(options: StreamOptions = {}) {
           signatureNamespace,
           copilotCompatibleReasoning,
           suppressThinkClose,
+          customToolNames: customToolNames ? new Set(customToolNames) : null,
           accumulatedContent: "",
         }
       : null;
@@ -2240,8 +2249,7 @@ export function createSSEStream(options: StreamOptions = {}) {
                     if (Array.isArray(flushedParsed.choices)) {
                       for (const choice of flushedParsed.choices as JsonRecord[]) {
                         const tcs = (choice as JsonRecord | undefined)?.delta as
-                          | JsonRecord
-                          | undefined;
+                          JsonRecord | undefined;
                         if (Array.isArray(tcs?.tool_calls)) {
                           for (const tc of tcs.tool_calls as JsonRecord[]) {
                             if (tc?.id != null && typeof tc.id !== "string") {
@@ -2615,17 +2623,15 @@ export function createSSEStream(options: StreamOptions = {}) {
               let content = (state?.accumulatedContent ?? "").trim() || "";
               const normalizedToolCalls: ToolCall[] = state?.toolCalls?.size
                 ? [...state.toolCalls.values()]
-                    .map(
-                      (tc: Record<string, unknown>): ToolCall => ({
-                        id: tc.id != null ? String(tc.id) : null,
-                        index: (tc.index as number) ?? (tc.blockIndex as number) ?? 0,
-                        type: (tc.type as string) ?? "function",
-                        function: (tc.function as ToolCall["function"]) ?? {
-                          name: (tc.name as string) ?? "",
-                          arguments: "",
-                        },
-                      })
-                    )
+                    .map((tc: Record<string, unknown>): ToolCall => ({
+                      id: tc.id != null ? String(tc.id) : null,
+                      index: (tc.index as number) ?? (tc.blockIndex as number) ?? 0,
+                      type: (tc.type as string) ?? "function",
+                      function: (tc.function as ToolCall["function"]) ?? {
+                        name: (tc.name as string) ?? "",
+                        arguments: "",
+                      },
+                    }))
                     .sort((a, b) => a.index - b.index)
                 : [];
               const textualToolCall = parseTextualToolCallFromContent(content);
@@ -2714,7 +2720,8 @@ export function createSSETransformStreamWithLogger(
   apiKeyInfo: unknown = null,
   onFailure: ((payload: StreamFailurePayload) => void | Promise<void>) | null = null,
   copilotCompatibleReasoning = false,
-  suppressThinkClose = false
+  suppressThinkClose = false,
+  customToolNames: Iterable<string> | null = null
 ) {
   return createSSEStream({
     mode: STREAM_MODE.TRANSLATE,
@@ -2727,6 +2734,7 @@ export function createSSETransformStreamWithLogger(
     connectionId,
     apiKeyInfo,
     body,
+    customToolNames,
     onComplete,
     onFailure,
     copilotCompatibleReasoning,

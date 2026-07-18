@@ -130,9 +130,18 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
     // Explicitly target formats to prevent metadata corruption and leakage
     const METADATA_KEYS = [
       "id",
+      // Keep aligned with sseTextTransform.ts METADATA_KEYS: `item_id`, `call_id`,
+      // `status`, and `input` are OpenAI Responses API structural fields (identifiers,
+      // lifecycle enum, apply_patch payload), not model output. Excluding them from the
+      // sanitize/buffer path is what prevents them from cross-contaminating the visible
+      // `delta` text (item_id/status on the text path, call_id/input on the tool path).
+      "item_id",
+      "call_id",
+      "input",
       "model",
       "object",
       "created",
+      "status",
       "finish_reason",
       "finishReason",
       "role",
@@ -258,20 +267,33 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
 
     // 3. Responses API
     if (typeof lastJson.type === "string" && lastJson.type.startsWith("response.")) {
-      const finalJson = JSON.parse(JSON.stringify(lastJson));
-      const idx = typeof finalJson.output_index === "number" ? finalJson.output_index : 0;
-      const buffers = getBuffers(`${idx}_0`);
+      // Responses-format visible text is buffered under the "0_0" composite key
+      // (Responses events have no top-level `index`, so sanitizeObject leaves
+      // choiceIdx/toolIdx at 0). Residual visible content is normally already drained
+      // as a proper response.output_text.delta at response.output_text.done via
+      // onSnapshotDrain; this branch is the defensive fallback for streams that lack a
+      // text snapshot. It MUST emit a properly-framed output_text.delta (event line and
+      // payload type agree), NEVER a delta bolted onto the last (snapshot/stop) payload.
+      const buffers = getBuffers("0_0");
       if (buffers.content) {
-        finalJson.delta = buffers.content;
-        buffers.content = "";
-      }
-      if (buffers.toolArgs) {
-        finalJson.item = {
-          arguments: buffers.toolArgs,
+        const template =
+          lastContentJson && lastContentJson.type === "response.output_text.delta"
+            ? lastContentJson
+            : lastJson;
+        const payload: Record<string, unknown> = {
+          type: "response.output_text.delta",
+          item_id: template.item_id,
+          output_index: typeof template.output_index === "number" ? template.output_index : 0,
+          content_index: typeof template.content_index === "number" ? template.content_index : 0,
+          delta: buffers.content,
+          logprobs: [],
         };
-        buffers.toolArgs = "";
+        buffers.content = "";
+        return payload;
       }
-      return finalJson;
+      // Nothing residual to emit: do NOT re-emit the snapshot/stop payload (that is what
+      // duplicated the answer and mismatched the event line).
+      return null;
     }
 
     // 4. Gemini format
@@ -357,5 +379,60 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
     return finalJson;
   };
 
-  return createSseTextTransform(processor, onFlush);
+  // Drain the window-held tail of a rolling buffer into a properly-framed delta event
+  // right before the matching final-snapshot event, so the streamed deltas add up to the
+  // full text exactly once and reasoning stays in its own event stream. Content drains at
+  // response.output_text.done; reasoning drains at its own *.done event, never mixing.
+  const onSnapshotDrain = (json: any): Array<{ type: string; payload: any }> => {
+    if (!json || typeof json.type !== "string") return [];
+    const type = json.type;
+    const events: Array<{ type: string; payload: any }> = [];
+    const buffers = getBuffers("0_0");
+
+    if (type === "response.output_text.done" && buffers.content) {
+      const drained = sanitizePII(buffers.content, false, forceEnabled).text;
+      buffers.content = "";
+      if (drained) {
+        events.push({
+          type: "response.output_text.delta",
+          payload: {
+            type: "response.output_text.delta",
+            item_id: json.item_id,
+            output_index: typeof json.output_index === "number" ? json.output_index : 0,
+            content_index: typeof json.content_index === "number" ? json.content_index : 0,
+            delta: drained,
+            logprobs: [],
+          },
+        });
+      }
+    }
+
+    if (
+      (type === "response.reasoning_summary_text.done" ||
+        type === "response.reasoning_text.done") &&
+      buffers.reasoning
+    ) {
+      const drained = sanitizePII(buffers.reasoning, false, forceEnabled).text;
+      buffers.reasoning = "";
+      if (drained) {
+        const deltaType =
+          type === "response.reasoning_text.done"
+            ? "response.reasoning_text.delta"
+            : "response.reasoning_summary_text.delta";
+        const payload: Record<string, unknown> = {
+          type: deltaType,
+          item_id: json.item_id,
+          output_index: typeof json.output_index === "number" ? json.output_index : 0,
+          delta: drained,
+        };
+        if (typeof json.summary_index === "number") payload.summary_index = json.summary_index;
+        if (typeof json.content_index === "number") payload.content_index = json.content_index;
+        events.push({ type: deltaType, payload });
+      }
+    }
+
+    return events;
+  };
+
+  return createSseTextTransform(processor, onFlush, undefined, onSnapshotDrain);
 }
