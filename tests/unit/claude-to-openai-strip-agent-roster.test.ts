@@ -1,27 +1,50 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { stripBuiltinAgentRoster } =
-  await import("../../open-sse/translator/request/claude-to-openai.ts");
+import {
+  applyPreSourceRewrites,
+  type MessageRewriteRule,
+} from "../../open-sse/services/messageRewriter.ts";
+
+// The hardcoded `stripBuiltinAgentRoster` was REMOVED from claude-to-openai.ts;
+// the roster strip is now driven ONLY by the message-rewrite engine (Hook A /
+// pre-source) via a `strip_list_block` rule targeting role:"system" messages.
+// This rule mirrors the shipped ~/.omniroute/messageRewriteRules.json entry,
+// pinned to the CURRENT www agent whitelist (code/general/research/explore/plan)
+// plus the Claude Code built-in `general-purpose` fallback.
+const ROSTER_RULE: MessageRewriteRule = {
+  id: "strip-builtin-agent-roster",
+  enabled: true,
+  phase: "pre_source",
+  match: { model: "ornith|M1y" },
+  target: { kind: "message", role: "system" },
+  op: {
+    kind: "strip_list_block",
+    marker: "Available agent types for the Agent tool:",
+    entryPattern: "^- ([A-Za-z0-9_-]+):",
+    whitelist: ["code", "general", "research", "explore", "plan", "general-purpose"],
+    caseSensitive: true,
+  },
+};
 
 // A representative Claude Code roster system message: the "Available agent types"
-// header, a mix of built-in (claude, Explore, general-purpose, Plan,
-// statusline-setup) and Ornith (balanced/creative/precise/wild) plus the
-// operator's custom lowercase explore/plan, then the trailing "When you launch"
-// line, then an unrelated "skills" list that must be preserved verbatim.
+// header, the current www agents (code/general/research) + the CC built-in
+// general-purpose + operator custom lowercase explore/plan, a mix of CC built-ins
+// to drop (claude, Explore, Plan, statusline-setup; case-sensitive), then the
+// trailing "When you launch" line, then an unrelated "skills" list that must be
+// preserved verbatim.
 const ROSTER = [
   "Available agent types for the Agent tool:",
-  "- balanced: Local Ornith BALANCED profile. (Tools: All tools)",
   "- claude: Catch-all for any task. (Tools: *)",
-  "- creative: Local Ornith CREATIVE profile. (Tools: All tools)",
-  "- explore: Custom read-only Ornith explore. (Tools: Read, Grep, Glob, Bash)",
+  "- code: www code agent. (Tools: All tools)",
   "- Explore: Read-only search agent. (Tools: All tools except Agent, Edit, Write)",
+  "- explore: Custom read-only agent. (Tools: Read, Grep, Glob, Bash)",
+  "- general: www general agent. (Tools: All tools)",
   "- general-purpose: General-purpose agent. (Tools: *)",
   "- Plan: Software architect agent. (Tools: All tools except Agent, Edit, Write)",
-  "- plan: Custom read-only Ornith plan. (Tools: Read, Grep, Glob, Bash)",
-  "- precise: Local Ornith PRECISE profile. (Tools: All tools)",
+  "- plan: Custom read-only agent. (Tools: Read, Grep, Glob, Bash)",
+  "- research: www research agent. (Tools: All tools)",
   "- statusline-setup: Configure the status line. (Tools: Read, Edit)",
-  "- wild: Local Ornith WILD profile. (Tools: All tools)",
   "",
   "When you launch multiple agents for independent work, send them in a single message with multiple tool uses so they run concurrently.",
   "",
@@ -32,8 +55,26 @@ const ROSTER = [
   "- dataviz: Use this skill whenever you create a chart.",
 ].join("\n");
 
-test("stripBuiltinAgentRoster keeps only whitelisted agents and preserves surrounding blocks", () => {
-  const out = stripBuiltinAgentRoster(ROSTER);
+// Drive the engine exactly as the translator's Hook A does: run the rule against
+// a Claude-shaped body carrying the roster as a role:"system" STRING message,
+// scoped to an ornith model so the `match` fires.
+function stripViaEngine(roster: string): string {
+  const body = { messages: [{ role: "system", content: roster }] };
+  applyPreSourceRewrites(
+    {
+      model: "ornith-35b-c-balanced",
+      provider: "m2",
+      sourceFormat: "claude",
+      targetFormat: "openai",
+    },
+    body,
+    [ROSTER_RULE]
+  );
+  return body.messages[0].content as string;
+}
+
+test("engine roster strip keeps only whitelisted agents and preserves surrounding blocks", () => {
+  const out = stripViaEngine(ROSTER);
 
   // Header + trailing guidance + skills list are preserved verbatim.
   assert.ok(out.includes("Available agent types for the Agent tool:"), "header line preserved");
@@ -53,8 +94,8 @@ test("stripBuiltinAgentRoster keeps only whitelisted agents and preserves surrou
 
   assert.deepEqual(
     keptAgents.sort(),
-    ["balanced", "creative", "explore", "general-purpose", "plan", "precise", "wild"].sort(),
-    "only whitelisted agents survive"
+    ["code", "explore", "general", "general-purpose", "plan", "research"].sort(),
+    "only whitelisted agents survive (current www set + general-purpose)"
   );
 
   // Built-ins are gone (case-sensitive: capitalized Explore/Plan dropped, lowercase kept).
@@ -77,7 +118,18 @@ test("stripBuiltinAgentRoster keeps only whitelisted agents and preserves surrou
   );
 });
 
-test("stripBuiltinAgentRoster is a no-op when the roster marker is absent", () => {
-  const text = "You are Claude Code.\n- balanced: not a roster entry here\n";
-  assert.equal(stripBuiltinAgentRoster(text), text);
+test("engine roster strip is a no-op when the roster marker is absent", () => {
+  const text = "You are Claude Code.\n- code: not a roster entry here\n";
+  assert.equal(stripViaEngine(text), text);
+});
+
+test("engine roster rule does not fire for non-ornith models (model match scope)", () => {
+  const body = { messages: [{ role: "system", content: ROSTER }] };
+  applyPreSourceRewrites(
+    { model: "gpt-4o", provider: "openai", sourceFormat: "claude", targetFormat: "openai" },
+    body,
+    [ROSTER_RULE]
+  );
+  // Non-matching model ⇒ roster untouched (built-ins still present).
+  assert.equal(body.messages[0].content, ROSTER, "roster untouched for non-ornith model");
 });
