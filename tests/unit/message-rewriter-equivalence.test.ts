@@ -10,55 +10,80 @@ import {
   type RewriteContext,
 } from "../../open-sse/services/messageRewriter.ts";
 
-// The LIVE roster stripper (exported from the translator). Byte-equivalence is
-// defined against whatever whitelist this function ships at migration time
-// (plan-v2 §5). Current live set = balanced/creative/precise/wild/explore/plan/
-// general-purpose.
-const { stripBuiltinAgentRoster } =
-  await import("../../open-sse/translator/request/claude-to-openai.ts");
-
-// The `strip_list_block` op pinned to the LIVE whitelist so the engine is
-// byte-identical to `stripBuiltinAgentRoster`.
+// The roster strip is now handled ONLY by the engine (Hook A / pre-source): the
+// hardcoded `stripBuiltinAgentRoster` was REMOVED from claude-to-openai.ts. The
+// `strip_list_block` op below is pinned to the CURRENT www agent whitelist
+// (code/general/research/explore/plan + the CC built-in `general-purpose`
+// fallback). These tests assert the engine produces the correct output directly
+// (kept vs dropped), not equivalence to a now-deleted function.
 const ROSTER_OP: StripListBlockOp = {
   kind: "strip_list_block",
   marker: "Available agent types for the Agent tool:",
   entryPattern: "^- ([A-Za-z0-9_-]+):",
-  whitelist: ["balanced", "creative", "precise", "wild", "explore", "plan", "general-purpose"],
+  whitelist: ["code", "general", "research", "explore", "plan", "general-purpose"],
   caseSensitive: true,
   stopAtFirstNonListLine: true,
 };
 
 // ────────────────────────────────────────────────────────────────────────────
-// Rule #1 — roster strip byte-equivalence
+// Rule #1 — roster strip correctness (engine only)
 // ────────────────────────────────────────────────────────────────────────────
 
-const ROSTER_FIXTURES: Array<[string, string]> = [
-  [
-    "canonical roster ending on blank line",
-    [
-      "Available agent types for the Agent tool:",
-      "- balanced: Local Ornith BALANCED. (Tools: All)",
-      "- claude: Catch-all. (Tools: *)",
-      "- creative: Local Ornith CREATIVE. (Tools: All)",
-      "- explore: Custom read-only. (Tools: Read)",
-      "- Explore: Built-in read-only. (Tools: All)",
-      "- general-purpose: General. (Tools: *)",
-      "- Plan: Architect. (Tools: All)",
-      "- plan: Custom read-only. (Tools: Read)",
-      "- precise: Local Ornith PRECISE. (Tools: All)",
-      "- statusline-setup: Configure. (Tools: Read, Edit)",
-      "- wild: Local Ornith WILD. (Tools: All)",
-      "",
-      "The following skills are available for use with the Skill tool:",
-      "- deep-research: Hybrid pipeline.",
-    ].join("\n"),
-  ],
+// A representative Claude Code roster: the header, the current www agents
+// (code/general/research) + operator custom lowercase explore/plan +
+// general-purpose, a mix of CC built-ins to drop (claude/Explore/Plan/
+// statusline-setup; case-sensitive), the "When you launch" trailer, and an
+// unrelated skills list that must be preserved verbatim.
+const CANONICAL_ROSTER = [
+  "Available agent types for the Agent tool:",
+  "- claude: Catch-all. (Tools: *)",
+  "- code: www code agent. (Tools: All)",
+  "- Explore: Built-in read-only. (Tools: All)",
+  "- explore: Custom read-only. (Tools: Read)",
+  "- general: www general agent. (Tools: All)",
+  "- general-purpose: General. (Tools: *)",
+  "- Plan: Architect. (Tools: All)",
+  "- plan: Custom read-only. (Tools: Read)",
+  "- research: www research agent. (Tools: All)",
+  "- statusline-setup: Configure. (Tools: Read, Edit)",
+  "",
+  "When you launch multiple agents for independent work, send them in one message.",
+  "",
+  "The following skills are available for use with the Skill tool:",
+  "- deep-research: Hybrid pipeline.",
+].join("\n");
+
+// Expected engine output: KEEP code/general/research/explore/plan/general-purpose,
+// DROP claude/Explore/Plan/statusline-setup; header + trailer + skills preserved.
+const CANONICAL_ROSTER_EXPECTED = [
+  "Available agent types for the Agent tool:",
+  "- code: www code agent. (Tools: All)",
+  "- explore: Custom read-only. (Tools: Read)",
+  "- general: www general agent. (Tools: All)",
+  "- general-purpose: General. (Tools: *)",
+  "- plan: Custom read-only. (Tools: Read)",
+  "- research: www research agent. (Tools: All)",
+  "",
+  "When you launch multiple agents for independent work, send them in one message.",
+  "",
+  "The following skills are available for use with the Skill tool:",
+  "- deep-research: Hybrid pipeline.",
+].join("\n");
+
+const ROSTER_FIXTURES: Array<[string, string, string]> = [
+  ["canonical roster ending on blank line", CANONICAL_ROSTER, CANONICAL_ROSTER_EXPECTED],
   [
     "block ended by 'When you launch…' line",
     [
       "Available agent types for the Agent tool:",
-      "- balanced: keep. (Tools: All)",
+      "- code: keep. (Tools: All)",
       "- statusline-setup: drop. (Tools: Read)",
+      "When you launch multiple agents, send them in one message.",
+      "- deep-research: this is a skill, must be preserved.",
+    ].join("\n"),
+    [
+      "Available agent types for the Agent tool:",
+      "- code: keep. (Tools: All)",
       "When you launch multiple agents, send them in one message.",
       "- deep-research: this is a skill, must be preserved.",
     ].join("\n"),
@@ -67,8 +92,14 @@ const ROSTER_FIXTURES: Array<[string, string]> = [
     "block ended by a '#…' heading line",
     [
       "Available agent types for the Agent tool:",
-      "- wild: keep. (Tools: All)",
+      "- research: keep. (Tools: All)",
       "- claude: drop. (Tools: *)",
+      "# MCP Server Instructions",
+      "- something: preserved after heading.",
+    ].join("\n"),
+    [
+      "Available agent types for the Agent tool:",
+      "- research: keep. (Tools: All)",
       "# MCP Server Instructions",
       "- something: preserved after heading.",
     ].join("\n"),
@@ -76,8 +107,13 @@ const ROSTER_FIXTURES: Array<[string, string]> = [
   [
     "marker only mentioned in prose ⇒ early-out no-op",
     "See the section 'Available agent types for the Agent tool:' which is inline prose, not a header.",
+    "See the section 'Available agent types for the Agent tool:' which is inline prose, not a header.",
   ],
-  ["no marker at all ⇒ identity", "Just a normal system prompt with a - dash: line."],
+  [
+    "no marker at all ⇒ identity",
+    "Just a normal system prompt with a - dash: line.",
+    "Just a normal system prompt with a - dash: line.",
+  ],
   [
     "capitalized built-ins dropped, lowercase customs kept",
     [
@@ -89,35 +125,31 @@ const ROSTER_FIXTURES: Array<[string, string]> = [
       "- general-purpose: keep",
       "",
     ].join("\n"),
+    [
+      "Available agent types for the Agent tool:",
+      "- explore: keep",
+      "- plan: keep",
+      "- general-purpose: keep",
+      "",
+    ].join("\n"),
   ],
 ];
 
-for (const [label, input] of ROSTER_FIXTURES) {
-  test(`roster byte-equivalence — ${label}`, () => {
-    const legacy = stripBuiltinAgentRoster(input);
+for (const [label, input, expected] of ROSTER_FIXTURES) {
+  test(`roster strip correctness — ${label}`, () => {
     const engine = stripListBlock(input, ROSTER_OP);
-    assert.equal(engine, legacy, "engine strip_list_block must be byte-identical to live stripper");
+    assert.equal(engine, expected, "engine strip_list_block must produce the correct roster");
   });
 }
 
-test("roster byte-equivalence via applyPreSourceRewrites on a role:system STRING message", () => {
-  const roster = ROSTER_FIXTURES[0][1];
+test("roster strip via applyPreSourceRewrites on a role:system STRING message", () => {
   const rule: MessageRewriteRule = {
     target: { kind: "message", role: "system" },
     op: ROSTER_OP,
   };
-  const body = { messages: [{ role: "system", content: roster }] };
+  const body = { messages: [{ role: "system", content: CANONICAL_ROSTER }] };
   applyPreSourceRewrites({ sourceFormat: "claude" }, body, [rule]);
-  assert.equal(body.messages[0].content, stripBuiltinAgentRoster(roster));
-});
-
-test("roster: array-content is NOT stripped by the live fn (string-only) — equivalence scope note", () => {
-  // The live fn is only called on the STRING branch of convertClaudeMessage, so
-  // byte-equivalence is a string-content property. This documents that the
-  // engine's array-text-block support is an opt-in enhancement, out of the
-  // equivalence proof (plan-v2 §5.3).
-  const roster = ROSTER_FIXTURES[0][1];
-  assert.equal(typeof stripBuiltinAgentRoster(roster), "string");
+  assert.equal(body.messages[0].content, CANONICAL_ROSTER_EXPECTED);
 });
 
 // ────────────────────────────────────────────────────────────────────────────

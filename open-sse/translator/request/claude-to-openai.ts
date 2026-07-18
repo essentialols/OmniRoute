@@ -18,54 +18,6 @@ function stripAnthropicBillingHeader(text: unknown): string {
   return text.replace(/^x-anthropic-billing-header:[^\n]*(?:\r?\n)?/i, "");
 }
 
-// Local Ornith agents to keep visible in the Agent-tool roster. Case-sensitive:
-// the operator's custom lowercase `explore`/`plan` (read-only Ornith agents) are
-// kept, while Claude Code's built-in capitalized `Explore`/`Plan` are dropped.
-const ORNITH_AGENT_WHITELIST = new Set([
-  "balanced",
-  "creative",
-  "precise",
-  "wild",
-  "explore",
-  "plan",
-  "general-purpose",
-]);
-
-/**
- * Hide Claude Code's built-in agent types (claude, Explore, general-purpose,
- * Plan, statusline-setup, …) from the local Ornith model. Claude Code injects
- * the agent roster as a trailing role:"system" message beginning
- * "Available agent types for the Agent tool:", one "- name: …" line per agent.
- * Keep only the whitelisted Ornith agents; drop the rest. Only the agent-roster
- * block is touched — the Task/Agent tool itself and the "skills" list below it
- * are left intact, so subagent spawning still works. Scoped to the Ornith
- * backend by the caller (model-name match) so other clients' rosters are
- * unaffected.
- */
-export function stripBuiltinAgentRoster(text: string): string {
-  const marker = "Available agent types for the Agent tool:";
-  if (!text.includes(marker)) return text;
-  const out: string[] = [];
-  let inRoster = false;
-  for (const line of text.split("\n")) {
-    if (line.startsWith(marker)) {
-      inRoster = true;
-      out.push(line);
-      continue;
-    }
-    if (inRoster) {
-      const entry = /^- ([A-Za-z0-9_-]+):/.exec(line);
-      if (entry) {
-        if (ORNITH_AGENT_WHITELIST.has(entry[1])) out.push(line);
-        continue; // drop non-whitelisted built-in agent line
-      }
-      inRoster = false; // blank line / "When you launch…" / "#…" ends the section
-    }
-    out.push(line);
-  }
-  return out.join("\n");
-}
-
 /**
  * Normalize tool input schema for OpenAI compatibility.
  * OpenAI strict mode requires `properties: {}` on object-type schemas,
@@ -149,10 +101,6 @@ export function claudeToOpenAIRequest(model, body, stream, credentials: unknown 
     !Array.isArray(credentials) &&
     (credentials as JsonRecord)._preserveCacheControl === true;
 
-  // Only strip the built-in agent roster when routing to the local Ornith model,
-  // so other clients' agent rosters (qqq/FleetView, etc.) are never touched.
-  const stripRoster = /ornith|M1y/i.test(String(model));
-
   const result: {
     model: string;
     messages: JsonRecord[];
@@ -222,7 +170,7 @@ export function claudeToOpenAIRequest(model, body, stream, credentials: unknown 
   if (body.messages && Array.isArray(body.messages)) {
     for (let i = 0; i < body.messages.length; i++) {
       const msg = body.messages[i];
-      const converted = convertClaudeMessage(msg, preserveCacheControl, stripRoster);
+      const converted = convertClaudeMessage(msg, preserveCacheControl);
       if (converted) {
         // Handle array of messages (multiple tool results)
         if (Array.isArray(converted)) {
@@ -400,12 +348,12 @@ function fixMissingToolResponses(messages) {
 }
 
 // Convert single Claude message - returns single message or array of messages
-function convertClaudeMessage(msg, preserveCacheControl = false, stripRoster = false) {
+function convertClaudeMessage(msg, preserveCacheControl = false) {
   const role = msg.role === "user" || msg.role === "tool" ? "user" : "assistant";
 
   // Simple string content
   if (typeof msg.content === "string") {
-    return { role, content: stripRoster ? stripBuiltinAgentRoster(msg.content) : msg.content };
+    return { role, content: msg.content };
   }
 
   // Array content
