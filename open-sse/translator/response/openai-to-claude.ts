@@ -309,6 +309,33 @@ export function openaiToClaudeResponse(chunk, state) {
       });
     }
 
+    // Reasoning-only / content-less finish guard. If the whole turn produced a
+    // thinking block (or nothing) but NO visible text block and NO tool_use, a
+    // Claude client renders it as "(empty response)". This happens with terse
+    // local models (e.g. Ornith) that put everything into reasoning_content and
+    // then finish (stop or length-truncated mid-reasoning) without emitting any
+    // content or tool call. Emit a minimal, non-empty text block so the turn
+    // always carries something renderable. `textBlockIndex` is assigned only when
+    // a real (non-whitespace) text block is opened, so this fires iff no visible
+    // content was ever produced this turn.
+    if (state.textBlockIndex === undefined && state.toolCalls.size === 0) {
+      const placeholderIndex = state.nextBlockIndex++;
+      results.push({
+        type: "content_block_start",
+        index: placeholderIndex,
+        content_block: { type: "text", text: "" },
+      });
+      results.push({
+        type: "content_block_delta",
+        index: placeholderIndex,
+        delta: { type: "text_delta", text: "…" },
+      });
+      results.push({
+        type: "content_block_stop",
+        index: placeholderIndex,
+      });
+    }
+
     // Mark finish for later usage injection in stream.js
     state.finishReason = choice.finish_reason;
 
