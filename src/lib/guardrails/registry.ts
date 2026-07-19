@@ -1,4 +1,5 @@
 import { BaseGuardrail, type GuardrailContext, type GuardrailExecutionResult } from "./base";
+import { LoopGuardGuardrail } from "./loopGuard";
 import { PIIMaskerGuardrail } from "./piiMasker";
 import { PromptInjectionGuardrail } from "./promptInjection";
 import { VisionBridgeGuardrail } from "./visionBridge";
@@ -266,6 +267,10 @@ export function registerDefaultGuardrails() {
   guardrailRegistry.register(new VisionBridgeGuardrail());
   guardrailRegistry.register(new PIIMaskerGuardrail());
   guardrailRegistry.register(new PromptInjectionGuardrail());
+  // Loop guard runs last (priority 30): it appends a steering/terminal message to
+  // the transcript tail, so it should see the payload after the other pre-call
+  // guardrails have finished with it.
+  guardrailRegistry.register(new LoopGuardGuardrail());
   defaultGuardrailsRegistered = true;
 
   return guardrailRegistry;

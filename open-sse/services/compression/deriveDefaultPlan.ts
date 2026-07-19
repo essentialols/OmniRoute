@@ -8,15 +8,11 @@ const SINGLE_MODE_OF: Record<string, string> = {
   aggressive: "aggressive",
   ultra: "ultra",
   rtk: "rtk",
+  omniglyph: "omniglyph",
 };
 
 export type CompressionSource =
-  | "request-header"
-  | "routing-override"
-  | "active-profile"
-  | "auto-trigger"
-  | "default"
-  | "off";
+  "request-header" | "routing-override" | "active-profile" | "auto-trigger" | "default" | "off";
 
 export interface DerivedPlan {
   mode: string;
@@ -36,7 +32,7 @@ export interface DerivedPlan {
  */
 export function deriveDefaultPlan(
   engines: Record<string, EngineToggle>,
-  masterEnabled: boolean,
+  masterEnabled: boolean
 ): DerivedPlan {
   if (!masterEnabled) return { mode: "off", stackedPipeline: [] };
 

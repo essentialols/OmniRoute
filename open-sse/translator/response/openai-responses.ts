@@ -70,33 +70,44 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
     state.parseTextualReasoningTags = shouldParseTextualReasoningTags(undefined, chunk.model);
   }
   const parseTextualReasoningTags = state.parseTextualReasoningTags === true;
+  // #3697: remember the upstream-resolved model so response.created/in_progress/completed
+  // can carry a `model` field (the Responses API spec has one; this translator previously
+  // omitted it). Codex CLI compatibility shim (chatCore's echoModel pipeline) rewrites this
+  // field to the client-requested effort-suffixed id for codex-originated requests.
+  if (!state.model && typeof chunk.model === "string" && chunk.model.trim()) {
+    state.model = chunk.model.trim();
+  }
 
   // Emit initial events
   if (!state.started) {
     state.started = true;
     state.responseId = chunk.id ? `resp_${chunk.id}` : state.responseId;
 
+    const createdResponse: Record<string, unknown> = {
+      id: state.responseId,
+      object: "response",
+      created_at: state.created,
+      status: "in_progress",
+      background: false,
+      error: null,
+      output: [],
+    };
+    if (state.model) createdResponse.model = state.model;
     emit("response.created", {
       type: "response.created",
-      response: {
-        id: state.responseId,
-        object: "response",
-        created_at: state.created,
-        status: "in_progress",
-        background: false,
-        error: null,
-        output: [],
-      },
+      response: createdResponse,
     });
 
+    const inProgressResponse: Record<string, unknown> = {
+      id: state.responseId,
+      object: "response",
+      created_at: state.created,
+      status: "in_progress",
+    };
+    if (state.model) inProgressResponse.model = state.model;
     emit("response.in_progress", {
       type: "response.in_progress",
-      response: {
-        id: state.responseId,
-        object: "response",
-        created_at: state.created,
-        status: "in_progress",
-      },
+      response: inProgressResponse,
     });
   }
 
@@ -167,6 +178,36 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
   }
 
   return events;
+}
+
+// Codex custom/composer tools (exec, apply_patch, …) are declared by the client with
+// Responses `type:"custom"`. The request translator records that set and threads it onto
+// `state.customToolNames`, so the response side knows which returned tool_calls must be
+// surfaced as `custom_tool_call` items (streamed via custom_tool_call_input.* events)
+// rather than `function_call`. `apply_patch` is always treated as custom even when the
+// set was not threaded, preserving the #1007 default. (#4862 exec composer follow-up.)
+function isCustomToolCall(state, name): boolean {
+  if (!name) return false;
+  if (name === "apply_patch") return true;
+  const set = state.customToolNames;
+  if (set instanceof Set) return set.has(name);
+  if (Array.isArray(set)) return set.includes(name);
+  return false;
+}
+
+// Re-attach the namespace to a function_call item whose bare name was flattened out of a
+// Responses `{type:"namespace"}` group on the request. Codex resolves collaboration executors
+// by an EXACT ToolName{namespace, name} and rejects a bare call ("unsupported call: spawn_agent");
+// it reconstructs the namespace from a SEPARATE `namespace` field on the wire function_call item
+// (protocol FunctionCall + router build_tool_call -> ToolName::new(namespace, name)), not by
+// splitting the name. `state.toolNamespaceByName` maps `bareName -> namespace` for the tools that
+// were namespace-flattened, so plain/MCP function tools are never touched.
+function applyToolNamespace(state, item): void {
+  const map = state.toolNamespaceByName;
+  if (!map) return;
+  const name = typeof item.name === "string" ? item.name : "";
+  const ns = name ? map[name] : undefined;
+  if (ns) item.namespace = ns;
 }
 
 // Normalize output_index to a non-negative integer (replaces fragile parseInt calls)
@@ -363,32 +404,40 @@ function emitToolCall(state, emit, tc) {
 
   if (funcName) state.funcNames[tcIdx] = funcName;
 
-  // Codex custom tools (apply_patch) are surfaced to the client as custom_tool_call items
-  // and stream their raw patch via custom_tool_call_input.* events instead of the
-  // function_call_arguments.* events used for regular function tools. (#1007)
-  const isCustomTool = (state.funcNames[tcIdx] || funcName) === "apply_patch";
+  // Codex custom tools (exec, apply_patch, …) are surfaced to the client as
+  // custom_tool_call items and stream their raw input via custom_tool_call_input.*
+  // events instead of the function_call_arguments.* events used for regular function
+  // tools. Which names are custom is threaded from the request via state.customToolNames.
+  // (#1007 / #4862)
+  const isCustomTool = isCustomToolCall(state, state.funcNames[tcIdx] || funcName);
 
   if (!state.funcCallIds[tcIdx] && newCallId) {
     state.funcCallIds[tcIdx] = newCallId;
 
+    let addedItem: Record<string, unknown>;
+    if (isCustomTool) {
+      addedItem = {
+        id: `fc_${newCallId}`,
+        type: "custom_tool_call",
+        input: "",
+        call_id: newCallId,
+        name: state.funcNames[tcIdx] || "",
+      };
+    } else {
+      addedItem = {
+        id: `fc_${newCallId}`,
+        type: "function_call",
+        arguments: "",
+        call_id: newCallId,
+        name: state.funcNames[tcIdx] || "",
+      };
+      applyToolNamespace(state, addedItem);
+    }
+
     emit("response.output_item.added", {
       type: "response.output_item.added",
       output_index: tcIdx,
-      item: isCustomTool
-        ? {
-            id: `fc_${newCallId}`,
-            type: "custom_tool_call",
-            input: "",
-            call_id: newCallId,
-            name: state.funcNames[tcIdx] || "",
-          }
-        : {
-            id: `fc_${newCallId}`,
-            type: "function_call",
-            arguments: "",
-            call_id: newCallId,
-            name: state.funcNames[tcIdx] || "",
-          },
+      item: addedItem,
     });
   }
 
@@ -420,12 +469,12 @@ function closeToolCall(state, emit, idx, recordAsCompleted = true) {
   if (callId && !state.funcItemDone[idx]) {
     const normalizedIndex = normalizeOutputIndex(idx);
     const args = state.funcArgsBuf[idx] || "{}";
-    const isCustomTool = (state.funcNames[idx] || "") === "apply_patch";
+    const isCustomTool = isCustomToolCall(state, state.funcNames[idx] || "");
 
     let funcItem;
     if (isCustomTool) {
       // The model produced JSON {"input":"..."} against the normalized custom-tool schema.
-      // Unwrap it back to the raw patch string the Codex runtime expects. (#1007)
+      // Unwrap it back to the raw input string the Codex runtime expects. (#1007 / #4862)
       let rawInput = args;
       try {
         const parsed = JSON.parse(args);
@@ -469,6 +518,7 @@ function closeToolCall(state, emit, idx, recordAsCompleted = true) {
         call_id: callId,
         name: state.funcNames[idx] || "",
       };
+      applyToolNamespace(state, funcItem);
 
       emit("response.output_item.done", {
         type: "response.output_item.done",
@@ -507,6 +557,11 @@ function sendCompleted(state, emit) {
       error: null,
       output,
     };
+
+    // #3697: same model echo as response.created/in_progress above.
+    if (state.model) {
+      response.model = state.model;
+    }
 
     if (state.usage) {
       response.usage = state.usage;

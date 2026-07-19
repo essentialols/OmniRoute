@@ -30,9 +30,9 @@ import { STREAM_IDLE_TIMEOUT_MS, FETCH_BODY_TIMEOUT_MS, HTTP_STATUS } from "../c
 import {
   OMIT_STREAMING_CHUNK_MARKER,
   sanitizeStreamingChunk,
-  isResponsesCommentaryMessageItem,
 } from "../handlers/responseSanitizer.ts";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
+import { shouldDropResponsesCommentaryEvent } from "./responsesCommentaryDrop.ts";
 import { buildErrorBody } from "./error.ts";
 import { parseTextualToolCallCandidate, isValidToolCallHeaderPrefix } from "./textualToolCall.ts";
 import { recordToolLatency } from "../services/toolLatencyTracker.ts";
@@ -134,6 +134,15 @@ type StreamOptions = {
   connectionId?: string | null;
   apiKeyInfo?: unknown;
   body?: unknown;
+  /** Tool names the Responses client declared as `type:"custom"` (Codex exec/apply_patch).
+   *  Threaded into the response-translation state so returned tool_calls with these names
+   *  are emitted as `custom_tool_call` items instead of `function_call`. */
+  customToolNames?: Iterable<string> | null;
+  /** Map of bare sub-tool name -> namespace, built from the Responses request's
+   *  `{type:"namespace"}` tool groups. Threaded into the response-translation state so a
+   *  returned bare tool_call (e.g. Codex Multi-Agent V2 `spawn_agent`) is re-emitted with its
+   *  `namespace` field, letting Codex resolve the namespaced executor (`agents/spawn_agent`). */
+  toolNamespaceByName?: Record<string, string> | null;
   onComplete?: ((payload: StreamCompletePayload) => void) | null;
   onFailure?: ((payload: StreamFailurePayload) => boolean | void | Promise<void>) | null;
 };
@@ -149,6 +158,12 @@ type TranslateState = ReturnType<typeof initState> & {
   suppressThinkClose?: boolean;
   /** Accumulated message content for call log response body */
   accumulatedContent?: string;
+  /** Tool names declared as Responses `type:"custom"` (Codex exec/apply_patch), threaded
+   *  from the request so returned tool_calls are emitted as `custom_tool_call` items. */
+  customToolNames?: Set<string> | null;
+  /** Map of bare sub-tool name -> namespace (Responses `{type:"namespace"}` groups), threaded
+   *  from the request so returned bare tool_calls are re-emitted with their `namespace` field. */
+  toolNamespaceByName?: Record<string, string> | null;
   upstreamError?: {
     status: number;
     type: string;
@@ -627,6 +642,8 @@ export function createSSEStream(options: StreamOptions = {}) {
     connectionId = null,
     apiKeyInfo = null,
     body = null,
+    customToolNames = null,
+    toolNamespaceByName = null,
     onComplete = null,
     onFailure = null,
     dropResponsesCommentary,
@@ -681,6 +698,8 @@ export function createSSEStream(options: StreamOptions = {}) {
           signatureNamespace,
           copilotCompatibleReasoning,
           suppressThinkClose,
+          customToolNames: customToolNames ? new Set(customToolNames) : null,
+          toolNamespaceByName: toolNamespaceByName ?? null,
           accumulatedContent: "",
         }
       : null;
@@ -1308,48 +1327,19 @@ export function createSSEStream(options: StreamOptions = {}) {
                     parsed.type === "error");
 
                 if (isResponsesSSE) {
-                  // #6199 — statefully drop internal commentary-phase output. The
-                  // `response.output_item.added` announces the phase; the follow-up
-                  // delta/done events only carry `item_id`/`output_index`, so we key
-                  // off those. Happy-path (non-commentary) events are untouched.
-                  if (shouldDropResponsesCommentary) {
-                    const responsesEventType = parsed.type as string;
-                    const eventOutputIndex =
-                      typeof parsed.output_index === "number" ? parsed.output_index : null;
-                    const eventItem =
-                      parsed.item && typeof parsed.item === "object" && !Array.isArray(parsed.item)
-                        ? (parsed.item as JsonRecord)
-                        : null;
-                    const eventItemId =
-                      typeof parsed.item_id === "string"
-                        ? parsed.item_id
-                        : eventItem && typeof eventItem.id === "string"
-                          ? eventItem.id
-                          : null;
-
-                    if (
-                      responsesEventType === "response.output_item.added" &&
-                      isResponsesCommentaryMessageItem(parsed.item)
-                    ) {
-                      if (eventItemId) passthroughResponsesCommentaryItemIds.add(eventItemId);
-                      if (eventOutputIndex !== null)
-                        passthroughResponsesCommentaryIndexes.add(eventOutputIndex);
-                      continue;
-                    }
-
-                    const belongsToCommentary =
-                      (eventItemId !== null &&
-                        passthroughResponsesCommentaryItemIds.has(eventItemId)) ||
-                      (eventOutputIndex !== null &&
-                        passthroughResponsesCommentaryIndexes.has(eventOutputIndex));
-                    if (belongsToCommentary) {
-                      if (responsesEventType === "response.output_item.done") {
-                        if (eventItemId) passthroughResponsesCommentaryItemIds.delete(eventItemId);
-                        if (eventOutputIndex !== null)
-                          passthroughResponsesCommentaryIndexes.delete(eventOutputIndex);
-                      }
-                      continue;
-                    }
+                  // #6199/#6561 — statefully drop internal commentary-phase output (see
+                  // ./responsesCommentaryDrop.ts) and clear the buffered `event:` line
+                  // for the same frame, or it flushes alone as an event-only SSE frame.
+                  if (
+                    shouldDropResponsesCommentary &&
+                    shouldDropResponsesCommentaryEvent(
+                      parsed as JsonRecord,
+                      passthroughResponsesCommentaryItemIds,
+                      passthroughResponsesCommentaryIndexes
+                    )
+                  ) {
+                    clearPendingPassthroughEvent();
+                    continue;
                   }
 
                   const responsesIdsNormalized = normalizeResponsesSseIds(parsed as JsonRecord);
@@ -2269,8 +2259,7 @@ export function createSSEStream(options: StreamOptions = {}) {
                     if (Array.isArray(flushedParsed.choices)) {
                       for (const choice of flushedParsed.choices as JsonRecord[]) {
                         const tcs = (choice as JsonRecord | undefined)?.delta as
-                          | JsonRecord
-                          | undefined;
+                          JsonRecord | undefined;
                         if (Array.isArray(tcs?.tool_calls)) {
                           for (const tc of tcs.tool_calls as JsonRecord[]) {
                             if (tc?.id != null && typeof tc.id !== "string") {
@@ -2644,17 +2633,15 @@ export function createSSEStream(options: StreamOptions = {}) {
               let content = (state?.accumulatedContent ?? "").trim() || "";
               const normalizedToolCalls: ToolCall[] = state?.toolCalls?.size
                 ? [...state.toolCalls.values()]
-                    .map(
-                      (tc: Record<string, unknown>): ToolCall => ({
-                        id: tc.id != null ? String(tc.id) : null,
-                        index: (tc.index as number) ?? (tc.blockIndex as number) ?? 0,
-                        type: (tc.type as string) ?? "function",
-                        function: (tc.function as ToolCall["function"]) ?? {
-                          name: (tc.name as string) ?? "",
-                          arguments: "",
-                        },
-                      })
-                    )
+                    .map((tc: Record<string, unknown>): ToolCall => ({
+                      id: tc.id != null ? String(tc.id) : null,
+                      index: (tc.index as number) ?? (tc.blockIndex as number) ?? 0,
+                      type: (tc.type as string) ?? "function",
+                      function: (tc.function as ToolCall["function"]) ?? {
+                        name: (tc.name as string) ?? "",
+                        arguments: "",
+                      },
+                    }))
                     .sort((a, b) => a.index - b.index)
                 : [];
               const textualToolCall = parseTextualToolCallFromContent(content);
@@ -2743,7 +2730,9 @@ export function createSSETransformStreamWithLogger(
   apiKeyInfo: unknown = null,
   onFailure: ((payload: StreamFailurePayload) => void | Promise<void>) | null = null,
   copilotCompatibleReasoning = false,
-  suppressThinkClose = false
+  suppressThinkClose = false,
+  customToolNames: Iterable<string> | null = null,
+  toolNamespaceByName: Record<string, string> | null = null
 ) {
   return createSSEStream({
     mode: STREAM_MODE.TRANSLATE,
@@ -2756,6 +2745,8 @@ export function createSSETransformStreamWithLogger(
     connectionId,
     apiKeyInfo,
     body,
+    customToolNames,
+    toolNamespaceByName,
     onComplete,
     onFailure,
     copilotCompatibleReasoning,

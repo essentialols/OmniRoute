@@ -1,5 +1,10 @@
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import {
+  getParamFilterConfig,
+  isAutoLearnGloballyEnabled,
+  addParamToBlocklist,
+} from "@/lib/db/paramFilters";
+import {
   mergeClientAnthropicBeta,
   normalizeAnthropicHeaderVariants,
 } from "../config/anthropicHeaders.ts";
@@ -1414,6 +1419,39 @@ export class BaseExecutor {
               `Upstream ${response.status} reports model lacks tool support on ${url} - retrying without tools`
             );
             response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
+          } else {
+            // Auto-learn: detect "Unsupported parameter" errors and persist to DB
+            // when the provider config has autoLearn enabled (#6625).
+            const autoLearned = findOffendingField(errText);
+            if (
+              autoLearned &&
+              !strippedFields.has(autoLearned) &&
+              (transformedBody as Record<string, unknown>)[autoLearned] !== undefined
+            ) {
+              try {
+                const config = getParamFilterConfig(this.provider);
+                const shouldAutoLearn = isAutoLearnGloballyEnabled() || config?.autoLearn === true;
+                if (shouldAutoLearn) {
+                  strippedFields.add(autoLearned);
+                  addParamToBlocklist(this.provider, autoLearned, model);
+                  delete (transformedBody as Record<string, unknown>)[autoLearned];
+                  let retryBody = JSON.stringify(transformedBody);
+                  if (isClaudeCodeCompatible(this.provider) || this.provider === "claude") {
+                    retryBody = await signRequestBody(retryBody);
+                  }
+                  log?.info?.(
+                    "AUTO_LEARN",
+                    `Auto-learned "${autoLearned}" for provider ${this.provider} (model: ${model}) from 400 on ${url} — retrying`
+                  );
+                  response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
+                }
+              } catch (learnError) {
+                log?.warn?.(
+                  "AUTO_LEARN",
+                  `Failed to persist auto-learned param "${autoLearned}" for ${this.provider}: ${String(learnError)}`
+                );
+              }
+            }
           }
         }
 

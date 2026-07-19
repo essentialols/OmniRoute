@@ -1,7 +1,8 @@
 import { handleImageGeneration } from "@omniroute/open-sse/handlers/imageGeneration.ts";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
+import { withNonChatCapture } from "@/app/api/v1/_shared/captureNonChat";
 import {
-  getProviderCredentials,
+  getProviderCredentialsWithQuotaPreflight,
   clearRecoveredProviderState,
   extractApiKey,
   isValidApiKey,
@@ -171,7 +172,7 @@ async function postHandler(request, context) {
   // Get credentials — skip for local providers (authType: "none")
   let credentials = null;
   if (providerConfig && providerConfig.authType !== "none") {
-    credentials = await getProviderCredentials(provider);
+    credentials = await getProviderCredentialsWithQuotaPreflight(provider);
     if (!credentials) {
       return errorResponse(
         HTTP_STATUS.BAD_REQUEST,
@@ -187,7 +188,7 @@ async function postHandler(request, context) {
       );
     }
   } else if (isCustomModel) {
-    credentials = await getProviderCredentials(provider);
+    credentials = await getProviderCredentialsWithQuotaPreflight(provider);
     if (!credentials) {
       return errorResponse(
         HTTP_STATUS.BAD_REQUEST,
@@ -261,4 +262,7 @@ async function postHandler(request, context) {
   });
 }
 
-export const POST = withInjectionGuard(postHandler);
+export const POST = withNonChatCapture(withInjectionGuard(postHandler), {
+  endpoint: "/v1/images/generations",
+  providerFallback: "images",
+});

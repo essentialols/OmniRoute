@@ -43,6 +43,7 @@ import {
 } from "../codeAssistSubscription.ts";
 import { toRecord, toNumber, getFieldValue } from "./scalars.ts";
 import { type UsageQuota, parseResetTime } from "./quota.ts";
+import { fetchAndParseAntigravityWeeklyQuotas } from "./antigravityWeeklyQuota.ts";
 
 type JsonRecord = Record<string, unknown>;
 type SubscriptionCacheEntry = {
@@ -146,8 +147,7 @@ function getAntigravityLocalUsageUnits(
            AND timestamp < ?`
       )
       .get(provider, connectionId, modelId, windowStart, windowEnd) as
-      | { tokens?: unknown }
-      | undefined;
+      { tokens?: unknown } | undefined;
 
     const tokens = Number(row?.tokens || 0);
     if (!Number.isFinite(tokens) || tokens <= 0) return 0;
@@ -604,9 +604,10 @@ export async function getAntigravityUsage(
       );
     }
 
-    const [data, userQuotaData] = await Promise.all([
+    const [data, userQuotaData, weeklyQuotas] = await Promise.all([
       fetchAntigravityAvailableModelsCached(accessToken, projectId, options),
       fetchAntigravityUserQuotaCached(accessToken, projectId, options),
+      fetchAndParseAntigravityWeeklyQuotas(accessToken, projectId, options), // #4017
     ]);
     const dataObj = toRecord(data);
     if (dataObj.__antigravityForbidden === true) {
@@ -717,6 +718,7 @@ export async function getAntigravityUsage(
       plan: getAntigravityPlanLabel(subscriptionInfo, providerSpecificData),
       quotas: {
         ...quotas,
+        ...weeklyQuotas,
         ...(creditBalance !== null && {
           credits: {
             used: 0,

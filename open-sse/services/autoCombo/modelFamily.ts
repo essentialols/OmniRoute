@@ -13,7 +13,8 @@
  * in isolation without touching the DB/registry-backed virtual factory.
  */
 
-export type ModelFamily = "glm" | "minimax" | "mimo" | "zai" | "gemma" | "llama" | "gemini";
+export type ModelFamily =
+  "glm" | "minimax" | "mimo" | "zai" | "gemma" | "llama" | "gemini" | "chinese";
 
 export const MODEL_FAMILIES: readonly ModelFamily[] = [
   "glm",
@@ -23,6 +24,7 @@ export const MODEL_FAMILIES: readonly ModelFamily[] = [
   "gemma",
   "llama",
   "gemini",
+  "chinese",
 ];
 
 const MODEL_FAMILY_SET: ReadonlySet<string> = new Set(MODEL_FAMILIES);
@@ -76,14 +78,58 @@ interface FamilyPoolCandidate {
   model: string;
 }
 
+const CHINESE_PROVIDERS: ReadonlySet<string> = new Set([
+  "kimi-web",
+  "kimi",
+  "glm-web",
+  "glm",
+  "zai",
+  "zai-web",
+  "deepseek-web",
+  "deepseek",
+  "qwen",
+  "minimax",
+  "moonshot",
+  "baichuan",
+  "yi",
+  "stepfun",
+  "doubao",
+  "sensenova",
+  "sparkdesk",
+  "iflytek",
+  "alibaba",
+  "xiaomi-mimo",
+  "yuanbao-web",
+  "tencent",
+  "volcengine",
+  "codebuddy-cn",
+  "qianfan",
+  "siliconflow",
+]);
+
+const CHINESE_MODEL_PATTERN =
+  /^(qwen|deepseek|kimi|glm-|chatglm|minimax-|mimo-|yi-|baichuan|ernie|spark|hunyuan|abab)/i;
+
+function bareModelId(modelId: string): string {
+  return modelId.includes("/") ? modelId.slice(modelId.lastIndexOf("/") + 1) : modelId;
+}
+
 /**
  * Build the candidate filter for `auto/<family>`. Provider-override families
  * (currently only `zai`) filter by connection provider id; every other family
  * filters by `detectModelFamily(model) === family`.
+ *
+ * `chinese` is a composite family spanning all Chinese-origin providers AND
+ * Chinese-origin models hosted on non-Chinese providers (e.g. Qwen on Groq).
  */
 export function buildFamilyCandidateFilter(
   family: ModelFamily
 ): (candidate: FamilyPoolCandidate) => boolean {
+  if (family === "chinese") {
+    return (candidate) =>
+      CHINESE_PROVIDERS.has(candidate.provider) ||
+      CHINESE_MODEL_PATTERN.test(bareModelId(candidate.model));
+  }
   const providerOverride = FAMILY_PROVIDER_OVERRIDE[family];
   if (providerOverride) {
     return (candidate) => candidate.provider === providerOverride;

@@ -1,6 +1,10 @@
 import { handleAudioSpeech } from "@omniroute/open-sse/handlers/audioSpeech.ts";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
-import { getProviderCredentials, clearRecoveredProviderState } from "@/sse/services/auth";
+import { withNonChatCapture } from "@/app/api/v1/_shared/captureNonChat";
+import {
+  getProviderCredentialsWithQuotaPreflight,
+  clearRecoveredProviderState,
+} from "@/sse/services/auth";
 import {
   parseSpeechModel,
   getSpeechProvider,
@@ -95,7 +99,7 @@ async function postHandler(request, context) {
   // Get credentials — skip for local providers (authType: "none")
   let credentials = null;
   if (providerConfig && providerConfig.authType !== "none") {
-    credentials = await getProviderCredentials(provider);
+    credentials = await getProviderCredentialsWithQuotaPreflight(provider);
     if (!credentials) {
       return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
     }
@@ -129,4 +133,7 @@ async function postHandler(request, context) {
   return response;
 }
 
-export const POST = withInjectionGuard(postHandler);
+export const POST = withNonChatCapture(withInjectionGuard(postHandler), {
+  endpoint: "/v1/audio/speech",
+  providerFallback: "audio",
+});

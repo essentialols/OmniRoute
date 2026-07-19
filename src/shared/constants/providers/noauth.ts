@@ -120,25 +120,6 @@ export const NOAUTH_PROVIDERS = {
       text: "Augment (Auggie CLI) requires the `auggie` binary installed and authenticated locally (`auggie login`). OmniRoute spawns it as a subprocess and never sees or stores your Augment credentials.",
     },
   },
-  "glm-web": {
-    id: "glm-web",
-    alias: "glm-web",
-    name: "GLM Web (Zhipu Free)",
-    icon: "auto_awesome",
-    color: "#3859FF",
-    textIcon: "GW",
-    website: "https://chatglm.cn",
-    noAuth: true,
-    hasFree: true,
-    serviceKinds: ["llm"],
-    freeNote:
-      "Free GLM (Zhipu 智谱清言) via chatglm.cn. No API key: the executor auto-mints a ~24h guest token per request. Rate limits apply.",
-    authHint:
-      "No credentials required. Optionally paste a chatglm.cn chatglm_refresh_token cookie (DevTools > Application > Cookies) for higher rate limits, or leave empty to use the free guest token.",
-    notice: {
-      text: "GLM Web uses the free chatglm.cn consumer webchat with an auto-generated guest token (no signup). This is NOT the paid api.z.ai / bigmodel.cn API. Rate limits apply.",
-    },
-  },
   brave: {
     id: "brave",
     name: "Brave Leo",

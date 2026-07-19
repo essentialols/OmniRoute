@@ -2,8 +2,8 @@ export interface EngineMeta {
   id: string;
   label: string;
   stackPriority: number;
-  levels?: string[];        // intensity options; undefined = no level selector
-  isSingleMode: boolean;    // can be the effective mode when it is the only engine on
+  levels?: string[]; // intensity options; undefined = no level selector
+  isSingleMode: boolean; // can be the effective mode when it is the only engine on
   description: string;
 }
 
@@ -79,6 +79,13 @@ export const ENGINE_CATALOG: Record<string, EngineMeta> = {
     stackPriority: 40,
     isSingleMode: true,
     description: "Heuristic token pruning (+ optional SLM).",
+  },
+  omniglyph: {
+    id: "omniglyph",
+    label: "OmniGlyph",
+    stackPriority: 90,
+    isSingleMode: true,
+    description: "Contexto-como-imagem (Claude Fable 5, rota direta).",
   },
 };
 
