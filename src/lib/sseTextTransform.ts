@@ -199,7 +199,17 @@ export function createSseTextTransform(
             lastContentJson = json;
           }
 
-          if (isStopSignal && onFlush && !flushed) {
+          // Fire onFlush on EVERY stop signal, not once per stream. A single response
+          // can carry multiple content blocks each closed by its own stop signal (e.g.
+          // a Claude reasoning->text stream: the thinking block's content_block_stop then
+          // the text block's). A once-only guard here drained the first block's buffer and
+          // then blocked every later block's stop, silently dropping the held-back
+          // rolling-window tail of the answer. onFlush drains at most one buffer per call
+          // and returns a falsy value once its buffers are empty, so re-firing on each stop
+          // (and again at [DONE]/stream-close below) cannot double-emit already-flushed
+          // content. The terminal [DONE] and flush() sites keep the `flushed` guard so a
+          // trailing [DONE] does not double-invoke onFlush after the stream-close flush.
+          if (isStopSignal && onFlush) {
             const flushedValue = onFlush(
               lastJson || json,
               isJsonStream,
@@ -215,7 +225,6 @@ export function createSseTextTransform(
               }
               controller.enqueue(encoder.encode(prefix + payload + "\n\n"));
             }
-            flushed = true;
           }
 
           if (!isStopSignal && !isSnapshot) {
