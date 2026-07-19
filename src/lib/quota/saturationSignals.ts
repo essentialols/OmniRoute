@@ -281,11 +281,19 @@ function codexWindowKey(window: QuotaWindow): string {
 
 async function fetchCodexSaturation(
   connectionId: string,
-  dim: DimensionSpec
+  dim: DimensionSpec,
+  connection?: Record<string, unknown>
 ): Promise<number> {
   // Dynamic import — codexQuotaFetcher lives in open-sse workspace
   const mod = await import("@omniroute/open-sse/services/codexQuotaFetcher");
-  const quota = await mod.fetchCodexQuota(connectionId);
+  // #6379: pass the loaded connection snapshot through so fetchCodexQuota can
+  // read its accessToken/workspaceId even when this connection was never
+  // registered via registerCodexConnection() (e.g. during headroom ranking,
+  // which runs BEFORE any request is dispatched for the candidate). Without
+  // this, fetchCodexQuota returns null for every candidate and saturation
+  // fails open to 0 across the board — headroom then can't tell accounts
+  // apart and keeps the original combo order.
+  const quota = await mod.fetchCodexQuota(connectionId, connection);
   if (!quota) return 0;
 
   const winKey = codexWindowKey(dim.window);
@@ -298,10 +306,7 @@ async function fetchCodexSaturation(
   return Math.min(1, Math.max(0, quota.percentUsed ?? 0));
 }
 
-async function fetchBailianSaturation(
-  connectionId: string,
-  dim: DimensionSpec
-): Promise<number> {
+async function fetchBailianSaturation(connectionId: string, dim: DimensionSpec): Promise<number> {
   const mod = await import("@omniroute/open-sse/services/bailianQuotaFetcher");
   const quota = await mod.fetchBailianQuota(connectionId);
   if (!quota) return 0;
@@ -310,13 +315,13 @@ async function fetchBailianSaturation(
   let pct = 0;
   switch (dim.window) {
     case "5h":
-      pct = (q.window5h as Record<string, unknown>)?.percentUsed as number ?? 0;
+      pct = ((q.window5h as Record<string, unknown>)?.percentUsed as number) ?? 0;
       break;
     case "weekly":
-      pct = (q.windowWeekly as Record<string, unknown>)?.percentUsed as number ?? 0;
+      pct = ((q.windowWeekly as Record<string, unknown>)?.percentUsed as number) ?? 0;
       break;
     case "monthly":
-      pct = (q.windowMonthly as Record<string, unknown>)?.percentUsed as number ?? 0;
+      pct = ((q.windowMonthly as Record<string, unknown>)?.percentUsed as number) ?? 0;
       break;
     default:
       pct = (q.percentUsed as number) ?? 0;
@@ -353,9 +358,7 @@ interface AnthropicSaturationDeps {
 let _anthropicDepsOverride: AnthropicSaturationDeps | null = null;
 
 /** Test-only: inject ({loadConnection, fetchUsage}); pass null to restore. */
-export function __setAnthropicSaturationDepsForTests(
-  deps: AnthropicSaturationDeps | null
-): void {
+export function __setAnthropicSaturationDepsForTests(deps: AnthropicSaturationDeps | null): void {
   _anthropicDepsOverride = deps;
 }
 
@@ -415,10 +418,7 @@ function planUtilizationFromUsage(usage: unknown, window: QuotaWindow): number |
   return Math.min(1, Math.max(0, used / 100));
 }
 
-async function fetchAnthropicSaturation(
-  connectionId: string,
-  dim: DimensionSpec
-): Promise<number> {
+async function fetchAnthropicSaturation(connectionId: string, dim: DimensionSpec): Promise<number> {
   // Try the REAL plan-window utilization first (5h / weekly), via the same
   // /api/oauth/usage path usage.ts already uses. This is the signal fairShare
   // actually needs for Claude Pro/Max — the per-minute request headers do not
@@ -470,19 +470,13 @@ export function __setGenericUsageFetcherForTests(fetcher: GenericUsageFetcher | 
   _genericUsageFetcherOverride = fetcher;
 }
 
-async function defaultGenericUsageFetch(
-  connectionId: string,
-  provider: string
-): Promise<unknown> {
+async function defaultGenericUsageFetch(connectionId: string, provider: string): Promise<unknown> {
   const mod = await import("@omniroute/open-sse/services/usage");
   const conn = { id: connectionId, provider } as Parameters<typeof mod.getUsageForProvider>[0];
   return mod.getUsageForProvider(conn);
 }
 
-async function fetchGenericSaturation(
-  connectionId: string,
-  provider: string
-): Promise<number> {
+async function fetchGenericSaturation(connectionId: string, provider: string): Promise<number> {
   // 1. Real usage percent is authoritative when present (a provider that
   //    actually reports utilization beats the burst-window token headers).
   try {
@@ -524,7 +518,8 @@ async function fetchGenericSaturation(
 export async function getSaturation(
   connectionId: string,
   provider: string,
-  dim: DimensionSpec
+  dim: DimensionSpec,
+  connection?: Record<string, unknown>
 ): Promise<number> {
   const key = cacheKey(connectionId, provider, dim);
   const cached = _cache.get(key);
@@ -536,7 +531,7 @@ export async function getSaturation(
   try {
     switch (provider) {
       case "codex":
-        value = await fetchCodexSaturation(connectionId, dim);
+        value = await fetchCodexSaturation(connectionId, dim, connection);
         break;
       case "bailian":
         value = await fetchBailianSaturation(connectionId, dim);
@@ -550,7 +545,10 @@ export async function getSaturation(
         break;
     }
   } catch (err) {
-    log.warn({ err: (err as Error)?.message, connectionId, provider }, "saturation fetch failed — failing open with 0");
+    log.warn(
+      { err: (err as Error)?.message, connectionId, provider },
+      "saturation fetch failed — failing open with 0"
+    );
     value = 0;
   }
 

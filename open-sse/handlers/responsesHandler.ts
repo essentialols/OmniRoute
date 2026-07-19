@@ -7,6 +7,7 @@ import { CORS_HEADERS } from "../utils/cors.ts";
 import { handleChatCore } from "./chatCore.ts";
 import { convertResponsesApiFormat } from "../translator/helpers/responsesApiHelper.ts";
 import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.ts";
+import { buildToolNamespaceMap } from "./chatCore/openaiCompatibleTools.ts";
 import { createSseHeartbeatTransform, HEARTBEAT_SHAPES } from "../utils/sseHeartbeat.ts";
 import { SSE_HEARTBEAT_INTERVAL_MS } from "../config/constants.ts";
 import { isCaptureEnabled, captureClientIn, captureClientOut } from "../services/durableCapture.ts";
@@ -57,6 +58,12 @@ export async function handleResponsesCore({
     });
   }
 
+  // Capture the namespace tool map from the ORIGINAL Responses request (before conversion +
+  // the request-side namespace flatten). Used to re-attach the namespace to the model's bare
+  // tool calls on the response so codex resolves the namespaced executor (e.g. Multi-Agent V2
+  // agents/spawn_agent). null when the request carries no namespace tool groups.
+  const toolNamespaceByName = buildToolNamespaceMap(body?.tools);
+
   // Convert Responses API format to Chat Completions format
   const convertedBody = convertResponsesApiFormat(body, credentials);
 
@@ -92,7 +99,7 @@ export async function handleResponsesCore({
   }
 
   // Transform SSE stream to Responses API format (no logging in worker)
-  const transformStream = createResponsesApiTransformStream(null);
+  const transformStream = createResponsesApiTransformStream(null, undefined, toolNamespaceByName);
   const transformedBody = response.body.pipeThrough(transformStream).pipeThrough(
     createSseHeartbeatTransform({
       signal,

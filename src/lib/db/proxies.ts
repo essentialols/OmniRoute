@@ -6,6 +6,7 @@
 import { randomUUID, randomInt } from "crypto";
 import { getDbInstance } from "./core";
 import { backupDbFile } from "./backup";
+import { pickByLatency } from "./proxyLatency";
 import type {
   JsonRecord,
   ProxyScope,
@@ -19,10 +20,7 @@ import type {
   LegacyProxyConfig,
   ProxyRotationStrategy,
 } from "./proxies/types";
-import {
-  PROXY_ROTATION_STRATEGIES,
-  DEFAULT_PROXY_ROTATION_STRATEGY,
-} from "./proxies/types";
+import { PROXY_ROTATION_STRATEGIES, DEFAULT_PROXY_ROTATION_STRATEGY } from "./proxies/types";
 import {
   mapProxyRow,
   mapAssignmentRow,
@@ -689,13 +687,23 @@ function getOrCreateRotationRow(
   db: ReturnType<typeof getDbInstance>,
   normalizedScope: string,
   rotationScopeId: string
-): { strategy: ProxyRotationStrategy; cursor: number; stickyWindowMinutes: number; rotatedAt: string | null } {
+): {
+  strategy: ProxyRotationStrategy;
+  cursor: number;
+  stickyWindowMinutes: number;
+  rotatedAt: string | null;
+} {
   const row = db
     .prepare(
       "SELECT strategy, cursor, sticky_window_minutes, rotated_at FROM proxy_scope_rotation WHERE scope = ? AND scope_id IS ?"
     )
     .get(normalizedScope, rotationScopeId) as
-    | { strategy?: string; cursor?: number; sticky_window_minutes?: number; rotated_at?: string | null }
+    | {
+        strategy?: string;
+        cursor?: number;
+        sticky_window_minutes?: number;
+        rotated_at?: string | null;
+      }
     | undefined;
 
   if (row) {
@@ -743,6 +751,8 @@ function pickFromCandidates<T>(
     return candidates[randomInt(candidates.length)];
   }
 
+  if (state.strategy === "latency") return pickByLatency(db, candidates);
+
   if (state.strategy === "sticky") {
     const windowMs = state.stickyWindowMinutes * 60_000;
     const lastRotated = state.rotatedAt ? Date.parse(state.rotatedAt) : NaN;
@@ -752,7 +762,13 @@ function pickFromCandidates<T>(
       cursor = state.cursor + 1;
       db.prepare(
         "UPDATE proxy_scope_rotation SET cursor = ?, rotated_at = ?, updated_at = ? WHERE scope = ? AND scope_id IS ?"
-      ).run(cursor, new Date().toISOString(), new Date().toISOString(), normalizedScope, rotationScopeId);
+      ).run(
+        cursor,
+        new Date().toISOString(),
+        new Date().toISOString(),
+        normalizedScope,
+        rotationScopeId
+      );
     }
     const idx = ((cursor % candidates.length) + candidates.length) % candidates.length;
     return candidates[idx];

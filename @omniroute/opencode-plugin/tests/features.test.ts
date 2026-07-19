@@ -376,7 +376,8 @@ test("provider hook: enrichment fetcher called when features.enrichment !== fals
   );
   const out = await hook.models!({} as never, { auth: apiAuth("sk") as never });
   assert.equal(called, 1, "enrichment fetcher called once");
-  const m = out["opencode-omniroute/claude-sonnet-4-6"];
+  // #6859: dynamic-hook catalog keys use the unprefixed omnirouteProviderId.
+  const m = out["omniroute/claude-sonnet-4-6"];
   assert.equal(m.name, "Claude Sonnet 4.6", "enrichment name overlay applied");
   assert.equal(m.cost.input, 3, "enrichment pricing applied");
   assert.equal(m.cost.output, 15);
@@ -401,11 +402,7 @@ test("provider hook: enrichment fetcher NOT called when features.enrichment:fals
   );
   const out = await hook.models!({} as never, { auth: apiAuth("sk") as never });
   assert.equal(called, 0, "enrichment fetcher NOT called when gated off");
-  assert.equal(
-    out["opencode-omniroute/claude-sonnet-4-6"].name,
-    "claude-sonnet-4-6",
-    "raw id preserved"
-  );
+  assert.equal(out["omniroute/claude-sonnet-4-6"].name, "claude-sonnet-4-6", "raw id preserved");
 });
 
 test("provider hook: compression metadata fetcher NOT called by default (opt-in)", async () => {
@@ -463,7 +460,7 @@ test("provider hook: compression metadata fetcher called when opted in", async (
   );
   const out = await hook.models!({} as never, { auth: apiAuth("sk") as never });
   assert.equal(called, 1, "compression metadata fetcher called");
-  const combo = out["opencode-omniroute/claude-primary"];
+  const combo = out["omniroute/claude-primary"];
   assert.ok(combo, "combo entry present");
   assert.match(
     combo.name,
@@ -513,8 +510,7 @@ test("config hook: features.mcpAutoEmit:true writes mcp entry with provider apiK
   const input: { provider?: Record<string, unknown>; mcp?: Record<string, unknown> } = {};
   await hook(input as never);
   const entry = input.mcp?.["opencode-omniroute"] as
-    | { type: string; url: string; enabled: boolean; headers: Record<string, string> }
-    | undefined;
+    { type: string; url: string; enabled: boolean; headers: Record<string, string> } | undefined;
   assert.ok(entry, "mcp entry written");
   assert.equal(entry.type, "remote");
   assert.equal(

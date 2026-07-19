@@ -70,7 +70,7 @@ export function PlaygroundStudio() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden">
+    <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* Top bar with tabs + token/cost counter + export button */}
       <StudioTopBar
         activeTab={effectiveTab}

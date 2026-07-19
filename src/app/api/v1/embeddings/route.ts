@@ -11,6 +11,7 @@ import { createEmbeddingResponse, type EmbeddingHandlerOptions } from "@/lib/emb
 import { extractApiKey, isValidApiKey } from "@/sse/services/auth";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
 import { getSpecialtyModelsResponse } from "@/app/api/v1/_shared/specialtyCatalog";
+import { withNonChatCapture } from "@/app/api/v1/_shared/captureNonChat";
 
 export const dynamic = "force-dynamic";
 
@@ -86,4 +87,7 @@ async function postHandler(request, context) {
   });
 }
 
-export const POST = withInjectionGuard(postHandler);
+export const POST = withNonChatCapture(withInjectionGuard(postHandler), {
+  endpoint: "/v1/embeddings",
+  providerFallback: "embeddings",
+});

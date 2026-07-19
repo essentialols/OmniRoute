@@ -153,6 +153,8 @@ const executors = {
   zw: new ZaiWebExecutor(), // Alias
   "qwen-web": new QwenWebExecutor(),
   qw: new QwenWebExecutor(), // Alias
+  "zai-web": new ZaiWebExecutor(),
+  zw: new ZaiWebExecutor(), // Alias
   theoldllm: new TheOldLlmExecutor(),
   tllm: new TheOldLlmExecutor(), // Alias
   chipotle: new ChipotleExecutor(),

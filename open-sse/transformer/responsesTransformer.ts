@@ -77,7 +77,31 @@ export function createResponsesLogger(model, logsDir = null) {
  * @param {Object} logger - Optional logger instance
  * @returns {TransformStream}
  */
-export function createResponsesApiTransformStream(logger = null, keepaliveIntervalMs = 3000) {
+export function createResponsesApiTransformStream(
+  logger = null,
+  keepaliveIntervalMs = 3000,
+  // Codex Multi-Agent V2 (and any Responses-API namespace tool): the request-side
+  // flatten (normalizeOpenAICompatibleTools) collapses a `{type:"namespace", name, tools}`
+  // spec into BARE sub-tools so the chat-only local model can call them, which strips the
+  // namespace. Codex looks up executors by an EXACT ToolName{namespace, name} and rejects a
+  // bare call ("unsupported call: spawn_agent"). It reconstructs the namespace from a SEPARATE
+  // `namespace` field on the wire function_call item (protocol/src/models.rs FunctionCall +
+  // tools/router.rs build_tool_call -> ToolName::new(namespace, name)), NOT by splitting the
+  // name. So we re-attach the namespace here on the response. This map is `{ bareSubToolName ->
+  // namespace }`, built PER-REQUEST from the request's namespace tool specs, so only tools that
+  // were actually flattened from a namespace get re-tagged (MCP `mcp__a__b` function tools,
+  // which are never namespace-flattened, are left untouched).
+  toolNamespaceByName: Record<string, string> | null = null
+) {
+  // Attach the reconstructed namespace to a function_call item in place. Bare `name` stays as
+  // codex expects (ToolName.name); the separate `namespace` field is what codex keys on.
+  const applyToolNamespace = (item: Record<string, unknown>): void => {
+    if (!toolNamespaceByName) return;
+    const name = typeof item.name === "string" ? item.name : "";
+    const ns = name ? toolNamespaceByName[name] : undefined;
+    if (ns) item.namespace = ns;
+  };
+
   const state = {
     seq: 0,
     responseId: `resp_${Date.now()}`,
@@ -299,13 +323,14 @@ export function createResponsesApiTransformStream(logger = null, keepaliveInterv
         arguments: args,
       });
 
-      const funcItem = {
+      const funcItem: Record<string, unknown> = {
         id: `fc_${callId}`,
         type: "function_call",
         arguments: args,
         call_id: callId,
         name: state.funcNames[idx] || "",
       };
+      applyToolNamespace(funcItem);
 
       emit(controller, "response.output_item.done", {
         type: "response.output_item.done",
@@ -576,16 +601,19 @@ export function createResponsesApiTransformStream(logger = null, keepaliveInterv
               if (!state.funcCallIds[tcIdx] && newCallId) {
                 state.funcCallIds[tcIdx] = newCallId;
 
+                const addedItem: Record<string, unknown> = {
+                  id: `fc_${newCallId}`,
+                  type: "function_call",
+                  arguments: "",
+                  call_id: newCallId,
+                  name: state.funcNames[tcIdx] || "",
+                };
+                applyToolNamespace(addedItem);
+
                 emit(controller, "response.output_item.added", {
                   type: "response.output_item.added",
                   output_index: tcIdx,
-                  item: {
-                    id: `fc_${newCallId}`,
-                    type: "function_call",
-                    arguments: "",
-                    call_id: newCallId,
-                    name: state.funcNames[tcIdx] || "",
-                  },
+                  item: addedItem,
                 });
               }
 

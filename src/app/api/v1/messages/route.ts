@@ -1,6 +1,7 @@
 import { handleChat } from "@/sse/handlers/chat";
 import { initTranslators } from "@omniroute/open-sse/translator/index.ts";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
+import { requireJsonContentType } from "@/shared/middleware/requireJsonContentType";
 import {
   withEarlyStreamKeepalive,
   ANTHROPIC_PING_FRAME,
@@ -39,6 +40,11 @@ export async function OPTIONS() {
  * parsed at most once per request.
  */
 async function postHandler(request: any, context: any, preParsedBody: any = null) {
+  // Reject non-JSON Content-Type with 415 before touching the body — mirrors OpenAI's
+  // reference API and matches /v1/chat/completions (#6414).
+  const ctRejection = requireJsonContentType(request);
+  if (ctRejection) return ctRejection;
+
   await ensureInitialized();
   // Streaming Anthropic clients (Claude Code, the Anthropic SDK) drop the connection
   // when no bytes arrive while a large prompt is processed before the first token — a
@@ -52,7 +58,12 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
   if (accept.includes("text/event-stream")) {
     let model;
     try {
-      const body = preParsedBody ?? (await request.clone().json().catch(() => null));
+      const body =
+        preParsedBody ??
+        (await request
+          .clone()
+          .json()
+          .catch(() => null));
       model = body?.model;
     } catch {
       // body unavailable / non-JSON — fall back to the default keepalive threshold

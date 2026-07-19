@@ -1,4 +1,8 @@
 import { injectMemoryAndSkills } from "./chatCore/memorySkillsInjection.ts";
+import {
+  normalizeOpenAICompatibleTools,
+  buildToolNamespaceMap,
+} from "./chatCore/openaiCompatibleTools.ts";
 import { resolveChatCoreRequestSetup } from "./chatCore/requestSetup.ts";
 import { buildFailureUsageRecord } from "./chatCore/failureUsage.ts";
 import { extractSystemRoleMessages } from "./chatCore/claudeSystemRole.ts";
@@ -26,6 +30,7 @@ import {
   isStripReasoningRequested,
 } from "./chatCore/headers.ts";
 import { markCodexScopeRateLimited } from "./chatCore/codexFailover.ts";
+import { isCodexOriginatedHeaders } from "../config/codexIdentity.ts";
 import { trackDevice, extractIpFromHeaders } from "../services/deviceTracker.ts";
 import { getCombosCached } from "./chatCore/comboContextCache.ts";
 export { clearCombosCache, clearUpstreamProxyConfigCache } from "./chatCore/comboContextCache.ts";
@@ -72,6 +77,7 @@ import { defaultClaudeToolType } from "./chatCore/claudeToolDefaults.ts";
 import { injectSystemPrompt, injectCustomSystemPrompt } from "../services/systemPrompt.ts";
 import { translateRequest, needsTranslation } from "../translator/index.ts";
 import { FORMATS } from "../translator/formats.ts";
+import { extractResponsesCustomToolNames } from "../translator/request/openai-responses.ts";
 import { sanitizeKiroTools } from "../utils/kiroSanitizer.ts";
 import { splitMisplacedToolResults } from "../translator/helpers/claudeHelper.ts";
 import {
@@ -114,6 +120,7 @@ import { stripGpt5SamplingWhenReasoning } from "../services/gpt5SamplingGuard.ts
 import { getUnsupportedParams, REGISTRY } from "../config/providerRegistry.ts";
 import { supportsMaxTokens } from "@/lib/modelCapabilities.ts";
 import { normalizeThinkingForModel } from "@/shared/constants/modelSpecs.ts";
+import { isVisionModelId } from "@/shared/constants/visionModels.ts";
 import {
   buildErrorBody,
   createErrorResult,
@@ -296,6 +303,7 @@ import {
 import { resolveBackgroundTaskRedirect } from "./chatCore/backgroundRedirect.ts";
 import type { CompressionConfig, CompressionPipelineStep } from "../services/compression/types.ts";
 import { prepareWebSearchFallbackBody } from "../services/webSearchFallback.ts";
+import { resolveInterceptSearch } from "@/lib/db/interceptionRules";
 import {
   resolveExplicitStreamAlias,
   resolveStreamFlag,
@@ -563,6 +571,10 @@ export async function handleChatCore({
     clientRawRequest,
     provider,
     model,
+    // NEXA fusion-idempotency fix: body.messages feeds the key digest so combo-internal
+    // sub-requests (fusion panel + judge re-enter chatCore sharing the client's headers)
+    // can never collide on the raw Idempotency-Key/x-request-id header key.
+    body,
     effectiveServiceTier,
     startTime,
     log,
@@ -727,12 +739,17 @@ export async function handleChatCore({
   // Initialize rate limit settings from persisted DB (once, lazy)
   await initializeRateLimits();
 
+  // #3384: per-model interception rule (src/lib/db/interceptionRules.ts) overrides the
+  // native-bypass defaults below when the operator explicitly configured it for this
+  // provider/model pair; undefined falls through to the existing bypass logic.
+  const interceptSearchOverride = resolveInterceptSearch(provider, effectiveModel);
   const { body: bodyWithWebSearchFallback, fallback: webSearchFallbackPlan } =
     prepareWebSearchFallbackBody(body as Record<string, unknown>, {
       provider,
       sourceFormat,
       targetFormat,
       nativeCodexPassthrough,
+      interceptSearchOverride,
     });
   if (webSearchFallbackPlan.enabled) {
     body = bodyWithWebSearchFallback as typeof body;
@@ -753,8 +770,18 @@ export async function handleChatCore({
   // #1311 (opt-in): echo the client-requested alias/combo name in the response `model`
   // field instead of the upstream model, so strict clients (Claude Desktop) that validate
   // response.model === request.model stop rejecting alias/combo requests with a 401.
+  // #3697: always echo it for Codex CLI clients on the Responses API — regardless of the
+  // opt-in setting — since the Codex CLI status line/model button reads `response.model`
+  // to display the active model + reasoning effort (e.g. `gpt-5.5-xhigh`). Detection is by
+  // request headers (originator/User-Agent), not by the routed provider, so it still fires
+  // when `codex/gpt-5.5-xhigh` is routed through a combo to a non-codex upstream.
+  const isCodexResponsesEcho =
+    (isResponsesEndpoint || sourceFormat === FORMATS.OPENAI_RESPONSES) &&
+    isCodexOriginatedHeaders(clientRawRequest?.headers);
   const echoModel =
-    settings.echoRequestedModelName === true && typeof requestedModel === "string" && requestedModel
+    (settings.echoRequestedModelName === true || isCodexResponsesEcho) &&
+    typeof requestedModel === "string" &&
+    requestedModel
       ? requestedModel
       : null;
   const detailedLoggingEnabled =
@@ -1240,7 +1267,7 @@ export async function handleChatCore({
       // Phase 4A: unified output styles (supersedes cavemanOutputMode via the back-compat shim).
       let outputStyleResult:
         import("../services/compression/outputStyles/apply.ts").OutputStylesResult | null = null;
-      if (config.enabled) {
+      if (config.enabled && compressionHeader?.trim().toLowerCase() !== "off") {
         try {
           const { resolveOutputStyleSelection } =
             await import("../services/compression/outputStyles/backCompat.ts");
@@ -1341,6 +1368,10 @@ export async function handleChatCore({
         const compressionConfig = resolveCacheAwareConfig(config, compressionInputBody, cacheCtx);
         const result = await applyCompressionAsync(compressionInputBody, mode, {
           model: effectiveModel,
+          supportsVision: isVisionModelId(effectiveModel),
+          // Rota direta oficial ('anthropic') vs agregadores: o engine omniglyph
+          // exige 'direct' — agregadores redimensionam imagens (medido 2026-07-06).
+          providerTransport: provider === "anthropic" ? "direct" : "aggregator",
           config: compressionConfig,
           cachingContext: cacheCtx,
           principalId: apiKeyInfo?.id ? String(apiKeyInfo.id) : undefined,
@@ -1842,24 +1873,9 @@ export async function handleChatCore({
       // This must happen before translateRequest, which validates and throws on unknown types.
       if (provider?.startsWith("openai-compatible-") && Array.isArray(translatedBody.tools)) {
         const before = (translatedBody.tools as unknown[]).length;
-        translatedBody.tools = (translatedBody.tools as Record<string, unknown>[])
-          .filter((t) => !t.type || t.type === "function" || !!t.function || !!t.name)
-          .map((t) => {
-            if (!t.type || t.type === "function" || t.function) return t;
-            // Named non-function tool: normalise to function format so the translator
-            // does not throw on the unknown type.
-            return {
-              type: "function",
-              function: {
-                name: t.name,
-                ...(t.description === undefined ? {} : { description: t.description }),
-                ...(t.parameters !== undefined || t.input_schema !== undefined
-                  ? { parameters: t.parameters ?? t.input_schema ?? {} }
-                  : {}),
-                ...(t.strict === undefined ? {} : { strict: t.strict }),
-              },
-            };
-          });
+        translatedBody.tools = normalizeOpenAICompatibleTools(
+          translatedBody.tools as Record<string, unknown>[]
+        );
         const dropped = before - (translatedBody.tools as unknown[]).length;
         if (dropped > 0) {
           log?.debug?.(
@@ -3339,6 +3355,22 @@ export async function handleChatCore({
           console.warn(
             `[provider] Node ${errorConnectionId} project routing error (${statusCode}) — not banning`
           );
+        } else if (errorType === PROVIDER_ERROR_TYPES.MODEL_NOT_FOUND) {
+          // 404 — model/endpoint does not exist upstream. Lock the model so the
+          // retry/backoff loop stops hammering the dead endpoint (which would
+          // otherwise degenerate into a 429 rate-limit storm). Connection stays
+          // active since only the specific model is unavailable. (#6827)
+          const notFoundCooldownMs = COOLDOWN_MS.notFound;
+          lockModel(
+            provider,
+            errorConnectionId,
+            currentModel,
+            "model_not_found",
+            notFoundCooldownMs
+          );
+          console.warn(
+            `[provider] Node ${errorConnectionId} model not found (${statusCode}) for ${currentModel} - locking model for ${Math.ceil(notFoundCooldownMs / 1000)}s (connection stays active)`
+          );
         }
       } catch {
         // Best-effort state update; request flow should continue with fallback handling.
@@ -4404,6 +4436,30 @@ export async function handleChatCore({
     !isDroidCLI;
   const streamStateBody = finalBody || body;
 
+  // Codex declares its composer/exec tools (exec, apply_patch) with Responses
+  // `type:"custom"`. The request translation converts them to `{ input:string }`
+  // function tools, so the returned tool_calls arrive as ordinary function calls.
+  // Thread the original custom-tool names into the response translator so it re-emits
+  // those tool_calls as Responses `custom_tool_call` items (Codex rejects a
+  // `function_call` for a custom tool: "invoked with incompatible payload"). Extracted
+  // from the untranslated client body; empty for non-Responses clients (harmless).
+  const responsesCustomToolNames =
+    clientResponseFormat === FORMATS.OPENAI_RESPONSES
+      ? extractResponsesCustomToolNames(body)
+      : null;
+
+  // Codex Multi-Agent V2 (and any Responses `{type:"namespace"}` tool group): the request
+  // flatten collapses a namespace group into BARE sub-tools so the chat-only model can call
+  // them, which strips the namespace. Build a `bareName -> namespace` map from the ORIGINAL
+  // (untranslated) client body so the response translator can re-attach the `namespace` field
+  // to returned bare tool_calls; Codex then resolves the namespaced executor
+  // (`agents/spawn_agent`) instead of failing with "unsupported call: spawn_agent". Only
+  // namespace-flattened tools are mapped, so plain/MCP function tools are never re-tagged.
+  const responsesToolNamespaceByName =
+    clientResponseFormat === FORMATS.OPENAI_RESPONSES
+      ? buildToolNamespaceMap((body as { tools?: unknown } | null)?.tools)
+      : null;
+
   if (needsResponsesTranslation) {
     // Provider returns openai-responses, translate to openai (Chat Completions) that clients expect
     log?.debug?.("STREAM", `Responses translation mode: openai-responses → openai`);
@@ -4444,7 +4500,9 @@ export async function handleChatCore({
       resolveSuppressThinkClose({
         userAgent: streamUserAgent,
         thinkingMarkerHeader,
-      })
+      }),
+      responsesCustomToolNames,
+      responsesToolNamespaceByName
     );
   } else {
     log?.debug?.("STREAM", `Standard passthrough mode`);

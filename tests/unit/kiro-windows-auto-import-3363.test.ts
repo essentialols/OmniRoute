@@ -24,6 +24,7 @@ const core = await import("../../src/lib/db/core.ts");
 const { GET } = await import("../../src/app/api/oauth/kiro/auto-import/route.ts");
 
 const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 const ORIGINAL_APPDATA = process.env.APPDATA;
 const ORIGINAL_FETCH = globalThis.fetch;
 
@@ -37,12 +38,21 @@ test.beforeEach(() => {
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
   // Override HOME so homedir() returns a temp dir where no kiro-cli DB exists.
   process.env.HOME = tmpHome;
+  // On Windows os.homedir() reads USERPROFILE (not HOME), so isolate it too —
+  // otherwise the probe reads the real ~/.aws/sso/cache and can find an actual
+  // (e.g. external_idp organization) Kiro login on the test host.
+  process.env.USERPROFILE = tmpHome;
   // Ensure APPDATA is unset by default; individual tests that need it set it.
   delete process.env.APPDATA;
 });
 
 test.afterEach(() => {
   process.env.HOME = ORIGINAL_HOME;
+  if (ORIGINAL_USERPROFILE !== undefined) {
+    process.env.USERPROFILE = ORIGINAL_USERPROFILE;
+  } else {
+    delete process.env.USERPROFILE;
+  }
   if (ORIGINAL_APPDATA !== undefined) {
     process.env.APPDATA = ORIGINAL_APPDATA;
   } else {
@@ -92,9 +102,7 @@ test("triedPaths does NOT include any Windows path when process.env.APPDATA is n
   const paths = body.triedPaths as string[];
 
   // No path should reference "kiro/storage.db" (the Windows IDE storage path).
-  const hasWindowsPath = paths.some(
-    (p) => p.includes("storage.db") && p.includes("kiro")
-  );
+  const hasWindowsPath = paths.some((p) => p.includes("storage.db") && p.includes("kiro"));
   assert.equal(
     hasWindowsPath,
     false,
@@ -141,10 +149,7 @@ test("GET extracts refresh_token from a Windows storage.db with ItemTable schema
     expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
     region: "us-east-1",
   });
-  db.prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)").run(
-    "kiro:auth:token",
-    tokenValue
-  );
+  db.prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)").run("kiro:auth:token", tokenValue);
   db.close();
 
   // Point APPDATA at tmpHome so tryKiroCliSqlite() resolves
@@ -178,11 +183,7 @@ test("GET extracts refresh_token from a Windows storage.db with ItemTable schema
 
   const { status, body } = await callGet();
 
-  assert.equal(
-    status,
-    200,
-    `expected HTTP 200, got ${status}: ${JSON.stringify(body)}`
-  );
+  assert.equal(status, 200, `expected HTTP 200, got ${status}: ${JSON.stringify(body)}`);
   assert.equal(
     body.found,
     true,

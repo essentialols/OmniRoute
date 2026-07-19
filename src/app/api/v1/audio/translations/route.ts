@@ -1,7 +1,10 @@
 // Allow large audio/video file uploads — 5min for processing large files (up to 2GB)
 export const maxDuration = 300;
 import { handleAudioTranslation } from "@omniroute/open-sse/handlers/audioTranslation.ts";
-import { getProviderCredentials, clearRecoveredProviderState } from "@/sse/services/auth";
+import {
+  getProviderCredentialsWithQuotaPreflight,
+  clearRecoveredProviderState,
+} from "@/sse/services/auth";
 import {
   parseTranslationModel,
   getTranslationProvider,
@@ -18,6 +21,7 @@ import {
 } from "@/app/api/v1/_shared/rateLimit";
 import { attachOmniRouteMetaToResponse } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
+import { withNonChatCapture } from "@/app/api/v1/_shared/captureNonChat";
 
 /**
  * Handle CORS preflight
@@ -37,7 +41,7 @@ export async function OPTIONS() {
  * /v1/audio/transcriptions, output is always English regardless of the
  * source audio language.
  */
-export async function POST(request) {
+async function postHandler(request) {
   let formData;
   try {
     formData = await request.formData();
@@ -98,7 +102,7 @@ export async function POST(request) {
   // Get credentials — skip for local providers (authType: "none")
   let credentials = null;
   if (providerConfig && providerConfig.authType !== "none") {
-    credentials = await getProviderCredentials(provider);
+    credentials = await getProviderCredentialsWithQuotaPreflight(provider);
     if (!credentials) {
       return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
     }
@@ -127,3 +131,8 @@ export async function POST(request) {
   }
   return response;
 }
+
+export const POST = withNonChatCapture(postHandler, {
+  endpoint: "/v1/audio/translations",
+  providerFallback: "audio",
+});
