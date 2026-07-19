@@ -644,6 +644,11 @@ export function initState(sourceFormat) {
       funcItemDone: {},
       completedOutputItems: [],
       completedSent: false,
+      // Names the client declared as Responses `type:"custom"` (Codex exec/apply_patch).
+      // Threaded from the request translation so returned tool_calls with these names are
+      // emitted as `custom_tool_call` items instead of `function_call`. Populated by the
+      // stream setup (createSSEStream); null when no custom tools were declared.
+      customToolNames: null as Set<string> | null,
     };
   }
 
