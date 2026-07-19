@@ -1,3 +1,5 @@
+import { isLocalProvider, isOpenAICompatibleProvider } from "@/shared/constants/providers";
+
 type StreamReadinessBody = Record<string, unknown> | null | undefined;
 
 export type StreamReadinessPolicyInput = {
@@ -76,7 +78,9 @@ export function resolveStreamReadinessTimeout(
     return { timeoutMs: baseTimeoutMs, baseTimeoutMs, reasons: ["disabled"] };
   }
 
-  const maxTimeoutMs = Math.max(baseTimeoutMs, input.maxTimeoutMs ?? DEFAULT_MAX_TIMEOUT_MS);
+  const isLocal = isLocalProvider(input.provider) || isOpenAICompatibleProvider(input.provider);
+  const defaultMax = isLocal ? 1_800_000 : DEFAULT_MAX_TIMEOUT_MS;
+  const maxTimeoutMs = Math.max(baseTimeoutMs, input.maxTimeoutMs ?? defaultMax);
   const reasons: string[] = [];
   let timeoutMs = baseTimeoutMs;
 
@@ -109,11 +113,20 @@ export function resolveStreamReadinessTimeout(
     reasons.push("large_payload");
   }
 
-  // #3825: high-reasoning Codex GPT-5.x cold-starts at ~78s TTFB even for tiny
-  // prompts, so the +30s readiness budget must fire UNCONDITIONALLY for the
-  // high-effort case — the 80s base alone produced intermittent 504s at the
-  // readiness window. The legacy large-request bump still applies to non-high
-  // codex GPT-5.x requests (large history / tool-heavy).
+  // Local/self-hosted models on consumer GPUs can take minutes for prompt
+  // processing on cache miss (e.g. 25k tokens at 16 tok/s = 25 min). The
+  // stream readiness timeout guards against dead network connections, which
+  // is not a risk for local models. Skip straight to the max.
+  if (isLocal) {
+    timeoutMs = maxTimeoutMs;
+    reasons.push("local_or_self_hosted");
+  }
+
+  // #3825: high-reasoning Codex GPT-5.x cold-starts at ~78s TTFB even for
+  // tiny prompts, so the +30s readiness budget must fire UNCONDITIONALLY for
+  // the high-effort case (the 80s base alone produced intermittent 504s at
+  // the readiness window). The legacy large-request bump still applies to
+  // non-high codex GPT-5.x requests (large history / tool-heavy).
   if (codexHighReasoning) {
     timeoutMs += 30_000;
     reasons.push("codex_gpt_5_5_high_reasoning");

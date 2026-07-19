@@ -183,6 +183,199 @@ export function stripAllToolFields(body: Record<string, unknown>): boolean {
   return had;
 }
 
+// ── JSON Schema pattern anchoring (llama.cpp grammar engine compatibility) ────
+//
+// llama.cpp's grammar-based constrained decoding requires every `pattern` in a JSON
+// schema to be fully anchored (`^…$`). Without anchors llama-server rejects the
+// request with:
+//   "Pattern must start with '^' and end with '$'"
+// Cloud providers (OpenAI, Anthropic, Gemini, …) accept anchored patterns, so this
+// is safe to apply broadly for OpenAI-compat local backends.
+
+const MAX_SCHEMA_DEPTH = 32;
+
+function isPlainObj(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/** Recursively anchor every `pattern` value in a JSON Schema object.
+ *  Returns the original object when nothing changed (identity-preserving). */
+function anchorPatternsInSchema(schema: unknown, depth = 0): unknown {
+  if (depth > MAX_SCHEMA_DEPTH || !isPlainObj(schema)) return schema;
+
+  let changed = false;
+  const result: Record<string, unknown> = {};
+
+  for (const [k, v] of Object.entries(schema)) {
+    if (k === "pattern" && typeof v === "string") {
+      let p = v;
+      if (!p.startsWith("^")) p = "^" + p;
+      if (!p.endsWith("$")) p = p + "$";
+      if (p !== v) changed = true;
+      result[k] = p;
+    } else if (
+      (k === "properties" || k === "$defs" || k === "definitions" || k === "dependentSchemas") &&
+      isPlainObj(v)
+    ) {
+      const cleaned: Record<string, unknown> = {};
+      let subChanged = false;
+      for (const [pk, pv] of Object.entries(v)) {
+        const anchored = anchorPatternsInSchema(pv, depth + 1);
+        if (anchored !== pv) subChanged = true;
+        cleaned[pk] = anchored;
+      }
+      if (subChanged) {
+        changed = true;
+        result[k] = cleaned;
+      } else {
+        result[k] = v;
+      }
+    } else if (k === "patternProperties" && isPlainObj(v)) {
+      const cleaned: Record<string, unknown> = {};
+      let subChanged = false;
+      for (const [pk, pv] of Object.entries(v)) {
+        let anchoredKey = pk;
+        if (!pk.startsWith("^")) anchoredKey = "^" + anchoredKey;
+        if (!pk.endsWith("$")) anchoredKey = anchoredKey + "$";
+        if (anchoredKey !== pk) subChanged = true;
+        const anchoredVal = anchorPatternsInSchema(pv, depth + 1);
+        if (anchoredVal !== pv) subChanged = true;
+        cleaned[anchoredKey] = anchoredVal;
+      }
+      if (subChanged) {
+        changed = true;
+        result[k] = cleaned;
+      } else {
+        result[k] = v;
+      }
+    } else if (
+      (k === "items" ||
+        k === "additionalProperties" ||
+        k === "not" ||
+        k === "if" ||
+        k === "then" ||
+        k === "else" ||
+        k === "contains" ||
+        k === "unevaluatedProperties" ||
+        k === "unevaluatedItems") &&
+      isPlainObj(v)
+    ) {
+      const anchored = anchorPatternsInSchema(v, depth + 1);
+      if (anchored !== v) changed = true;
+      result[k] = anchored;
+    } else if (
+      (k === "anyOf" || k === "oneOf" || k === "allOf" || k === "prefixItems") &&
+      Array.isArray(v)
+    ) {
+      const mapped = v.map((s) => anchorPatternsInSchema(s, depth + 1));
+      const arrayChanged = mapped.some((m, i) => m !== v[i]);
+      if (arrayChanged) changed = true;
+      result[k] = arrayChanged ? mapped : v;
+    } else {
+      result[k] = v;
+    }
+  }
+
+  return changed ? result : schema;
+}
+
+/**
+ * Walk all JSON Schema locations in a Chat Completions request body and anchor every
+ * `pattern` field with `^` / `$` so llama.cpp's grammar engine can compile them.
+ *
+ * Locations: `tools[].function.parameters`, `response_format.json_schema.schema`.
+ * Returns a new object only when something was changed; otherwise returns `body`
+ * unchanged (referential no-op).
+ */
+export function anchorJsonSchemaPatterns<T extends Record<string, unknown>>(body: T): T {
+  if (!body || typeof body !== "object") return body;
+
+  let changed = false;
+  let next: Record<string, unknown> = body;
+
+  // 1. tools[].function.parameters
+  if (Array.isArray(body.tools)) {
+    const originalTools = body.tools as unknown[];
+    const anchored = originalTools.map((tool) => {
+      if (!isPlainObj(tool)) return tool;
+      const fn = tool.function as Record<string, unknown> | undefined;
+      if (!isPlainObj(fn) || !isPlainObj(fn.parameters)) return tool;
+      const anchoredParams = anchorPatternsInSchema(fn.parameters);
+      if (anchoredParams === fn.parameters) return tool;
+      return { ...tool, function: { ...fn, parameters: anchoredParams } };
+    });
+    if (anchored.some((t, i) => t !== originalTools[i])) {
+      if (!changed) {
+        next = { ...body };
+        changed = true;
+      }
+      next.tools = anchored;
+    }
+  }
+
+  // 2. response_format.json_schema.schema
+  const rf = body.response_format;
+  if (isPlainObj(rf)) {
+    const js = rf.json_schema;
+    if (isPlainObj(js) && isPlainObj(js.schema)) {
+      const anchoredSchema = anchorPatternsInSchema(js.schema);
+      if (anchoredSchema !== js.schema) {
+        if (!changed) {
+          next = { ...body };
+          changed = true;
+        }
+        next.response_format = { ...rf, json_schema: { ...js, schema: anchoredSchema } };
+      }
+    }
+  }
+
+  return next as T;
+}
+
+// ── Tool & schema canonicalization (prefix-cache hit maximization) ──────────
+//
+// llama-server (and MLX-VLM APC) reuses the KV cache for the longest matching
+// token prefix. Tool definitions are part of the prompt, so if the same set of
+// tools arrives in a different JSON key order or array order across requests,
+// the tokenized prefix diverges and the cache misses. Sorting the tools array
+// into a deterministic order ensures identical tool sets produce the same prefix.
+//
+// We intentionally do NOT sort keys within each tool's JSON Schema (parameters).
+// llama-server's grammar engine generates production rules based on property key
+// order; reordering them can produce unparseable grammars on some backends.
+
+/**
+ * Sort the `tools` array in a Chat Completions request body by (type, function.name)
+ * so identical tool sets always occupy the same position in the token prefix.
+ *
+ * Tool internals (key order, schema structure) are left untouched to avoid breaking
+ * llama-server grammar generation.
+ *
+ * Returns `body` unchanged (referential no-op) when there are no tools.
+ */
+export function canonicalizeTools<T extends Record<string, unknown>>(body: T): T {
+  if (!body || typeof body !== "object" || !Array.isArray(body.tools) || body.tools.length === 0) {
+    return body;
+  }
+
+  const tools = body.tools as unknown[];
+  const sorted = [...tools].sort((a, b) => {
+    const recA = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
+    const recB = (b && typeof b === "object" ? b : {}) as Record<string, unknown>;
+    const typeA = String(recA.type ?? "");
+    const typeB = String(recB.type ?? "");
+    if (typeA !== typeB) return typeA < typeB ? -1 : 1;
+    const nameA = toolFunctionName(a);
+    const nameB = toolFunctionName(b);
+    if (nameA !== nameB) return nameA < nameB ? -1 : 1;
+    return 0;
+  });
+
+  // Only allocate a new object if the order actually changed.
+  if (sorted.every((t, i) => t === tools[i])) return body;
+  return { ...body, tools: sorted };
+}
+
 /** Immutably drop request fields Groq rejects with a 400. */
 export function stripGroqUnsupportedFields<T extends Record<string, unknown>>(body: T): T {
   if (!body || typeof body !== "object") return body;

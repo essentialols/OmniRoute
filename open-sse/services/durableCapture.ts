@@ -345,6 +345,12 @@ function isBinaryContentType(contentType: string | null): boolean {
   );
 }
 
+export function isBinaryRequestContentType(contentType: string | null): boolean {
+  if (!contentType) return false;
+  const ct = contentType.toLowerCase();
+  return ct.startsWith("multipart/form-data") || isBinaryContentType(ct);
+}
+
 /**
  * Read a response body stream, retaining at most `limit` bytes but always
  * draining to completion so the other tee branch (the real response the caller

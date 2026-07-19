@@ -26,6 +26,8 @@ import {
   recordReplay,
   requiresReasoningReplay,
 } from "../services/reasoningCache.ts";
+import { applyPostTargetRewrites, applyPreSourceRewrites } from "../services/messageRewriter.ts";
+import { getMessageRewriteRulesSnapshot } from "../services/messageRewriteRules.ts";
 
 bootstrapTranslatorRegistry();
 export { register } from "./registry.ts";
@@ -170,6 +172,27 @@ export function translateRequest(
   const use9CharId = options?.normalizeToolCallId === true;
   const preserveDeveloperRole = options?.preserveDeveloperRole;
 
+  // Hook A — PRE-SOURCE message rewrites (config-driven). Operates on the
+  // SOURCE Claude-shaped body (intact role:"system" messages + `system` field)
+  // BEFORE any translation, because convertClaudeMessage collapses non-user/tool
+  // messages to role:"assistant" (claude-to-openai.ts:403-404) — after which the
+  // roster message can no longer be role-targeted. Owns the roster strip +
+  // billing-header strip. Gated to Claude-source; fail-open (never throws).
+  if (sourceFormat === FORMATS.CLAUDE) {
+    try {
+      const rewriteRules = getMessageRewriteRulesSnapshot().rules;
+      if (rewriteRules.length > 0) {
+        result = applyPreSourceRewrites(
+          { model, provider, sourceFormat, targetFormat },
+          result,
+          rewriteRules
+        );
+      }
+    } catch {
+      // fail-open: never block translation on a rewrite-engine error
+    }
+  }
+
   // Phase 2: Apply thinking budget control before normalization
   result = applyThinkingBudget(result);
 
@@ -310,6 +333,25 @@ export function translateRequest(
     const isClaudePassthrough = sourceFormat === FORMATS.CLAUDE;
     const preserveCache = isClaudePassthrough || options?.preserveCacheControl === true;
     result = prepareClaudeRequest(result, provider, preserveCache, model);
+
+    // Hook B — POST-TARGET message rewrites (config-driven). Operates on the
+    // fully-built target Claude `result.system` (the system-field term
+    // sanitizer). Runs for ALL Claude-target traffic, so unlike the inline
+    // sanitizer in openaiToClaudeRequest it ALSO covers claude→claude
+    // passthrough (a documented, tested coverage broadening — plan-v2 §2 Hook B).
+    // Fail-open (never throws).
+    try {
+      const rewriteRules = getMessageRewriteRulesSnapshot().rules;
+      if (rewriteRules.length > 0) {
+        result = applyPostTargetRewrites(
+          { model, provider, sourceFormat, targetFormat },
+          result,
+          rewriteRules
+        );
+      }
+    } catch {
+      // fail-open: never block translation on a rewrite-engine error
+    }
   }
 
   // Normalize openai-responses input shape for providers that require list input.

@@ -51,7 +51,6 @@ import { KimiWebExecutor } from "./kimi-web.ts";
 import { DoubaoWebExecutor } from "./doubao-web.ts";
 import { ZaiWebExecutor } from "./zai-web.ts";
 import { QwenWebExecutor } from "./qwen-web.ts";
-import { ZaiWebExecutor } from "./zai-web.ts";
 import { KimiExecutor } from "./kimi.ts";
 import { TheOldLlmExecutor } from "./theoldllm.ts";
 import { ChipotleExecutor } from "./chipotle.ts";

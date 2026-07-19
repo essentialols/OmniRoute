@@ -1417,7 +1417,7 @@ export class BaseExecutor {
           } else {
             // Auto-learn: detect "Unsupported parameter" errors and persist to DB
             // when the provider config has autoLearn enabled (#6625).
-            const autoLearned = detectUnsupportedParam(errText);
+            const autoLearned = findOffendingField(errText);
             if (
               autoLearned &&
               !strippedFields.has(autoLearned) &&
