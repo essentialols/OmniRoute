@@ -159,28 +159,39 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
       typeof lastJson.type === "string" &&
       (lastJson.type.startsWith("message") || lastJson.type.startsWith("content_block"))
     ) {
-      const buffers = getBuffers("0_0");
-      const delta: any = { type: "text_delta" };
-      let hasDelta = false;
-      if (buffers.content) {
-        delta.text = buffers.content;
-        buffers.content = "";
-        hasDelta = true;
-      }
+      // Flush the buffer for the block being closed. sanitizeObject keys Claude buffers
+      // by the content-block index (a content_block_delta with index N buffers under
+      // `${N}_0`), so a hardcoded "0_0" only ever saw the FIRST block (typically the
+      // thinking block at index 0) and silently dropped the held-back tail of every
+      // later block (e.g. the text block at index 1 -> the answer was truncated).
+      const blockIndex = typeof lastJson.index === "number" ? lastJson.index : 0;
+      const buffers = getBuffers(`${blockIndex}_0`);
+      // A Claude content_block_delta carries EXACTLY ONE typed delta that must match
+      // the block it targets: reasoning => thinking_delta (thinking block), content =>
+      // text_delta (text block), tool args => input_json_delta (tool_use block). The
+      // previous code hardcoded `type: "text_delta"` and then attached the buffered
+      // reasoning as `delta.thinking`, so flushing a thinking block's held-back tail
+      // emitted a `text_delta` targeting a thinking block. Claude Code rejects that with
+      // "Content block is not a text block", falls back to non-streaming, and re-issues
+      // the identical request, doubling every reasoning turn on the local MLX path.
+      // Each stop signal closes a single block, so only the matching buffer is non-empty
+      // here; pick the delta type that matches the buffered field so the flush stays
+      // valid for the block being closed.
+      let delta: Record<string, unknown> | null = null;
       if (buffers.reasoning) {
-        delta.thinking = buffers.reasoning;
+        delta = { type: "thinking_delta", thinking: buffers.reasoning };
         buffers.reasoning = "";
-        hasDelta = true;
-      }
-      if (buffers.partialJson) {
-        delta.partial_json = buffers.partialJson;
+      } else if (buffers.content) {
+        delta = { type: "text_delta", text: buffers.content };
+        buffers.content = "";
+      } else if (buffers.partialJson) {
+        delta = { type: "input_json_delta", partial_json: buffers.partialJson };
         buffers.partialJson = "";
-        hasDelta = true;
       }
-      if (hasDelta) {
+      if (delta) {
         return {
           type: "content_block_delta",
-          index: typeof lastJson.index === "number" ? lastJson.index : 0,
+          index: blockIndex,
           delta,
         };
       }
