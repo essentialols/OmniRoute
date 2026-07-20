@@ -6,6 +6,7 @@
  */
 
 import { LMARENA_DIRECT_IMAGE_MODELS } from "./providers/registry/lmarena/directModels.ts";
+import { getProviderModels } from "./providerModels.ts";
 
 interface ImageModelEntry {
   id: string;
@@ -782,4 +783,24 @@ export function getImageModelEntry(modelStr) {
     inputModalities: modelConfig.inputModalities || ["text"],
     description: modelConfig.description || undefined,
   };
+}
+
+/**
+ * True only for image-generation-ONLY models: registered in the image registry AND
+ * NOT also a curated chat model for the same provider.
+ *
+ * Some ids are legitimately dual-purpose (e.g. `codex/gpt-5.5` serves chat via
+ * /v1/chat/completions and image generation via the Responses `image_generation`
+ * tool), so it appears in BOTH IMAGE_PROVIDERS and the codex chat catalog. A plain
+ * `getImageModelEntry()` truthiness check on the chat endpoint wrongly rejects
+ * these (returned the confusing "is an image-generation model" 400 for a normal
+ * chat call). This predicate lets dual-purpose ids through (returns false) while
+ * still flagging pure image models (flux, chatgpt-web/gpt-5.3-instant, etc.),
+ * which have no chat-catalog entry (returns true).
+ */
+export function isImageOnlyModel(modelStr: string): boolean {
+  const entry = getImageModelEntry(modelStr);
+  if (!entry) return false;
+  const alsoChatModel = getProviderModels(entry.provider).some((m) => m.id === entry.model);
+  return !alsoChatModel;
 }
