@@ -265,7 +265,13 @@ export function createSseTextTransform(
             lastContentJson = json;
           }
 
-          if (isStopSignal && onFlush && !flushed) {
+          // Fire onFlush on EVERY stop signal, not once per stream: a Claude
+          // reasoning->text response closes each content block with its own stop, and a
+          // once-only guard here dropped the later blocks' held-back rolling-window tail.
+          // onFlush drains at most one buffer per call and returns falsy once empty, so
+          // re-firing (and the [DONE]/close sites below, which keep the `flushed` guard)
+          // cannot double-emit already-flushed content.
+          if (isStopSignal && onFlush) {
             const flushedValue = onFlush(
               lastJson || json,
               isJsonStream,
@@ -281,7 +287,6 @@ export function createSseTextTransform(
               }
               controller.enqueue(encoder.encode(prefix + payload + "\n\n"));
             }
-            flushed = true;
           }
 
           if (!isStopSignal && !isSnapshot) {
