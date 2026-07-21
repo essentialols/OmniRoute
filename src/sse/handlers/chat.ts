@@ -20,7 +20,7 @@ import {
 import { getModelInfo, getComboForModel } from "../services/model";
 import { resolveBareModelToConnectionDefault } from "@omniroute/open-sse/services/model.ts";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
-import { getImageModelEntry } from "@omniroute/open-sse/config/imageRegistry.ts";
+import { isImageOnlyModel } from "@omniroute/open-sse/config/imageRegistry.ts";
 import { acceptHeaderForcesStream } from "@omniroute/open-sse/utils/aiSdkCompat.ts";
 import { isSelfInflictedUpstreamTimeout } from "@omniroute/open-sse/handlers/chatCore/cooldownClassification.ts";
 import { applyNoThinkingAlias } from "@omniroute/open-sse/utils/noThinkingAlias.ts";
@@ -399,9 +399,11 @@ export async function handleChat(
   // Image-only models live in IMAGE_PROVIDERS (open-sse/config/imageRegistry.ts)
   // and are served by /v1/images/generations. Forwarding them to a chat upstream
   // yielded confusing raw provider 400s (e.g. HuggingFace: "not a chat model").
-  // getImageModelEntry returns non-null only for models registered in the image
-  // registry — chat-only models (openai/gpt-4o, etc.) resolve to null and pass.
-  if (getImageModelEntry(modelStr)) {
+  // isImageOnlyModel is true only for models in the image registry that are NOT
+  // also a curated chat model for that provider, so dual-purpose ids like
+  // codex/gpt-5.5 (chat + Responses image_generation tool) pass through, while
+  // pure image models (flux, chatgpt-web/gpt-5.3-instant, ...) are still rejected.
+  if (isImageOnlyModel(modelStr)) {
     log.warn("CHAT", `Rejecting image-generation model on chat endpoint: ${modelStr}`);
     return errorResponse(
       HTTP_STATUS.BAD_REQUEST,
