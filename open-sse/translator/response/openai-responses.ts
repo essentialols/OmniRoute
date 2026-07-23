@@ -13,6 +13,7 @@ import {
   normalizeOutputIndex,
   normalizeUpstreamFailure,
   extractResponsesReasoningSummaryText,
+  extractResponsesMessageText,
 } from "./openai-responses/pureHelpers.ts";
 
 // normalizeUpstreamFailure is re-exported for external importers (tests).
@@ -642,6 +643,53 @@ function markResponsesReasoningDeltaEmitted(state, itemId) {
   state.reasoningItemsWithDelta.add(id);
 }
 
+// #6570: remember that a visible-text delta was streamed for a given message item, so
+// the terminal `response.output_text.done` / message `response.output_item.done` snapshot
+// for that item is NOT re-emitted (which would duplicate the visible answer). Mirrors
+// markResponsesReasoningDeltaEmitted (#5786): keyed by item_id when present, with a global
+// fallback for streams whose deltas carry no item_id.
+function markResponsesTextDeltaEmitted(state, itemId) {
+  state.textDeltaEmitted = true;
+  const id = itemId != null ? String(itemId) : "";
+  if (!id) return;
+  if (!(state.textItemsWithDelta instanceof Set)) {
+    state.textItemsWithDelta = new Set();
+  }
+  state.textItemsWithDelta.add(id);
+}
+
+// #6570: has a visible-text delta already been streamed for this message item? Used to
+// decide whether a terminal text snapshot must be synthesized. Same emitted-for-item vs
+// emitted-without-item_id logic as the #5786 reasoning done-snapshot guard.
+function responsesTextAlreadyEmitted(state, itemId) {
+  const id = itemId != null ? String(itemId) : "";
+  const emittedForItem =
+    state.textItemsWithDelta instanceof Set && id && state.textItemsWithDelta.has(id);
+  const emittedWithoutItemId =
+    state.textDeltaEmitted &&
+    !(state.textItemsWithDelta instanceof Set && state.textItemsWithDelta.size > 0);
+  return emittedForItem || emittedWithoutItemId;
+}
+
+// #6570: build a Chat-format visible-text chunk (`delta.content`) from a terminal
+// Responses text snapshot. Mirrors the `response.output_text.delta` branch so the
+// downstream openai->claude step opens a normal text content block.
+function buildResponsesTextChunk(state, text) {
+  return {
+    id: state.chatId,
+    object: "chat.completion.chunk",
+    created: state.created,
+    model: state.model || "gpt-4",
+    choices: [
+      {
+        index: 0,
+        delta: { content: text },
+        finish_reason: null,
+      },
+    ],
+  };
+}
+
 // #5786 — build a Chat-format reasoning delta chunk in the shape the client renders in
 // its thinking panel (`reasoning_content`, or `reasoning_text` for Copilot-compatible
 // clients). Mirrors the `response.reasoning_summary_text.delta` branch.
@@ -726,6 +774,10 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
     const delta = data.delta || "";
     if (!delta) return null;
 
+    // #6570: record that visible text was streamed for this message item so the
+    // terminal snapshot handlers below do NOT re-emit it (would duplicate the answer).
+    markResponsesTextDeltaEmitted(state, data.item_id);
+
     return {
       id: state.chatId,
       object: "chat.completion.chunk",
@@ -741,9 +793,18 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
     };
   }
 
-  // Text content done (ignore, we handle via delta)
+  // #6570: visible text exposed ONLY as a terminal snapshot on
+  // `response.output_text.done` (no preceding output_text.delta events). Codex GPT-5.x
+  // reasoning models sometimes surface the assistant message once at close; without a
+  // fallback the whole visible answer was dropped (only its reasoning survived), and the
+  // reasoning-only-finish guard in openai-to-claude then rendered the turn as the "…"
+  // placeholder (empty deliverable). Symmetric with the #5786 reasoning done-snapshot
+  // fallback below. Only synthesize when NO text delta was already streamed for this item.
   if (eventType === "response.output_text.done") {
-    return null;
+    const fullText = typeof data.text === "string" ? data.text : "";
+    if (!fullText || responsesTextAlreadyEmitted(state, data.item_id)) return null;
+    markResponsesTextDeltaEmitted(state, data.item_id);
+    return buildResponsesTextChunk(state, fullText);
   }
 
   // Function call started
@@ -1030,6 +1091,21 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
     if (!reasoningDelta) return null;
     markResponsesReasoningDeltaEmitted(state, data.item_id);
     return buildResponsesReasoningDeltaChunk(state, reasoningDelta);
+  }
+
+  // #6570: visible assistant message exposed ONLY as a terminal snapshot on
+  // `response.output_item.done` (type "message") with no preceding output_text.delta and
+  // no output_text.done carrying the text. Same drop class as the reasoning snapshot below
+  // but for the visible-text channel. Only synthesize when NO text was already streamed or
+  // emitted via the output_text.done fallback for this item, so text is never duplicated.
+  if (eventType === "response.output_item.done" && data.item?.type === "message") {
+    const item = data.item;
+    const itemId = item.id != null ? String(item.id) : "";
+    if (responsesTextAlreadyEmitted(state, itemId)) return null;
+    const messageText = extractResponsesMessageText(item);
+    if (!messageText) return null;
+    markResponsesTextDeltaEmitted(state, itemId);
+    return buildResponsesTextChunk(state, messageText);
   }
 
   // #5786 — reasoning summary exposed ONLY as a terminal snapshot on

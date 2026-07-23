@@ -97,3 +97,20 @@ export function extractResponsesReasoningSummaryText(item) {
     )
     .join("");
 }
+
+// #6570: extract the visible assistant text from a Responses `message` output item.
+// Mirrors extractResponsesReasoningSummaryText but for the visible-text channel. The
+// terminal `response.output_item.done` snapshot for a message carries its text in
+// content[] parts of type "output_text" (a "refusal" part is surfaced as visible text
+// too, matching the non-streaming xai/claude converter).
+export function extractResponsesMessageText(item) {
+  if (!item || !Array.isArray(item.content)) return "";
+  return item.content
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      if (part.type === "output_text" && typeof part.text === "string") return part.text;
+      if (part.type === "refusal" && typeof part.refusal === "string") return part.refusal;
+      return "";
+    })
+    .join("");
+}
