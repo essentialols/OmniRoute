@@ -14,6 +14,7 @@ lastUpdated: 2026-06-28
 - `src/lib/monitoring/comboHealthAutopilot.ts` — combo health autopilot
 - `src/lib/monitoring/providerHealthAutopilot.ts` — provider autopilot
 - `src/lib/monitoring/providerHealthMatrix.ts` — provider health matrix
+- `src/lib/monitoring/prometheus.ts` — Prometheus/OpenMetrics export
 - `src/lib/localHealthCheck.ts` — local health check
 - `src/lib/tokenHealthCheck.ts` — token refresh health
 - `src/lib/proxyHealth.ts` — proxy health cache (covered in PROXY_GUIDE.md)
@@ -272,9 +273,7 @@ The MCP tool `observability_snapshot` returns a **complete system snapshot** for
       "ageMs": 109
     }
   ],
-  "quotaMonitors": {
-    /* see above */
-  },
+  "quotaMonitors": {/* see above */},
   "uptime": 12345,
   "version": "3.8.16"
 }
@@ -365,15 +364,21 @@ OmniRoute supports **3 alert channels**:
 | `quota_used`            | gauge     | `services/quotaMonitor.ts`      |
 | `memory_used_mb`        | gauge     | `observability.ts`              |
 
-### Latency Percentiles (p50/p95/p99)
+### Prometheus / OpenMetrics Export
 
-> **No REST endpoint.** Latency percentile data is available via the dashboard `/dashboard/health` page. Prometheus/OpenTelemetry export is planned for v3.9.
+Prometheus-compatible metrics are exposed at `/api/metrics`. The endpoint uses
+the same dashboard/API authentication rules as other management surfaces and
+returns `text/plain; version=0.0.4`.
 
-### Prometheus / OpenTelemetry Export (Phase 2)
+The export includes Node.js default process metrics plus OmniRoute gauges for
+recent request latency percentiles, active sessions, quota monitor state,
+circuit breaker state, provider connections, and provider cooldowns.
 
-Planned for v3.9: native export to Prometheus, OpenTelemetry, Datadog.
+### Runtime Error Reporting
 
-For now, scrape `/api/monitoring/health` with any HTTP-based monitoring system (Prometheus blackbox exporter, Datadog HTTP check, etc.).
+Sentry reporting is available when `SENTRY_DSN` or `NEXT_PUBLIC_SENTRY_DSN` is
+set. Server startup initializes the SDK, and the app error boundaries report
+uncaught dashboard render errors with their boundary and digest metadata.
 
 ---
 

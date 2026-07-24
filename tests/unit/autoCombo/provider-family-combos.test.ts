@@ -1,6 +1,6 @@
 /**
  * #6453 — Provider-family auto combos (`auto/glm`, `auto/minimax`, `auto/zai`,
- * `auto/mimo`, `auto/gemma`, `auto/llama`, `auto/gemini`).
+ * `auto/mimo`, `auto/gemma`, `auto/llama`, `auto/gemini`, `auto/chinese`).
  *
  * See: `open-sse/services/autoCombo/modelFamily.ts` (pure family detection) and
  * `open-sse/services/autoCombo/builtinCatalog.ts` (recognition + materialization).
@@ -78,8 +78,8 @@ describe("detectModelFamily (pure)", () => {
     assert.equal(detectModelFamily("zai-glm-5.2"), null);
   });
 
-  it("isValidModelFamily accepts exactly the 7 advertised families", () => {
-    for (const family of ["glm", "minimax", "mimo", "zai", "gemma", "llama", "gemini"]) {
+  it("isValidModelFamily accepts exactly the 8 advertised families", () => {
+    for (const family of ["glm", "minimax", "mimo", "zai", "gemma", "llama", "gemini", "chinese"]) {
       assert.equal(isValidModelFamily(family), true);
     }
     assert.equal(isValidModelFamily("gpt"), false);
@@ -87,10 +87,16 @@ describe("detectModelFamily (pure)", () => {
   });
 
   it("advertises exactly one auto/<family> catalog id per family", () => {
-    assert.deepEqual(
-      [...AUTO_FAMILY_IDS].sort(),
-      ["auto/gemini", "auto/gemma", "auto/glm", "auto/llama", "auto/mimo", "auto/minimax", "auto/zai"]
-    );
+    assert.deepEqual([...AUTO_FAMILY_IDS].sort(), [
+      "auto/chinese",
+      "auto/gemini",
+      "auto/gemma",
+      "auto/glm",
+      "auto/llama",
+      "auto/mimo",
+      "auto/minimax",
+      "auto/zai",
+    ]);
   });
 });
 
@@ -175,7 +181,6 @@ describe("auto/<family> materialization (#6453)", () => {
       "every candidate in auto/minimax must actually be a minimax model"
     );
   });
-
 
   it("rejects auto/<unknownfamily> with the same clean error as any unknown combo", async () => {
     await assert.rejects(
