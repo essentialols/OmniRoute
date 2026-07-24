@@ -1,5 +1,7 @@
 "use client";
 
+import { SentryErrorReporter } from "@/shared/components/SentryErrorReporter";
+
 /**
  * Global Error Page — FASE-04 Error Handling
  *
@@ -22,6 +24,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
     // layout (<html lang={locale}> in src/app/layout.tsx).
     <html lang="en">
       <body className="flex flex-col items-center justify-center min-h-screen p-6 bg-bg text-text-main font-[system-ui,-apple-system,sans-serif] text-center m-0">
+        <SentryErrorReporter boundary="global-error" error={error} />
         <main role="alert" aria-live="assertive" className="flex flex-col items-center">
           <div className="text-[64px] mb-4" aria-hidden="true">
             ⚠️
