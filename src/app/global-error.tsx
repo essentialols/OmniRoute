@@ -4,6 +4,7 @@ import { NextIntlClientProvider, useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 import { DEFAULT_LOCALE, LOCALES, LOCALE_COOKIE } from "@/i18n/config";
 import enMessages from "@/i18n/messages/en.json";
+import { SentryErrorReporter } from "@/shared/components/SentryErrorReporter";
 
 /**
  * Global Error Page — FASE-04 Error Handling
@@ -113,6 +114,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
   return (
     <html lang={locale}>
       <body className="flex flex-col items-center justify-center min-h-screen p-6 bg-bg text-text-main font-[system-ui,-apple-system,sans-serif] text-center m-0">
+        <SentryErrorReporter boundary="global-error" error={error} />
         <NextIntlClientProvider locale={locale} messages={messages}>
           <GlobalErrorContent error={error} reset={reset} />
         </NextIntlClientProvider>
