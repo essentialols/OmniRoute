@@ -39,6 +39,11 @@ import {
 } from "../services/claudeCodeCompatible.ts";
 import { getClaudeCodeCompatibleRequestDefaults } from "@/lib/providers/requestDefaults";
 import {
+  getParamFilterConfig,
+  isAutoLearnGloballyEnabled,
+  addParamToBlocklist,
+} from "@/lib/db/paramFilters";
+import {
   cloakThirdPartyToolNames,
   remapToolNamesInRequest,
 } from "../services/claudeCodeToolRemapper.ts";
