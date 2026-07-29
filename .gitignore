@@ -242,3 +242,8 @@ _artifacts/
 
 # CI/local quality artifacts (eslint-results.json, etc.)
 .artifacts/
+
+# Runtime stub written by tests/unit/authz/client-api-policy-fallback.test.ts.
+# Its test.after() cleanup does not run if the suite is interrupted, so an aborted
+# run must not be able to leak it into a commit.
+tests/unit/authz/__stub_apiKeys.mjs
