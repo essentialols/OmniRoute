@@ -217,6 +217,10 @@ const DEFAULT_LOCAL_TURN_RECOVERY_PROVIDERS = [
   "lmstudio",
   "ollama",
   "mlx",
+  // On-device (Pixel 7 Pro) models. The P7P node id is a hex UUID, so it can never match by
+  // token; these entries let the MODEL name carry the "local" signal instead.
+  "smallthinker",
+  "lfm2.5",
 ];
 
 /**
@@ -272,11 +276,32 @@ export function isLocalTurnRecoveryEnabled(): boolean {
  * bridge executes a client's tool server-side instead of returning it, so any route that is not
  * provably local must be excluded.
  */
-export function isLocalBridgeProvider(provider: string | null | undefined): boolean {
+export function isLocalBridgeProvider(
+  provider: string | null | undefined,
+  model?: string | null
+): boolean {
   if (!isLocalTurnRecoveryEnabled()) return false;
-  const normalized = (provider ?? "").toLowerCase();
-  if (!normalized) return false;
-  return providerMatchesLocalAllowlist(normalized, localTurnRecoveryProviders());
+  return matchesLocalAllowlist(provider, model);
+}
+
+/**
+ * True when either the provider id or the model id identifies an allowlisted local backend.
+ *
+ * Some node ids are opaque (`openai-compatible-chat-38f92fd5-…` for the Pixel 7 Pro), so the
+ * provider alone cannot prove locality. The model id (`smallthinker-4b-a0.6b`) can. A `p7p/`
+ * style prefix is stripped so the model's own name is what gets tokenised.
+ */
+function matchesLocalAllowlist(
+  provider: string | null | undefined,
+  model?: string | null
+): boolean {
+  const allowlist = localTurnRecoveryProviders();
+  const p = (provider ?? "").toLowerCase();
+  if (p && providerMatchesLocalAllowlist(p, allowlist)) return true;
+  const m = (model ?? "").toLowerCase();
+  if (!m) return false;
+  const bare = m.includes("/") ? m.slice(m.lastIndexOf("/") + 1) : m;
+  return providerMatchesLocalAllowlist(bare, allowlist);
 }
 
 /** True when the inbound request already carries the internal recovery marker header. */
@@ -294,6 +319,8 @@ export function hasRecoveryAttemptHeader(headers: unknown): boolean {
 
 export interface LocalTurnRecoveryGateInput {
   provider?: string | null;
+  /** Resolved model id. Carries the local signal when the provider id is an opaque UUID. */
+  model?: string | null;
   isClaudeSource: boolean;
   clientWantsStream: boolean;
   nativeCodexPassthrough: boolean;
@@ -314,9 +341,7 @@ export function resolveLocalTurnRecoveryPlan(input: LocalTurnRecoveryGateInput):
   if (!input.clientWantsStream) return { active: false };
   if (input.nativeCodexPassthrough || input.isResponsesEndpoint) return { active: false };
   if (input.recoveryHeaderPresent) return { active: false };
-  const provider = (input.provider ?? "").toLowerCase();
-  if (!provider || !providerMatchesLocalAllowlist(provider, localTurnRecoveryProviders()))
-    return { active: false };
+  if (!matchesLocalAllowlist(input.provider, input.model)) return { active: false };
   return { active: true };
 }
 

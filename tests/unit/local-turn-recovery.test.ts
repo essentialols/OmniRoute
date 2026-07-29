@@ -300,3 +300,62 @@ test("bridge: resample failure after execution surfaces results and drops tool_c
   );
   assert.equal(((final.choices as Json[])[0] as Json).finish_reason, "stop");
 });
+
+// ── P7P (Pixel 7 Pro): the node id is an opaque hex UUID, so the MODEL must carry locality ──
+
+const P7P = "openai-compatible-chat-38f92fd5-674d-4feb-ac9a-99aff21fe725";
+
+test("P7P: opaque UUID provider is local when the model names an on-device model", () => {
+  assert.equal(isLocalBridgeProvider(P7P, "smallthinker-4b-a0.6b"), true);
+  assert.equal(isLocalBridgeProvider(P7P, "p7p/smallthinker-4b-a0.6b"), true, "prefix stripped");
+  assert.equal(isLocalBridgeProvider(P7P, "lfm2.5-8b-a1b"), true);
+});
+
+test("P7P: the UUID provider alone is NOT enough to prove locality", () => {
+  assert.equal(isLocalBridgeProvider(P7P), false);
+  assert.equal(isLocalBridgeProvider(P7P, ""), false);
+  assert.equal(isLocalBridgeProvider(P7P, "gpt-5.5"), false);
+});
+
+// The model must never be able to drag CLOUD traffic into server-side tool execution.
+test("a cloud provider with a cloud model stays non-local", () => {
+  for (const [prov, mdl] of [
+    ["openai", "gpt-5.5"],
+    ["groq", "llama-3.3-70b"],
+    ["claude", "claude-opus-4-8"],
+    ["gemini", "gemini-3-pro"],
+    ["mistral", "mistral-large"],
+  ]) {
+    assert.equal(isLocalBridgeProvider(prov, mdl), false, `${prov}/${mdl} must stay cloud`);
+  }
+});
+
+test("recovery gate activates for P7P via the model", () => {
+  assert.deepEqual(
+    resolveLocalTurnRecoveryPlan({
+      provider: P7P,
+      model: "smallthinker-4b-a0.6b",
+      isClaudeSource: true,
+      clientWantsStream: true,
+      nativeCodexPassthrough: false,
+      isResponsesEndpoint: false,
+      recoveryHeaderPresent: false,
+    }),
+    { active: true }
+  );
+});
+
+test("recovery gate stays inactive for P7P when the model is unknown", () => {
+  assert.equal(
+    resolveLocalTurnRecoveryPlan({
+      provider: P7P,
+      model: "some-cloud-model",
+      isClaudeSource: true,
+      clientWantsStream: true,
+      nativeCodexPassthrough: false,
+      isResponsesEndpoint: false,
+      recoveryHeaderPresent: false,
+    }).active,
+    false
+  );
+});

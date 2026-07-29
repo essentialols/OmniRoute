@@ -217,6 +217,8 @@ export function prepareWebSearchFallbackBody<T extends JsonRecord>(
   body: T,
   options: {
     provider?: string | null;
+    /** Resolved model id; carries the local signal when the provider id is an opaque UUID. */
+    model?: string | null;
     sourceFormat?: string | null;
     targetFormat?: string | null;
     nativeCodexPassthrough: boolean;
@@ -238,7 +240,9 @@ export function prepareWebSearchFallbackBody<T extends JsonRecord>(
   // a cloud client's own WebSearch/WebFetch tool server-side instead of returning it. The local
   // check shares its allowlist with resolveLocalTurnRecoveryPlan so the two paths cannot diverge.
   const functionBridgeNames =
-    bypass || !isLocalBridgeProvider(options.provider) ? [] : detectFunctionBridgeToolNames(tools);
+    bypass || !isLocalBridgeProvider(options.provider, options.model)
+      ? []
+      : detectFunctionBridgeToolNames(tools);
 
   const builtInSearchTools = tools.filter(isBuiltInWebSearchTool);
   if (builtInSearchTools.length === 0) {

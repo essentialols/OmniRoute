@@ -755,6 +755,7 @@ export async function handleChatCore({
   const { body: bodyWithWebSearchFallback, fallback: webSearchFallbackPlan } =
     prepareWebSearchFallbackBody(body as Record<string, unknown>, {
       provider,
+      model: effectiveModel,
       sourceFormat,
       targetFormat,
       nativeCodexPassthrough,
@@ -940,6 +941,7 @@ export async function handleChatCore({
   // OpenAI->Claude translation. `stream` (the client-facing flag) is intentionally left unchanged.
   const localTurnRecoveryPlan = resolveLocalTurnRecoveryPlan({
     provider,
+    model,
     isClaudeSource: sourceFormat === FORMATS.CLAUDE,
     clientWantsStream: stream,
     nativeCodexPassthrough,
