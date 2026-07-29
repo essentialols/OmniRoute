@@ -86,9 +86,14 @@ const LEAK_RE =
 const ANNOUNCE_RE =
   /(?:i(?:'ll| will| am going to)|i'?m going to|let me|let's|next[, ]+i(?:'ll| will))\s+(?:actually\s+)?(?:call|use|run|read|inspect|check|search|browse|fetch|dispatch|delegate|open|look up|make (?:those|these|the) calls?)|next action:\s*(?:dispatch|search|run|read|fetch|call|use|browse)|make (?:those|these|the) calls? now/i;
 
-// False-capability refusal ("I don't have the ability to search ...", "I can't browse ...").
+// False-capability refusal ("I don't have the ability to search the web", "I can't browse online").
+//
+// The refusal must name a CAPABILITY or TOOLING object, not just any object. An unqualified
+// `i can't … access` also matched legitimate answers like "I can't access the file because it
+// doesn't exist", so a correct refusal got overwritten by a recovery nudge. Bounded quantifiers
+// (`[^.!?]{0,160}?`) keep this to a single clause and prevent catastrophic backtracking.
 const REFUSAL_RE =
-  /\b(?:i (?:do not|don't) have (?:the )?(?:ability|capability|access)|i cannot|i can't)\b.*\b(?:search|browse|read|run|access|use|dispatch)\b/i;
+  /\b(?:i (?:do not|don't) have (?:the )?(?:ability|capability|access)|i cannot|i can't)\b[^.!?]{0,160}?\b(?:search|browse|read|run|access|use|dispatch)\b[^.!?]{0,160}?\b(?:web|internet|online|real[-\s]?time|browser|browsing|external|tool|tools|command|commands|shell|terminal|subagent|agent)\b/i;
 
 /** Strip zero-width chars (ZWSP..ZWJ, BOM), collapse whitespace, trim. */
 function normalize(text: string): string {
@@ -378,6 +383,32 @@ export interface LocalTurnRecoveryContext {
  * the (possibly updated) response and the remaining budget. Stops immediately if the turn has no
  * tool calls, or has a native (non-bridged) tool call the client must run.
  */
+/**
+ * Replace a turn's content with already-executed tool results and DROP its tool_calls.
+ *
+ * Used when the post-execution resample fails: returning the pre-resample turn would hand the
+ * client bridged tool_calls nothing will ever execute AND silently discard results we already
+ * paid for, which is the exact "Did 0 searches" shape this module exists to prevent.
+ */
+function withToolResultsAsContent(response: JsonRecord, results: string[]): JsonRecord {
+  const choice = getFirstChoice(response);
+  const message = getFirstMessage(response);
+  if (!choice || !message) return response;
+
+  const content = results.length
+    ? `Tool results retrieved (the follow-up model call did not complete):\n\n${results.join("\n\n")}`
+    : TERMINAL_FALLBACK_TEXT;
+  const rest = Array.isArray(response.choices) ? response.choices.slice(1) : [];
+
+  return {
+    ...response,
+    choices: [
+      { ...choice, message: { role: "assistant", content }, finish_reason: "stop" },
+      ...rest,
+    ],
+  };
+}
+
 async function bridgeToolLoop(
   start: JsonRecord,
   messages: JsonRecord[],
@@ -406,6 +437,7 @@ async function bridgeToolLoop(
 
     remaining -= 1;
     messages.push(buildAssistantToolCallMessage(message));
+    const executed: string[] = [];
     for (const call of bridged) {
       const canonical = canonicalBridgedName(call.name) as string;
       let result: unknown;
@@ -417,14 +449,22 @@ async function bridgeToolLoop(
       } catch (err) {
         result = { error: err instanceof Error ? err.message : String(err) };
       }
-      messages.push({ role: "tool", tool_call_id: call.id, content: safeStringify(result) });
+      const serialized = safeStringify(result);
+      executed.push(serialized);
+      messages.push({ role: "tool", tool_call_id: call.id, content: serialized });
     }
     ctx.log?.info?.(
       "LOCAL_RECOVERY",
       `executed ${bridged.length} bridged tool call(s); resampling (budget left ${remaining})`
     );
     const next = await ctx.reinvoke(messages);
-    if (!next) return { response: current, budget: remaining };
+    if (!next) {
+      ctx.log?.info?.(
+        "LOCAL_RECOVERY",
+        "resample failed after tool execution; surfacing tool results and dropping tool_calls"
+      );
+      return { response: withToolResultsAsContent(current, executed), budget: remaining };
+    }
     current = next;
   }
 

@@ -244,3 +244,59 @@ test("terminal fallback when the recovery resample itself fails (null)", async (
   const msg = ((final.choices as Json[])[0] as Json).message as Json;
   assert.equal(msg.content, TERMINAL_FALLBACK_TEXT);
 });
+
+// ── Regression: a legitimate refusal must NOT be treated as a false-capability refusal ──
+
+test("detectDeadTurn: legitimate refusals naming a concrete object are NOT recovered", () => {
+  for (const content of [
+    "I can't access the file because it doesn't exist.",
+    "I cannot read that path, it is outside the workspace.",
+    "I don't have access to that database table.",
+    "I can't run the migration until you confirm the target.",
+  ]) {
+    assert.equal(
+      detectDeadTurn(completion({ content })).recover,
+      false,
+      `must not nudge over a correct refusal: ${content}`
+    );
+  }
+});
+
+test("detectDeadTurn: false-capability refusals about tooling ARE recovered", () => {
+  for (const content of [
+    "I do not have access to a live web search tool or the internet.",
+    "I cannot browse online.",
+    "I don't have the ability to run shell commands.",
+    "I can't use external tools in this environment.",
+  ]) {
+    assert.equal(
+      detectDeadTurn(completion({ content })).recover,
+      true,
+      `must recover a false-capability refusal: ${content}`
+    );
+  }
+});
+
+// ── Regression: a failed resample must never hand back un-executable tool_calls ──
+
+test("bridge: resample failure after execution surfaces results and drops tool_calls", async () => {
+  const first = completion({
+    content: null,
+    tool_calls: [
+      { id: "c1", type: "function", function: { name: "WebSearch", arguments: '{"query":"q"}' } },
+    ],
+  });
+  const final = await runLocalTurnRecovery(first, {
+    baseMessages: [{ role: "user", content: "q" }],
+    executeBridgedTool: async () => ({ results: ["REAL_SEARCH_HIT"] }),
+    reinvoke: async () => null,
+  });
+
+  const msg = ((final.choices as Json[])[0] as Json).message as Json;
+  assert.equal(msg.tool_calls, undefined, "un-executable tool_calls must be dropped");
+  assert.ok(
+    String(msg.content).includes("REAL_SEARCH_HIT"),
+    "executed tool results must not be discarded"
+  );
+  assert.equal(((final.choices as Json[])[0] as Json).finish_reason, "stop");
+});
