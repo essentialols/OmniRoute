@@ -2147,6 +2147,23 @@ export async function handleChatCore({
     log
   );
 
+  // Local-turn recovery (task #17) needs the COMPLETE upstream response as JSON so it can inspect
+  // the turn, execute bridged tools and resample. `upstreamStream` is threaded to
+  // executor.execute() as an option, but the executor never writes it onto the request body, and
+  // actual upstream streaming is decided by `body.stream` (see the "SSE decoding is gated on
+  // body.stream" note in executors/base.ts). So the option alone left the body saying
+  // stream:true, the upstream streamed, and recovery aborted with
+  // "skipped (non-JSON upstream or error): Unexpected token 'd', \"data: {...\"" -- i.e. the whole
+  // feature silently no-opped on exactly the streaming Claude path it was written for.
+  //
+  // Done HERE on purpose: this is after the last `translatedBody = ...` reassignment (the
+  // translateRequest/normalize chain above rebuilds the body from the client's, restoring
+  // stream:true) and before the first executor.execute() call, so it cannot be clobbered.
+  if (localTurnRecoveryPlan.active) {
+    translatedBody.stream = false;
+    delete translatedBody.stream_options;
+  }
+
   // Rename max_tokens to max_completion_tokens if not supported (#1961)
   if (!supportsMaxTokens({ provider, model })) {
     if (translatedBody.max_tokens !== undefined) {
