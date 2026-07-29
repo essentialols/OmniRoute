@@ -95,6 +95,46 @@ const ANNOUNCE_RE =
 const REFUSAL_RE =
   /\b(?:i (?:do not|don't) have (?:the )?(?:ability|capability|access)|i cannot|i can't)\b[^.!?]{0,160}?\b(?:search|browse|read|run|access|use|dispatch)\b[^.!?]{0,160}?\b(?:web|internet|online|real[-\s]?time|browser|browsing|external|tool|tools|command|commands|shell|terminal|subagent|agent)\b/i;
 
+/**
+ * Kill switch for leak salvage (below). Defaults ON; set OMNIROUTE_LEAK_SALVAGE=0 to disable
+ * without a rebuild. Salvage runs on a hot path and synthesises a tool call the model never
+ * structurally emitted, so it must be switchable from config alone.
+ */
+export function isLeakSalvageEnabled(): boolean {
+  const v = (process.env.OMNIROUTE_LEAK_SALVAGE ?? "1").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "on";
+}
+
+// A leaked search call, in the dialects local models actually emit. Observed from H1 gemma:
+//   <|tool_call>call:google_search:search{queries:[{"query":"X"}]}<tool_call|>
+//   <|tool_call>call:google_search:search{queries:["X"]}<tool_call|>
+// and the generic <tool_call>{"name":"web_search","arguments":{"query":"X"}}</tool_call>.
+// Bounded quantifiers only; these run on model-controlled text.
+const LEAKED_QUERY_PATTERNS = [
+  /"query"\s*:\s*"((?:[^"\\]|\\.){1,400})"/i,
+  /queries\s*:\s*\[\s*"((?:[^"\\]|\\.){1,400})"/i,
+  /queries\s*:\s*\[\s*\{\s*"query"\s*:\s*"((?:[^"\\]|\\.){1,400})"/i,
+];
+
+/**
+ * Pull a search query out of a leaked (plain-text) tool call.
+ *
+ * Returns null unless the leak actually looks like a SEARCH: a leak for some other tool must not
+ * be silently turned into a web search. Detection of the leak itself is LEAK_RE's job; this only
+ * extracts the argument.
+ */
+export function extractLeakedSearchQuery(text: string): string | null {
+  if (!text || typeof text !== "string") return null;
+  const window = text.slice(0, 4000);
+  if (!/search/i.test(window)) return null;
+  for (const re of LEAKED_QUERY_PATTERNS) {
+    const m = re.exec(window);
+    const q = m?.[1]?.replace(/\\"/g, '"').trim();
+    if (q) return q.slice(0, 400);
+  }
+  return null;
+}
+
 /** Strip zero-width chars (ZWSP..ZWJ, BOM), collapse whitespace, trim. */
 function normalize(text: string): string {
   return text
@@ -540,6 +580,52 @@ export async function runLocalTurnRecovery(
   if (!detection.recover) return current;
 
   ctx.log?.info?.("LOCAL_RECOVERY", `dead-turn detected (${detection.reason}); resampling once`);
+
+  // SALVAGE. A leaked tool call already contains the query the model wanted to run, so a bare
+  // nudge-resample throws away work and usually just leaks again (observed: H1 gemma leaks,
+  // gets nudged, leaks again, user sees "Did 0 searches"). Execute the leaked search server-side
+  // through the SAME bridge that structured calls use, hand the results back as a tool message,
+  // and let the model answer from them.
+  const leakedQuery =
+    detection.reason === "tool_call_leak" &&
+    ctx.bridgedToolAvailable === true &&
+    isLeakSalvageEnabled()
+      ? extractLeakedSearchQuery(rawContent(getFirstMessage(current)))
+      : null;
+
+  if (leakedQuery) {
+    ctx.log?.info?.("LOCAL_RECOVERY", `salvaging leaked search: ${leakedQuery.slice(0, 80)}`);
+    let salvaged: unknown;
+    try {
+      salvaged = await ctx.executeBridgedTool("web_search", { query: leakedQuery });
+    } catch (err) {
+      salvaged = { error: err instanceof Error ? err.message : String(err) };
+    }
+    // Synthetic id: the model never emitted a structured call, so no upstream id exists.
+    const callId = "salvaged_web_search";
+    messages.push({
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        {
+          id: callId,
+          type: "function",
+          function: { name: "web_search", arguments: safeStringify({ query: leakedQuery }) },
+        },
+      ],
+    });
+    messages.push({ role: "tool", tool_call_id: callId, content: safeStringify(salvaged) });
+
+    const afterSalvage = await ctx.reinvoke(messages);
+    if (afterSalvage) {
+      const post = await bridgeToolLoop(afterSalvage, messages, ctx, bridged.budget);
+      if (!detectDeadTurn(post.response, ctx.bridgedToolAvailable === true).recover) {
+        return post.response;
+      }
+      // Salvage produced another dead turn: fall through to the nudge path below.
+      current = post.response;
+    }
+  }
 
   const failedText = rawContent(getFirstMessage(current));
   if (failedText.trim().length > 0) {

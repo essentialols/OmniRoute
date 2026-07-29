@@ -9,6 +9,7 @@ import {
   resolveLocalTurnRecoveryPlan,
   canonicalBridgedName,
   isLocalBridgeProvider,
+  extractLeakedSearchQuery,
   TERMINAL_FALLBACK_TEXT,
 } from "../../open-sse/services/localTurnRecovery.ts";
 
@@ -413,4 +414,93 @@ test("a trailing question is not recovered even with a tool available", () => {
     ).recover,
     false
   );
+});
+
+// ── Leak SALVAGE: a leaked tool call still contains the query, so run it ──
+// H1 gemma leaks the call as prose, gets nudged, and leaks again -- the user sees "Did 0 searches"
+// while the query the model wanted was sitting in the text the whole time.
+
+const GEMMA_LEAK_OBJ =
+  '<|tool_call>call:google_search:search{queries:[{"query":"spotdl github stars"}]}<tool_call|>';
+const GEMMA_LEAK_STR =
+  '<|tool_call>call:google_search:search{queries:["spotify lossless extraction"]}<tool_call|>';
+const GENERIC_LEAK =
+  '<tool_call>{"name":"web_search","arguments":{"query":"ogg vorbis bitrate"}}</tool_call>';
+
+test("extractLeakedSearchQuery handles the dialects local models actually emit", () => {
+  assert.equal(extractLeakedSearchQuery(GEMMA_LEAK_OBJ), "spotdl github stars");
+  assert.equal(extractLeakedSearchQuery(GEMMA_LEAK_STR), "spotify lossless extraction");
+  assert.equal(extractLeakedSearchQuery(GENERIC_LEAK), "ogg vorbis bitrate");
+});
+
+test("extractLeakedSearchQuery refuses non-search leaks and junk", () => {
+  // A leaked Bash call must never be turned into a web search.
+  assert.equal(
+    extractLeakedSearchQuery(
+      '<tool_call>{"name":"Bash","arguments":{"command":"rm -rf /"}}</tool_call>'
+    ),
+    null
+  );
+  assert.equal(extractLeakedSearchQuery("I will search the web for you."), null, "no query arg");
+  assert.equal(extractLeakedSearchQuery(""), null);
+});
+
+test("salvage: a leaked search is EXECUTED and the model answers from the results", async () => {
+  const first = completion({ content: GEMMA_LEAK_OBJ });
+  const executed: Array<[string, Json]> = [];
+  let resamples = 0;
+  const final = await runLocalTurnRecovery(first, {
+    baseMessages: [{ role: "user", content: "find spotdl" }],
+    bridgedToolAvailable: true,
+    executeBridgedTool: async (name, args) => {
+      executed.push([name, args]);
+      return {
+        results: [{ title: "spotDL", url: "https://github.com/spotDL/spotify-downloader" }],
+      };
+    },
+    reinvoke: async () => {
+      resamples += 1;
+      return completion({
+        content: "spotDL has ~20k stars: https://github.com/spotDL/spotify-downloader",
+      });
+    },
+  });
+
+  assert.deepEqual(executed, [["web_search", { query: "spotdl github stars" }]], "search must run");
+  assert.equal(resamples, 1, "exactly one resample, no nudge round needed");
+  const msg = ((final.choices as Json[])[0] as Json).message as Json;
+  assert.ok(String(msg.content).includes("github.com/spotDL"), "answer must use the real result");
+});
+
+test("salvage does NOT fire when no bridged tool was available", async () => {
+  let called = false;
+  await runLocalTurnRecovery(completion({ content: GEMMA_LEAK_OBJ }), {
+    baseMessages: [],
+    bridgedToolAvailable: false,
+    executeBridgedTool: async () => {
+      called = true;
+      return {};
+    },
+    reinvoke: async () => completion({ content: "done." }),
+  });
+  assert.equal(called, false, "no search tool on the request means nothing to salvage");
+});
+
+test("salvage falls back to the nudge path when the post-salvage turn is still dead", async () => {
+  let resamples = 0;
+  const final = await runLocalTurnRecovery(completion({ content: GEMMA_LEAK_OBJ }), {
+    baseMessages: [{ role: "user", content: "q" }],
+    bridgedToolAvailable: true,
+    executeBridgedTool: async () => ({ results: [] }),
+    reinvoke: async () => {
+      resamples += 1;
+      // First (post-salvage) reply leaks again; second (post-nudge) reply is healthy.
+      return resamples === 1
+        ? completion({ content: GEMMA_LEAK_STR })
+        : completion({ content: "No results were found for that query." });
+    },
+  });
+  assert.equal(resamples, 2, "salvage resample, then the nudge resample");
+  const msg = ((final.choices as Json[])[0] as Json).message as Json;
+  assert.equal(msg.content, "No results were found for that query.");
 });
