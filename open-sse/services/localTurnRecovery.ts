@@ -214,6 +214,32 @@ const DEFAULT_LOCAL_TURN_RECOVERY_PROVIDERS = [
   "mlx",
 ];
 
+/**
+ * Match a provider id against the local allowlist.
+ *
+ * Exact match, plus a TOKEN match: real provider ids are composed
+ * (`openai-compatible-chat-h1-llamaswap`, `openai-compatible-chat-m2-mlx-router`), so an
+ * exact-only check never fired for the very backends this module exists to serve, leaving
+ * raw-tool-call leaks unrecovered. Tokens are compared with separators stripped so the
+ * allowlist can keep writing `llama-swap` while the id carries `llamaswap`.
+ *
+ * Deliberately token-exact rather than substring: a substring test would also match an
+ * unrelated future provider like `mlxcloud`, and this allowlist now gates server-side tool
+ * execution, so widening it wrongly would execute a cloud client's tools.
+ */
+function stripSeparators(value: string): string {
+  return value.replace(/[-_]/g, "");
+}
+
+function providerMatchesLocalAllowlist(provider: string, allowlist: Set<string>): boolean {
+  if (allowlist.has(provider)) return true;
+  const normalizedAllowlist = new Set([...allowlist].map(stripSeparators));
+  return provider
+    .split(/[-_]/)
+    .filter(Boolean)
+    .some((token) => normalizedAllowlist.has(token));
+}
+
 function localTurnRecoveryProviders(): Set<string> {
   const env = process.env.OMNIROUTE_LOCAL_TURN_RECOVERY_PROVIDERS;
   if (env && env.trim()) {
@@ -245,7 +271,7 @@ export function isLocalBridgeProvider(provider: string | null | undefined): bool
   if (!isLocalTurnRecoveryEnabled()) return false;
   const normalized = (provider ?? "").toLowerCase();
   if (!normalized) return false;
-  return localTurnRecoveryProviders().has(normalized);
+  return providerMatchesLocalAllowlist(normalized, localTurnRecoveryProviders());
 }
 
 /** True when the inbound request already carries the internal recovery marker header. */
@@ -284,7 +310,8 @@ export function resolveLocalTurnRecoveryPlan(input: LocalTurnRecoveryGateInput):
   if (input.nativeCodexPassthrough || input.isResponsesEndpoint) return { active: false };
   if (input.recoveryHeaderPresent) return { active: false };
   const provider = (input.provider ?? "").toLowerCase();
-  if (!provider || !localTurnRecoveryProviders().has(provider)) return { active: false };
+  if (!provider || !providerMatchesLocalAllowlist(provider, localTurnRecoveryProviders()))
+    return { active: false };
   return { active: true };
 }
 

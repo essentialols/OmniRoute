@@ -8,8 +8,50 @@ import {
   runLocalTurnRecovery,
   resolveLocalTurnRecoveryPlan,
   canonicalBridgedName,
+  isLocalBridgeProvider,
   TERMINAL_FALLBACK_TEXT,
 } from "../../open-sse/services/localTurnRecovery.ts";
+
+// Real provider ids are composed (`openai-compatible-chat-h1-llamaswap`), so an exact-only
+// allowlist check never matched the backends this module exists to serve: a raw-tool-call leak
+// from the H1 gemma went unrecovered and surfaced to the client as "Did 0 searches".
+test("allowlist matches composed local provider ids by token", () => {
+  assert.equal(isLocalBridgeProvider("openai-compatible-chat-h1-llamaswap"), true);
+  assert.equal(isLocalBridgeProvider("openai-compatible-chat-m2-mlx-router"), true);
+  assert.equal(isLocalBridgeProvider("llama-swap"), true);
+  assert.equal(isLocalBridgeProvider("ornith"), true);
+});
+
+test("allowlist does NOT match cloud providers or substring lookalikes", () => {
+  for (const p of [
+    "openai",
+    "groq",
+    "cerebras",
+    "mistral",
+    "deepseek-web",
+    "claude",
+    "gemini",
+    "mlxcloud",
+    "notlocalhost",
+    "",
+  ]) {
+    assert.equal(isLocalBridgeProvider(p), false, `${p} must not be treated as local`);
+  }
+});
+
+test("recovery gate activates for the composed H1 provider id", () => {
+  assert.deepEqual(
+    resolveLocalTurnRecoveryPlan({
+      provider: "openai-compatible-chat-h1-llamaswap",
+      isClaudeSource: true,
+      clientWantsStream: true,
+      nativeCodexPassthrough: false,
+      isResponsesEndpoint: false,
+      recoveryHeaderPresent: false,
+    }),
+    { active: true }
+  );
+});
 
 type Json = Record<string, unknown>;
 
