@@ -4293,6 +4293,9 @@ export async function handleChatCore({
           reinvoke,
           baseMessages,
           executeBridgedTool,
+          // A bridged search/fetch tool was offered on this request, so a turn that announces a
+          // search and emits no tool call is a failure, not a normal answer.
+          bridgedToolAvailable: webSearchFallbackPlan.builtinToolNames.length > 0,
           log,
         });
         const synthesized = synthesizeOpenAiSseFromJson(JSON.stringify(finalJson));

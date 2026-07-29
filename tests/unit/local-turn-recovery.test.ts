@@ -359,3 +359,58 @@ test("recovery gate stays inactive for P7P when the model is unknown", () => {
     false
   );
 });
+
+// ── Announce-then-fabricate: the most dangerous dead turn ──
+// Verbatim shape observed from smallthinker-4b-a0.6b on 2026-07-29: it announced a search, emitted
+// NO tool call, and invented findings (with invented URLs) that reached the client as a confident
+// sourced-looking answer. Claude Code reported "Did 0 searches" and the prose looked authoritative.
+
+const FABRICATED =
+  'I\'ll search for information related to "Spotify high quality audio extraction" and its ' +
+  "implementation on GitHub. Here's what I found: ### Key Findings: 1. **Spotify Audio Extraction " +
+  "(Hypothetical Approach)** - No official API exists for this. See https://github.com/... and " +
+  "https://tuneit.org/ for community efforts. 2. Several projects claim to support lossless " +
+  "extraction, though quality varies considerably between implementations and regions. " +
+  "3. Bitrate ceilings differ per subscription tier, and the Ogg Vorbis container is standard.";
+
+test("announce-then-fabricate IS recovered when a bridged tool was available", () => {
+  assert.ok(FABRICATED.length > 500, "fixture must exceed the 500-char announcement cutoff");
+  const d = detectDeadTurn(completion({ content: FABRICATED }), true);
+  assert.equal(d.recover, true);
+  assert.equal(d.reason, "announced_without_tool_call");
+});
+
+// The safety property: without a bridged tool on the request, the same text is a normal answer.
+test("the SAME text is NOT recovered when no bridged tool was available", () => {
+  assert.equal(detectDeadTurn(completion({ content: FABRICATED }), false).recover, false);
+  assert.equal(detectDeadTurn(completion({ content: FABRICATED })).recover, false, "defaults off");
+});
+
+test("a long legitimate answer that merely mentions searching is NOT recovered", () => {
+  const legit =
+    "The bitrate ceiling depends on the subscription tier. Free accounts top out lower than " +
+    "Premium, and the container is Ogg Vorbis in both cases. If you want to verify this yourself " +
+    "you could search the developer documentation, but the values above are already confirmed by " +
+    "the platform's published specifications and have not changed in several years. Nothing here " +
+    "requires further lookup, and the numbers are stable across regions and client versions.";
+  assert.ok(legit.length > 400);
+  assert.equal(detectDeadTurn(completion({ content: legit }), true).recover, false);
+});
+
+test("a turn WITH tool_calls is still never a dead turn, tool available or not", () => {
+  const withTool = completion({
+    content: FABRICATED,
+    tool_calls: [{ id: "c1", type: "function", function: { name: "WebSearch", arguments: "{}" } }],
+  });
+  assert.equal(detectDeadTurn(withTool, true).recover, false);
+});
+
+test("a trailing question is not recovered even with a tool available", () => {
+  assert.equal(
+    detectDeadTurn(
+      completion({ content: "I'll search for that. Which region should I check?" }),
+      true
+    ).recover,
+    false
+  );
+});

@@ -182,7 +182,15 @@ export interface DeadTurnDetection {
  * Decide whether a completed OpenAI turn is a "dead turn" that should be resampled. See the module
  * header + the regexes above for the exact validated rules.
  */
-export function detectDeadTurn(resp: JsonRecord): DeadTurnDetection {
+export function detectDeadTurn(
+  resp: JsonRecord,
+  /**
+   * True when a bridged search/fetch tool was offered on THIS request. Gates the
+   * announce-then-fabricate rule below: without it that rule would misfire on any long,
+   * legitimate answer that happens to mention searching.
+   */
+  bridgedToolAvailable = false
+): DeadTurnDetection {
   const choice = getFirstChoice(resp);
   const finish = choice && typeof choice.finish_reason === "string" ? choice.finish_reason : null;
   if (finish !== "stop") return { recover: false, reason: "finish_not_stop" };
@@ -199,6 +207,20 @@ export function detectDeadTurn(resp: JsonRecord): DeadTurnDetection {
   if (norm.length <= 500 && !norm.endsWith("?")) {
     if (ANNOUNCE_RE.test(lastSentences(norm, 2))) return { recover: true, reason: "announcement" };
     if (REFUSAL_RE.test(norm)) return { recover: true, reason: "refusal" };
+  }
+
+  // Announce-then-fabricate. A weak model says "I'll search for X" and then, instead of emitting
+  // the tool call, invents the answer -- observed verbatim: "I'll search for information related
+  // to ... Here's what I found: ### Key Findings: 1. ... (Hypothetical Approach)" with invented
+  // URLs. The two checks above cannot see it: they only inspect the TRAILING sentences and bail
+  // above 500 chars, and fabricated answers are long and lead with the announcement.
+  //
+  // This is the most dangerous dead turn, because it reaches the user as confident sourced-looking
+  // prose. Length is therefore deliberately NOT a limit here. Safety comes from
+  // `bridgedToolAvailable`: a turn that never had a search tool cannot be failing to call one, so
+  // an ordinary long answer that merely mentions searching is untouched.
+  if (bridgedToolAvailable && ANNOUNCE_RE.test(norm) && !norm.endsWith("?")) {
+    return { recover: true, reason: "announced_without_tool_call" };
   }
 
   return { recover: false, reason: "ok" };
@@ -396,6 +418,9 @@ export interface LocalTurnRecoveryContext {
   baseMessages: JsonRecord[];
   /** Execute a bridged tool by canonical name ("web_search" | "web_fetch"). */
   executeBridgedTool: (canonicalName: string, args: JsonRecord) => Promise<unknown>;
+  /** True when this request offered a bridged search/fetch tool. Enables the
+   *  announce-then-fabricate rule in detectDeadTurn; see that function's comment. */
+  bridgedToolAvailable?: boolean;
   log?: {
     info?: (...args: unknown[]) => void;
     warn?: (...args: unknown[]) => void;
@@ -511,7 +536,7 @@ export async function runLocalTurnRecovery(
   let current = bridged.response;
 
   // CHANGE 2 -- dead-turn recovery (ONE resample, guarded against recursion by the single pass).
-  const detection = detectDeadTurn(current);
+  const detection = detectDeadTurn(current, ctx.bridgedToolAvailable === true);
   if (!detection.recover) return current;
 
   ctx.log?.info?.("LOCAL_RECOVERY", `dead-turn detected (${detection.reason}); resampling once`);
@@ -528,7 +553,7 @@ export async function runLocalTurnRecovery(
   // The recovery attempt may itself emit a bridged tool call; execute it within the leftover budget.
   const afterRecovery = await bridgeToolLoop(recovered, messages, ctx, bridged.budget);
 
-  if (detectDeadTurn(afterRecovery.response).recover) {
+  if (detectDeadTurn(afterRecovery.response, ctx.bridgedToolAvailable === true).recover) {
     ctx.log?.info?.(
       "LOCAL_RECOVERY",
       "recovery attempt also dead-stopped; emitting terminal fallback"
