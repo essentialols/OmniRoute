@@ -3,6 +3,17 @@ import { BRIDGED_TOOL_NAMES, isLocalBridgeProvider } from "./localTurnRecovery.t
 
 export const OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME = "omniroute_web_search";
 const WEB_SEARCH_TOOL_TYPES = new Set(["web_search", "web_search_preview"]);
+// Anthropic ships its server tools with a dated type suffix (`web_search_20250305`), which is what
+// Claude Code actually sends. Matching only the bare names above silently skipped the conversion,
+// so the tool reached backends that cannot execute server tools and CC reported "Did 0 searches".
+// Deliberately web_search-specific rather than the repo's broader isAnthropicServerToolType(),
+// which also matches bash_*/text_editor_* and would convert unrelated server tools into searches.
+const VERSIONED_WEB_SEARCH_TOOL_TYPE = /^web_search(?:_preview)?_\d{8}$/;
+
+function isWebSearchToolType(toolType: string): boolean {
+  return WEB_SEARCH_TOOL_TYPES.has(toolType) || VERSIONED_WEB_SEARCH_TOOL_TYPE.test(toolType);
+}
+
 const SEARCH_CONTEXT_DEFAULTS: Record<string, number> = {
   low: 5,
   medium: 8,
@@ -29,13 +40,13 @@ function toRecord(value: unknown): JsonRecord {
 function isBuiltInWebSearchTool(tool: unknown): tool is JsonRecord {
   const toolRecord = toRecord(tool);
   const toolType = typeof toolRecord.type === "string" ? toolRecord.type : "";
-  return WEB_SEARCH_TOOL_TYPES.has(toolType) && !toolRecord.function;
+  return isWebSearchToolType(toolType) && !toolRecord.function;
 }
 
 function isBuiltInWebSearchToolChoice(toolChoice: unknown): boolean {
   const choice = toRecord(toolChoice);
   const toolType = typeof choice.type === "string" ? choice.type : "";
-  return WEB_SEARCH_TOOL_TYPES.has(toolType);
+  return isWebSearchToolType(toolType);
 }
 
 // Function-form bridged tools (task #17): Claude Code sends WebSearch/WebFetch as ordinary
