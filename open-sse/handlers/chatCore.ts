@@ -2159,7 +2159,18 @@ export async function handleChatCore({
   // Done HERE on purpose: this is after the last `translatedBody = ...` reassignment (the
   // translateRequest/normalize chain above rebuilds the body from the client's, restoring
   // stream:true) and before the first executor.execute() call, so it cannot be clobbered.
-  if (localTurnRecoveryPlan.active) {
+  // TEMPORARILY DISABLED 2026-07-29. Forcing the body non-streaming DOES work -- it finally made
+  // the tool bridge run ("executed 4 bridged tool call(s); resampling"). But it thereby activated
+  // synthesizeOpenAiSseFromJson for the first time, and that path DUPLICATES tool_calls.arguments
+  // when re-split by the openai->claude translator, so Claude Code rejected every tool call with
+  // "Bash(input JSON failed to parse - 363 bytes)" (~4x the real 85-byte payload). That same
+  // duplication hazard is documented in jsonToSse.ts for reasoning_content (#3089 follow-up).
+  //
+  // Re-enable ONLY together with a fix to jsonToSse.ts that emits tool_calls in a form the
+  // translator cannot re-split (per-call `index`, arguments as a single non-reassembled fragment),
+  // plus a test asserting a round-tripped tool call keeps byte-identical arguments.
+  // Working tool calls outrank working web search, so this stays off until then.
+  if (false && localTurnRecoveryPlan.active) {
     translatedBody.stream = false;
     delete translatedBody.stream_options;
   }
