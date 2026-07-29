@@ -256,6 +256,54 @@ test("OpenAI -> Claude (non-passthrough): built-in web_search IS still converted
   assert.ok(toolNames.includes(OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME));
 });
 
+// ── task #17 no-op contract: the function-form tool bridge is LOCAL-ONLY ──
+
+test("#17 cloud OpenAI: a client's WebSearch function tool is NOT registered for server-side execution", () => {
+  // The bridge executes the tool server-side and replaces it with a text result instead of
+  // returning it to the client. Gating on the native-bypass predicate alone did not hold: it is
+  // false for OpenAI->OpenAI, so ordinary cloud traffic silently got its own tool executed.
+  const { fallback } = prepareWebSearchFallbackBody(
+    { tools: [{ type: "function", function: { name: "WebSearch", parameters: {} } }] },
+    {
+      provider: "openai",
+      sourceFormat: "openai",
+      targetFormat: "openai",
+      nativeCodexPassthrough: false,
+    }
+  );
+
+  assert.deepEqual(fallback.builtinToolNames, []);
+  assert.equal(fallback.enabled, false);
+});
+
+test("#17 cloud Claude->OpenAI: WebFetch function tool is NOT registered either", () => {
+  const { fallback } = prepareWebSearchFallbackBody(
+    { tools: [{ type: "function", function: { name: "WebFetch", parameters: {} } }] },
+    {
+      provider: "groq",
+      sourceFormat: "claude",
+      targetFormat: "openai",
+      nativeCodexPassthrough: false,
+    }
+  );
+
+  assert.deepEqual(fallback.builtinToolNames, []);
+});
+
+test("#17 local provider: WebSearch function tool IS registered for the bridge", () => {
+  const { fallback } = prepareWebSearchFallbackBody(
+    { tools: [{ type: "function", function: { name: "WebSearch", parameters: {} } }] },
+    {
+      provider: "llama-swap",
+      sourceFormat: "claude",
+      targetFormat: "openai",
+      nativeCodexPassthrough: false,
+    }
+  );
+
+  assert.deepEqual(fallback.builtinToolNames, ["WebSearch"]);
+});
+
 // ── #3384: per-model interceptSearch override wins over every native-bypass default ──
 
 test("#3384 interceptSearchOverride=true forces interception even on the Claude->Claude bypass path", () => {

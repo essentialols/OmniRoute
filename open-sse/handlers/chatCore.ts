@@ -303,6 +303,15 @@ import {
 import { resolveBackgroundTaskRedirect } from "./chatCore/backgroundRedirect.ts";
 import type { CompressionConfig, CompressionPipelineStep } from "../services/compression/types.ts";
 import { prepareWebSearchFallbackBody } from "../services/webSearchFallback.ts";
+import {
+  resolveLocalTurnRecoveryPlan,
+  runLocalTurnRecovery,
+  hasRecoveryAttemptHeader,
+  RECOVERY_ATTEMPT_HEADER,
+  RECOVERY_SAMPLING,
+} from "../services/localTurnRecovery.ts";
+import { synthesizeOpenAiSseFromJson } from "../utils/jsonToSse.ts";
+import { builtinSkills } from "@/lib/skills/builtins";
 import { resolveInterceptSearch } from "@/lib/db/interceptionRules";
 import {
   resolveExplicitStreamAlias,
@@ -922,6 +931,21 @@ export async function handleChatCore({
           userAgent: streamUserAgent,
           streamDefaultMode: apiKeyInfo?.streamDefaultMode,
         });
+
+  // Local-turn recovery gate (task #17): dead-turn recovery + WebSearch/WebFetch bridge for local
+  // chat models. Only fires for allowlisted local providers on the streaming Claude path; a strict
+  // no-op for cloud/passthrough/Responses/Codex traffic. When active the upstream call is forced
+  // non-streaming (see `upstreamStream` below) so the completion can be inspected + bridged tools
+  // executed + the turn resampled, then re-emitted as an SSE stream through the normal
+  // OpenAI->Claude translation. `stream` (the client-facing flag) is intentionally left unchanged.
+  const localTurnRecoveryPlan = resolveLocalTurnRecoveryPlan({
+    provider,
+    isClaudeSource: sourceFormat === FORMATS.CLAUDE,
+    clientWantsStream: stream,
+    nativeCodexPassthrough,
+    isResponsesEndpoint,
+    recoveryHeaderPresent: hasRecoveryAttemptHeader(clientRawRequest?.headers),
+  });
 
   // `settings` is already consolidated once near the top of handleChatCore
   // (the "fetch once, reuse" const). A second `const settings` here was a
@@ -1670,7 +1694,12 @@ export async function handleChatCore({
   // wants JSON; the non-streaming branch below accumulates the SSE and converts
   // it back to JSON (same mechanism already used for Claude-Code-compatible
   // providers via isClaudeCodeCompatible).
-  const upstreamStream = stream || isClaudeCodeCompatible || providerRequiresStreaming;
+  // Local-turn recovery (task #17) needs the complete upstream JSON to inspect/execute tools/resample,
+  // so force the upstream call non-streaming for those gated local turns (the JSON is re-synthesized
+  // into an SSE stream for the client below). All other requests keep the existing behavior.
+  const upstreamStream = localTurnRecoveryPlan.active
+    ? false
+    : stream || isClaudeCodeCompatible || providerRequiresStreaming;
   let ccSessionId: string | null = null;
   const stripTypes = getStripTypesForProviderModel(provider || "", model || "");
 
@@ -3944,7 +3973,9 @@ export async function handleChatCore({
 
     const customSkillExecutionEnabled =
       Boolean(memoryOwnerId) && memorySettings?.skillsEnabled === true;
-    const builtinToolNames = webSearchFallbackPlan.toolName ? [webSearchFallbackPlan.toolName] : [];
+    // Includes the injected omniroute_web_search fallback AND any function-form WebSearch/WebFetch
+    // tools the client sent directly (task #17), so all are auto-executed on the non-streaming path.
+    const builtinToolNames = webSearchFallbackPlan.builtinToolNames;
     if (customSkillExecutionEnabled || builtinToolNames.length > 0) {
       const skillSessionId = pipelineSessionId;
 
@@ -4151,6 +4182,118 @@ export async function handleChatCore({
       success: true,
       response: buildNonStreamingJsonResponse(translatedResponse, responseHeaders),
     };
+  }
+
+  // ── Local-turn recovery + tool bridge (task #17) ──────────────────────────────────────────
+  // The upstream was forced non-streaming above for gated local providers, so providerResponse
+  // carries a complete OpenAI chat-completion JSON. Inspect it: execute any bridged
+  // WebSearch/WebFetch/omniroute_web_search calls and resample so the model uses the results
+  // (CHANGE 1), then recover dead-turns with one directive resample (CHANGE 2). The final OpenAI
+  // JSON is re-synthesized into an OpenAI SSE stream that flows through the normal OpenAI->Claude
+  // translation below, preserving the client's Anthropic SSE contract. Double execution is
+  // impossible here: the non-streaming branch above (which runs handleToolCallExecution) is skipped
+  // because the client `stream` flag is still true. On any parse/HTTP problem we leave
+  // providerResponse untouched, a safe fallback to the existing streaming path.
+  if (localTurnRecoveryPlan.active && providerResponse.status === 200) {
+    try {
+      const firstJsonText = await providerResponse.clone().text();
+      const firstJson = JSON.parse(firstJsonText) as Record<string, unknown>;
+      if (Array.isArray((firstJson as { choices?: unknown }).choices)) {
+        const baseMessages = Array.isArray((translatedBody as { messages?: unknown }).messages)
+          ? [...((translatedBody as { messages?: Record<string, unknown>[] }).messages ?? [])]
+          : [];
+        // Resample the model non-streaming with an updated message array (direct executor call,
+        // marked with the recovery header so a bridged upstream never re-enters recovery).
+        const reinvoke = async (
+          messages: Record<string, unknown>[]
+        ): Promise<Record<string, unknown> | null> => {
+          try {
+            const reinvokeBody = await prepareUpstreamBody({
+              translatedBody: {
+                ...(translatedBody as Record<string, unknown>),
+                messages,
+                stream: false,
+                ...(RECOVERY_SAMPLING ?? {}),
+              },
+              modelToCall: effectiveModel,
+              provider,
+              targetFormat,
+              credentials,
+              log,
+              bypassDefaultToolLimit: isOpencodeClient,
+            });
+            const rawResult = await executor.execute({
+              model: effectiveModel,
+              body: reinvokeBody,
+              stream: false,
+              credentials: getExecutionCredentials(),
+              signal: streamController.signal,
+              log,
+              extendedContext,
+              upstreamExtraHeaders: {
+                ...buildUpstreamHeadersForExecute(effectiveModel),
+                [RECOVERY_ATTEMPT_HEADER]: "1",
+              },
+              clientHeaders: buildExecutorClientHeaders(clientRawRequest?.headers, userAgent),
+              onCredentialsRefreshed,
+              skipUpstreamRetry: true,
+              contextEditing: { enabled: contextEditingEnabled },
+            });
+            const norm = normalizeExecutorResult(rawResult);
+            if (!norm?.response || norm.response.status !== 200) return null;
+            const text = await norm.response.clone().text();
+            return JSON.parse(text) as Record<string, unknown>;
+          } catch (err) {
+            log?.warn?.(
+              "LOCAL_RECOVERY",
+              `resample failed: ${err instanceof Error ? err.message : String(err)}`
+            );
+            return null;
+          }
+        };
+        const executeBridgedTool = async (
+          canonical: string,
+          args: Record<string, unknown>
+        ): Promise<unknown> => {
+          const handlers = builtinSkills as Record<
+            string,
+            | ((
+                input: Record<string, unknown>,
+                context: { apiKeyId: string; sessionId: string }
+              ) => Promise<Record<string, unknown>>)
+            | undefined
+          >;
+          const handler = handlers[canonical];
+          if (!handler) return { error: `Unknown bridged tool: ${canonical}` };
+          return handler(args, {
+            apiKeyId: apiKeyInfo?.id || "local",
+            sessionId: pipelineSessionId,
+          });
+        };
+        const finalJson = await runLocalTurnRecovery(firstJson, {
+          reinvoke,
+          baseMessages,
+          executeBridgedTool,
+          log,
+        });
+        const synthesized = synthesizeOpenAiSseFromJson(JSON.stringify(finalJson));
+        if (synthesized) {
+          const sseHeaders = new Headers(providerResponse.headers);
+          sseHeaders.delete("content-length");
+          sseHeaders.set("content-type", "text/event-stream");
+          providerResponse = new Response(synthesized, {
+            status: 200,
+            statusText: providerResponse.statusText,
+            headers: sseHeaders,
+          });
+        }
+      }
+    } catch (err) {
+      log?.warn?.(
+        "LOCAL_RECOVERY",
+        `skipped (non-JSON upstream or error): ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
   }
 
   // Streaming response
