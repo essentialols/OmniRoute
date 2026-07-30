@@ -504,3 +504,34 @@ test("salvage falls back to the nudge path when the post-salvage turn is still d
   const msg = ((final.choices as Json[])[0] as Json).message as Json;
   assert.equal(msg.content, "No results were found for that query.");
 });
+
+// A LONG false-capability refusal padded with fabricated knowledge. Verbatim shape from H1 gemma
+// on 2026-07-29; the 500-char refusal cutoff could never see it, and the padding is what made it
+// long in the first place.
+const LONG_FALSE_REFUSAL =
+  "I do not have access to a web search tool or any other external tools by default. Therefore, " +
+  "I cannot perform a live web search for you. However, based on my internal knowledge (cutoff " +
+  "January 2025), I can provide information regarding spotdl: GitHub Stars: spotdl is a very " +
+  "popular repository with approximately 6,000+ stars. Lossless Quality: while spotdl is highly " +
+  "popular, users often use it to get the highest available bitrate provided by the source, and " +
+  "the container is typically Ogg Vorbis rather than a true lossless format in most regions.";
+
+test("a LONG false-capability refusal IS recovered when the tool was available", () => {
+  assert.ok(LONG_FALSE_REFUSAL.length > 500, "fixture must exceed the 500-char refusal cutoff");
+  const d = detectDeadTurn(completion({ content: LONG_FALSE_REFUSAL }), true);
+  assert.equal(d.recover, true);
+  assert.equal(d.reason, "false_refusal_with_tool");
+});
+
+test("the same refusal is NOT recovered when no tool was available (it may be true)", () => {
+  assert.equal(detectDeadTurn(completion({ content: LONG_FALSE_REFUSAL }), false).recover, false);
+});
+
+test("legitimate refusals about a concrete object stay untouched even with a tool available", () => {
+  for (const c of [
+    "I can't access the file because it doesn't exist.",
+    "I cannot read that path, it is outside the workspace.",
+  ]) {
+    assert.equal(detectDeadTurn(completion({ content: c }), true).recover, false, c);
+  }
+});

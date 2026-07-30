@@ -259,8 +259,15 @@ export function detectDeadTurn(
   // prose. Length is therefore deliberately NOT a limit here. Safety comes from
   // `bridgedToolAvailable`: a turn that never had a search tool cannot be failing to call one, so
   // an ordinary long answer that merely mentions searching is untouched.
-  if (bridgedToolAvailable && ANNOUNCE_RE.test(norm) && !norm.endsWith("?")) {
-    return { recover: true, reason: "announced_without_tool_call" };
+  if (bridgedToolAvailable && !norm.endsWith("?")) {
+    if (ANNOUNCE_RE.test(norm)) return { recover: true, reason: "announced_without_tool_call" };
+    // A refusal is PROVABLY false when the tool was on the request. Observed verbatim from H1
+    // gemma: "I do not have access to a web search tool or any other external tools by default.
+    // Therefore, I cannot perform a live web search for you. However, based on my internal
+    // knowledge (cutoff January 2025)..." -- followed by invented stars and bitrates. The refusal
+    // check above cannot see it because it bails above 500 chars, and these answers are long
+    // precisely BECAUSE the model padded them with fabricated knowledge.
+    if (REFUSAL_RE.test(norm)) return { recover: true, reason: "false_refusal_with_tool" };
   }
 
   return { recover: false, reason: "ok" };
