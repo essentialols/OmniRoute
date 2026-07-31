@@ -3931,7 +3931,17 @@ export async function handleChatCore({
           responseBody,
           responsePayloadFormat,
           clientResponseFormat,
-          responseToolNameMap
+          responseToolNameMap,
+          // Same namespace the request side threads into translateRequest
+          // (`signatureNamespace: connectionId`) and the streaming response side
+          // passes to createSSETransformStreamWithLogger. Without it the Gemini
+          // thought-signature cache is written under the bare tool-call id and the
+          // next turn's `<connectionId>:<toolCallId>` lookup always misses.
+          // Must mirror the request-side value verbatim: deriving it differently
+          // here (e.g. via getCurrentConnectionId(), which prefers
+          // credentials.connectionId) re-introduces the mismatch when the two
+          // disagree.
+          { signatureNamespace: connectionId ?? null }
         )
       : responseBody;
     const memoryExtractionResponse = translatedResponse;
