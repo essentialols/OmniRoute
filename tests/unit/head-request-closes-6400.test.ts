@@ -118,7 +118,10 @@ describe("issue #6400 — HEAD response guard (unit)", () => {
     );
 
     const getRes = makeMockResponse();
-    guarded({ method: "GET" } as unknown as http.IncomingMessage, getRes as unknown as http.ServerResponse);
+    guarded(
+      { method: "GET" } as unknown as http.IncomingMessage,
+      getRes as unknown as http.ServerResponse
+    );
     assert.equal(getRes.headers.connection, undefined, "GET must not be forced to close");
 
     const headRes = makeMockResponse();
@@ -156,7 +159,9 @@ describe("issue #6400 — HEAD response guard (integration, real socket)", () =>
     const server = http.createServer(wrapRequestListenerWithHeadResponseGuard(handler));
     servers.push(server);
     return new Promise((resolve) => {
-      server.listen(0, "127.0.0.1", () => resolve({ port: (server.address() as AddressInfo).port }));
+      server.listen(0, "127.0.0.1", () =>
+        resolve({ port: (server.address() as AddressInfo).port })
+      );
     });
   }
 

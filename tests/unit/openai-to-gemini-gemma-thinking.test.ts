@@ -9,9 +9,8 @@ import assert from "node:assert/strict";
 // `gemma-4-*` model still triggered the 400.
 // Port of the thinkingConfig-guard half of decolua/9router#2480 (the
 // signature-replay half of that PR is out of scope and NOT ported here).
-const { openaiToGeminiRequest } = await import(
-  "../../open-sse/translator/request/openai-to-gemini.ts"
-);
+const { openaiToGeminiRequest } =
+  await import("../../open-sse/translator/request/openai-to-gemini.ts");
 
 type GeminiRequestResult = {
   generationConfig?: { thinkingConfig?: unknown };

@@ -58,7 +58,12 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
   if (accept.includes("text/event-stream")) {
     let model;
     try {
-      const body = preParsedBody ?? (await request.clone().json().catch(() => null));
+      const body =
+        preParsedBody ??
+        (await request
+          .clone()
+          .json()
+          .catch(() => null));
       model = body?.model;
     } catch {
       // body unavailable / non-JSON — fall back to the default keepalive threshold

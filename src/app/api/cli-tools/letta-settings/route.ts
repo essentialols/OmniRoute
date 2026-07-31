@@ -122,10 +122,7 @@ export async function GET(request: Request) {
       backendMode: settings.preferredBackendMode || "api",
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: { message: sanitizeErrorMessage(error) } },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: { message: sanitizeErrorMessage(error) } }, { status: 500 });
   }
 }
 
@@ -246,10 +243,7 @@ export async function POST(request: Request) {
       needsRestart: true,
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: { message: sanitizeErrorMessage(error) } },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: { message: sanitizeErrorMessage(error) } }, { status: 500 });
   }
 }
 
@@ -321,9 +315,6 @@ export async function DELETE(request: Request) {
       needsRestart: true,
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: { message: sanitizeErrorMessage(error) } },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: { message: sanitizeErrorMessage(error) } }, { status: 500 });
   }
 }

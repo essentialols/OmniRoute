@@ -132,10 +132,6 @@ test("classifyProviderError: 404 => MODEL_NOT_FOUND", () => {
 });
 
 test("classifyProviderError: 404 with provider => MODEL_NOT_FOUND", () => {
-  const result = classifyProviderError(
-    404,
-    { error: { message: "Not Found" } },
-    "v0-vercel"
-  );
+  const result = classifyProviderError(404, { error: { message: "Not Found" } }, "v0-vercel");
   assert.equal(result, PROVIDER_ERROR_TYPES.MODEL_NOT_FOUND);
 });

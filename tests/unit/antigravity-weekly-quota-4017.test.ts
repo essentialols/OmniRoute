@@ -22,9 +22,8 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = "test-ag-weekly-secret";
 
 const core = await import("../../src/lib/db/core.ts");
-const { parseAntigravityWeeklyQuotas } = await import(
-  "../../open-sse/services/usage/antigravityWeeklyQuota.ts"
-);
+const { parseAntigravityWeeklyQuotas } =
+  await import("../../open-sse/services/usage/antigravityWeeklyQuota.ts");
 // Load usage.ts up-front (its index.ts proxyFetch patch runs at module eval) before mocks.
 const usageModule = await import("../../open-sse/services/usage.ts");
 const { getUsageForProvider } = usageModule;
@@ -47,7 +46,15 @@ function requestUrl(input: RequestInfo | URL): string {
 }
 
 interface UsageResult {
-  quotas: Record<string, { remainingPercentage?: number; resetAt: string | null; unlimited: boolean; quotaSource?: string }>;
+  quotas: Record<
+    string,
+    {
+      remainingPercentage?: number;
+      resetAt: string | null;
+      unlimited: boolean;
+      quotaSource?: string;
+    }
+  >;
 }
 
 test("parseAntigravityWeeklyQuotas extracts the weekly bucket per model-family group", () => {
@@ -106,7 +113,12 @@ test("parseAntigravityWeeklyQuotas tolerates the quotaSummary-nested envelope", 
         {
           displayName: "Gemini Models",
           buckets: [
-            { bucketId: "weekly", displayName: "Weekly", remainingFraction: 0.5, resetTime: RESET_IN_3_DAYS },
+            {
+              bucketId: "weekly",
+              displayName: "Weekly",
+              remainingFraction: 0.5,
+              resetTime: RESET_IN_3_DAYS,
+            },
           ],
         },
       ],
@@ -122,7 +134,10 @@ test("parseAntigravityWeeklyQuotas returns {} for missing/malformed data (best-e
   assert.deepEqual(parseAntigravityWeeklyQuotas(null), {});
   assert.deepEqual(parseAntigravityWeeklyQuotas(undefined), {});
   assert.deepEqual(parseAntigravityWeeklyQuotas({}), {});
-  assert.deepEqual(parseAntigravityWeeklyQuotas({ groups: [{ displayName: "Gemini Models" }] }), {});
+  assert.deepEqual(
+    parseAntigravityWeeklyQuotas({ groups: [{ displayName: "Gemini Models" }] }),
+    {}
+  );
 });
 
 test("getUsageForProvider(antigravity) merges weekly group quotas alongside per-model 5h quotas", async () => {

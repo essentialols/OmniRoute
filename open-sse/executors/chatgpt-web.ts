@@ -1273,8 +1273,7 @@ async function* extractContent(
     // on a tool-role message (handled below).
     if (event.type === "server_ste_metadata") {
       const meta = (event as Record<string, unknown>).metadata as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       if (meta && meta.turn_use_case === "image gen") {
         imageGenAsync = true;
       }
@@ -2718,8 +2717,7 @@ export class ChatGptWebExecutor extends BaseExecutor {
     clientHeaders,
   }: ExecuteInput) {
     const messages = (body as Record<string, unknown> | null)?.messages as
-      | Array<Record<string, unknown>>
-      | undefined;
+      Array<Record<string, unknown>> | undefined;
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return {
         response: errorResponse(400, "Missing or empty messages array"),

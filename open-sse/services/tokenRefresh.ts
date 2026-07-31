@@ -5,10 +5,7 @@ import { getGitHubCopilotRefreshHeaders } from "../config/providerHeaderProfiles
 import { pbkdf2Sync } from "node:crypto";
 import { runWithProxyContext } from "../utils/proxyFetch.ts";
 import { serializeRefresh, wasRefreshTokenRotated } from "./refreshSerializer.ts";
-import {
-  buildExternalIdpRefreshParams,
-  isExternalIdpAuthMethod,
-} from "./kiroExternalIdp.ts";
+import { buildExternalIdpRefreshParams, isExternalIdpAuthMethod } from "./kiroExternalIdp.ts";
 import { WINDSURF_CONFIG } from "@/lib/oauth/constants/oauth";
 import { buildGitLabOAuthEndpoints, resolveGitLabOAuthBaseUrl } from "@/lib/oauth/gitlab";
 

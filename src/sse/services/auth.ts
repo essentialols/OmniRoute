@@ -1487,8 +1487,7 @@ export async function getProviderCredentials(
       { fallbackStrategy?: string; stickyRoundRobinLimit?: number }
     >;
     const providerOverride = providerStrategyOverrides[resolvedId] || {};
-    const strategy =
-      providerOverride.fallbackStrategy || settings.fallbackStrategy || "fill-first";
+    const strategy = providerOverride.fallbackStrategy || settings.fallbackStrategy || "fill-first";
 
     let connection;
     const affinityConnection = await selectSessionAffinityConnection(

@@ -25,9 +25,8 @@ let nextResponse: (input: unknown, init: unknown) => Response = () =>
 
 const { runWithCapture } = await import("@omniroute/open-sse/utils/providerRequestLogging.ts");
 const durableCapture = await import("@omniroute/open-sse/services/durableCapture.ts");
-const { createResponsesApiTransformStream } = await import(
-  "@omniroute/open-sse/transformer/responsesTransformer.ts"
-);
+const { createResponsesApiTransformStream } =
+  await import("@omniroute/open-sse/transformer/responsesTransformer.ts");
 const { captureClientIn, captureClientOut, runWithCaptureContext, isCaptureEnabled } =
   durableCapture;
 
@@ -66,9 +65,7 @@ async function readCaptureLines(
         const raw = fs.readFileSync(path.join(dir, f), "utf8").trim();
         if (raw) for (const line of raw.split("\n")) lines.push(JSON.parse(line));
       }
-      const bodiesFlushed = lines.every(
-        (l) => l.leg === "client_in" || l.responseBody !== null
-      );
+      const bodiesFlushed = lines.every((l) => l.leg === "client_in" || l.responseBody !== null);
       if (lines.length >= minLines && bodiesFlushed) return lines;
       if (Date.now() > deadline) return lines;
     } else if (Date.now() > deadline) {
@@ -183,10 +180,13 @@ test("④ client_out records the final JSON client response, correlated + scrubb
     provider,
     model: "gpt-x",
     endpoint: "/v1/chat/completions",
-    response: new Response(JSON.stringify({ id: "resp_final", reply: "reach me at eve@example.com" }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }),
+    response: new Response(
+      JSON.stringify({ id: "resp_final", reply: "reach me at eve@example.com" }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }
+    ),
   });
 
   const lines = await readCaptureLines(provider, 1);
@@ -205,7 +205,12 @@ test("④ client_out streaming tee does NOT break or reorder the real client str
   const provider = "cap-client-out-stream";
   const correlationId = "corr-out-stream";
 
-  const chunks = ["data: {\"i\":0}\n\n", "data: {\"i\":1}\n\n", "data: {\"i\":2}\n\n", "data: [DONE]\n\n"];
+  const chunks = [
+    'data: {"i":0}\n\n',
+    'data: {"i":1}\n\n',
+    'data: {"i":2}\n\n',
+    "data: [DONE]\n\n",
+  ];
   const encoder = new TextEncoder();
   const clientStream = new ReadableStream<Uint8Array>({
     start(controller) {

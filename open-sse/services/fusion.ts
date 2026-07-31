@@ -64,8 +64,7 @@ export function extractPanelText(json: unknown): string {
   // Gemini (parts carry .text without a type discriminator)
   const candidates = j.candidates as Array<Record<string, unknown>> | undefined;
   const parts = (candidates?.[0]?.content as Record<string, unknown> | undefined)?.parts as
-    | Array<{ text?: unknown }>
-    | undefined;
+    Array<{ text?: unknown }> | undefined;
   if (Array.isArray(parts)) {
     const t = parts.map((p) => (typeof p?.text === "string" ? p.text : "")).join("");
     if (t.trim()) return t;
@@ -100,10 +99,7 @@ export function appendUserTurn(body: Body, text: string): Body {
   } else if (Array.isArray(body.input)) {
     next.input = [...(body.input as unknown[]), { role: "user", content: text }];
   } else if (Array.isArray(body.contents)) {
-    next.contents = [
-      ...(body.contents as unknown[]),
-      { role: "user", parts: [{ text }] },
-    ];
+    next.contents = [...(body.contents as unknown[]), { role: "user", parts: [{ text }] }];
   } else {
     next.messages = [{ role: "user", content: text }];
   }
@@ -139,10 +135,7 @@ export function buildJudgePrompt(answers: Array<{ text: string }>): string {
 type Sentinel = { __timeout?: true; __error?: unknown };
 
 // Resolve a Response (or sentinel) within ms; the loser keeps running but is ignored.
-function withTimeout(
-  promise: Promise<Response>,
-  ms: number
-): Promise<Response | Sentinel> {
+function withTimeout(promise: Promise<Response>, ms: number): Promise<Response | Sentinel> {
   return new Promise((resolve) => {
     const t = setTimeout(() => resolve({ __timeout: true }), ms);
     Promise.resolve(promise)
@@ -344,20 +337,14 @@ export async function handleFusionChat({
     // synthesizing from a single source through itself would be redundant —
     // answer directly with the lone survivor (issue #6454).
     if (!hasExplicitJudge) {
-      log.info(
-        "FUSION",
-        `Only ${answers[0].model} succeeded — answering directly (no fusion)`
-      );
+      log.info("FUSION", `Only ${answers[0].model} succeeded — answering directly (no fusion)`);
       return handleSingleModel(body, answers[0].model);
     }
     // An explicit judgeModel IS configured: honor it even with a single
     // surviving panel answer, rather than silently substituting the panel
     // member for the configured judge (issue #6455). The judge still adds
     // value reviewing/polishing a lone source per its documented contract.
-    log.info(
-      "FUSION",
-      `Only ${answers[0].model} succeeded — judging single answer with ${judge}`
-    );
+    log.info("FUSION", `Only ${answers[0].model} succeeded — judging single answer with ${judge}`);
   }
 
   // 4. Judge analyzes + writes one final answer (streams to client if requested).

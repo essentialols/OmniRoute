@@ -110,7 +110,9 @@ test("buildStreamSummaryFromEvents merges tool_call deltas when every chunk carr
       ],
     }),
     toolCallEvent({
-      tool_calls: [{ index: 0, id: "call_a", type: "function", function: { arguments: '{"x":1}' } }],
+      tool_calls: [
+        { index: 0, id: "call_a", type: "function", function: { arguments: '{"x":1}' } },
+      ],
     }),
     toolCallEvent({}, "tool_calls"),
   ];

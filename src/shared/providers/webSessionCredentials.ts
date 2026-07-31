@@ -231,7 +231,8 @@ export const WEB_SESSION_CREDENTIAL_REQUIREMENTS = {
   "zai-web": {
     kind: "cookie",
     credentialName: "token",
-    placeholder: "token=... or full Cookie header from chat.z.ai (optional — guest token used if empty)",
+    placeholder:
+      "token=... or full Cookie header from chat.z.ai (optional — guest token used if empty)",
     acceptsFullCookieHeader: true,
     storageKeys: ["cookie", "token"],
   },

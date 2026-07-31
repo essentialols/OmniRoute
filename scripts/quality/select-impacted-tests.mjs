@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const HUB_RE = /(setupPolyfill|tsconfig|package\.json|package-lock\.json|\.env|vitest\.config|stryker\.conf)/;
+const HUB_RE =
+  /(setupPolyfill|tsconfig|package\.json|package-lock\.json|\.env|vitest\.config|stryker\.conf)/;
 // A changed file counts as a "run-it" test ONLY if it is a node:test unit file the TIA
 // step can actually run via `node --test` — i.e. it mirrors the `npm run test:unit` glob.
 // This EXCLUDES vitest files (`.test.tsx`, `tests/unit/autoCombo/**`), e2e and integration

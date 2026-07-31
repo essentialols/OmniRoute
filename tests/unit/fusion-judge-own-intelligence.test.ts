@@ -6,10 +6,7 @@ import assert from "node:assert/strict";
 import { buildJudgePrompt } from "../../open-sse/services/fusion.ts";
 
 test("judge prompt embeds all panel answers, anonymized by source", () => {
-  const prompt = buildJudgePrompt([
-    { text: "answer-alpha" },
-    { text: "answer-beta" },
-  ]);
+  const prompt = buildJudgePrompt([{ text: "answer-alpha" }, { text: "answer-beta" }]);
   assert.match(prompt, /\[Source 1\]/);
   assert.match(prompt, /\[Source 2\]/);
   assert.match(prompt, /answer-alpha/);

@@ -158,9 +158,7 @@ export default function CompressionHub() {
           </span>
           <div>
             <h1 className="text-xl font-bold text-text-main">Compression Hub</h1>
-            <p className="text-sm text-text-muted">
-              Pick which compression profile runs globally.
-            </p>
+            <p className="text-sm text-text-muted">Pick which compression profile runs globally.</p>
           </div>
         </div>
         <button
@@ -211,7 +209,8 @@ export default function CompressionHub() {
             Active profile
           </label>
           <p className="text-xs text-text-muted">
-            Pick which compression profile runs globally — the panel-derived Default or a saved named combo.
+            Pick which compression profile runs globally — the panel-derived Default or a saved
+            named combo.
           </p>
         </div>
         <select
@@ -255,7 +254,8 @@ export default function CompressionHub() {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-text-main">Context Editing (Claude)</p>
             <p className="text-xs text-text-muted">
-              Lets the provider clear old tool-use blocks server-side, without rewriting the message.
+              Lets the provider clear old tool-use blocks server-side, without rewriting the
+              message.
             </p>
           </div>
           <Toggle
@@ -269,7 +269,9 @@ export default function CompressionHub() {
         <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-500">
           <span className="material-symbols-outlined text-[16px]">info</span>
           <span>
-            Currently available for Claude (Anthropic) only. It is a delegated mode: the provider clears old tool-use blocks server-side — we do not rewrite the message. Does not affect other providers.
+            Currently available for Claude (Anthropic) only. It is a delegated mode: the provider
+            clears old tool-use blocks server-side — we do not rewrite the message. Does not affect
+            other providers.
           </span>
         </div>
       </div>

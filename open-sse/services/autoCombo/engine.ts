@@ -110,12 +110,15 @@ class ScoreTierRotator {
     const tiers = groupIntoTiers(candidates);
     const best = candidates[0].score;
     const worst = candidates[candidates.length - 1].score;
-    if (tiers.top.length > 0 && (best - worst) >= CLEAR_WINNER_THRESHOLD) {
+    if (tiers.top.length > 0 && best - worst >= CLEAR_WINNER_THRESHOLD) {
       return this.pickFromPool(tiers.top);
     }
     const prefs = tierPreferencesForName(this.comboName);
-    const chosen = chooseTierWeighted(tiers, prefs, (pool) => this.pickFromPool(pool), () =>
-      this.advance(tiers, prefs, candidates)
+    const chosen = chooseTierWeighted(
+      tiers,
+      prefs,
+      (pool) => this.pickFromPool(pool),
+      () => this.advance(tiers, prefs, candidates)
     );
     return chosen;
   }
@@ -322,7 +325,10 @@ export function selectProvider(
           (a, b) => estimatedCostFor(a) - estimatedCostFor(b)
         )[0];
         if (config.budgetFallback === "strict") {
-          throw new BudgetExceededError(config.budgetCap, cheapest ? estimatedCostFor(cheapest) : 0);
+          throw new BudgetExceededError(
+            config.budgetCap,
+            cheapest ? estimatedCostFor(cheapest) : 0
+          );
         }
         if (cheapest) selected = cheapest;
       }

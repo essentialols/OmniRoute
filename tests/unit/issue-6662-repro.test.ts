@@ -22,9 +22,8 @@ import assert from "node:assert/strict";
 
 const mod = await import("../../open-sse/executors/v0-vercel-web.ts");
 const { ClaudeWebExecutor } = await import("../../open-sse/executors/claude-web.ts");
-const { __setTlsFetchOverrideForTesting } = await import(
-  "../../open-sse/services/claudeTlsClient.ts"
-);
+const { __setTlsFetchOverrideForTesting } =
+  await import("../../open-sse/services/claudeTlsClient.ts");
 
 function sseUpstream(events: string[]): Response {
   const encoder = new TextEncoder();

@@ -100,7 +100,11 @@ test("insertBullets appends at the END of each living section", () => {
   assert.ok(maintIdx > maintHeadIdx && maintIdx < lines.indexOf("## [3.8.46] - 2026-07-04"));
   // Only the FIRST (living) occurrence of a heading is touched — the shipped 3.8.46
   // section is byte-identical.
-  assert.ok(out.includes("## [3.8.46] - 2026-07-04\n\n### ✨ New Features\n\n- **old feature**: shipped (#0)"));
+  assert.ok(
+    out.includes(
+      "## [3.8.46] - 2026-07-04\n\n### ✨ New Features\n\n- **old feature**: shipped (#0)"
+    )
+  );
   // No existing bullet lost.
   for (const existing of ["#1 — thanks @a", "existing fix (#2", "existing maintenance (#3"]) {
     assert.ok(out.includes(existing));
@@ -108,7 +112,10 @@ test("insertBullets appends at the END of each living section", () => {
 });
 
 test("insertBullets throws when a needed heading is missing", () => {
-  const noMaint = CHANGELOG_FIXTURE.replace("### 📝 Maintenance\n\n- chore: existing maintenance (#3)\n", "");
+  const noMaint = CHANGELOG_FIXTURE.replace(
+    "### 📝 Maintenance\n\n- chore: existing maintenance (#3)\n",
+    ""
+  );
   assert.throws(
     () => insertBullets(noMaint, { maintenance: [{ text: "- x" }] }),
     /📝 Maintenance.*not found/s

@@ -38,10 +38,7 @@ test("computeCostFromPricing: xAI exact cost_in_usd_ticks overrides the token-ba
     ...TOKENS_1M_EACH,
     cost_in_usd_ticks: DOC_EXAMPLE_TICKS,
   });
-  assert.ok(
-    Math.abs(cost - DOC_EXAMPLE_USD) < 1e-9,
-    `expected ${DOC_EXAMPLE_USD}, got ${cost}`
-  );
+  assert.ok(Math.abs(cost - DOC_EXAMPLE_USD) < 1e-9, `expected ${DOC_EXAMPLE_USD}, got ${cost}`);
   assert.notEqual(cost, 3, "must not fall back to the $3 token-based estimate");
 });
 

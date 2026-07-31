@@ -73,9 +73,7 @@ interface StickyEntry {
  * Injectable saturation fetcher seam (for unit tests).
  * Returns HeadroomSaturation or undefined when unknown.
  */
-export type SaturationFetcher = (
-  connectionId: string
-) => Promise<HeadroomSaturation | undefined>;
+export type SaturationFetcher = (connectionId: string) => Promise<HeadroomSaturation | undefined>;
 
 // ─── Saturation fetcher seam ─────────────────────────────────────────────────
 

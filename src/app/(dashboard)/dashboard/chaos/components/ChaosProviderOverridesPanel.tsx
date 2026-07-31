@@ -73,7 +73,11 @@ function ChaosProviderOverrideRow({
   );
 }
 
-function ChaosAvailableProvidersHint({ availableProviders }: { availableProviders: ChaosProviderInfo[] }) {
+function ChaosAvailableProvidersHint({
+  availableProviders,
+}: {
+  availableProviders: ChaosProviderInfo[];
+}) {
   if (availableProviders.length === 0) return null;
   return (
     <details className="text-xs text-text-muted">

@@ -45,7 +45,10 @@ test("aggressivenessOf ranks are internally consistent with described engine sev
   // Structural/reversible engines (session-dedup, ccr) must rank below the prose-rewriting
   // tier (caveman/aggressive/ultra).
   assert.ok(aggressivenessOf("ccr") < aggressivenessOf("caveman"));
-  assert.ok(aggressivenessOf("session-dedup") < aggressivenessOf("ccr") || aggressivenessOf("session-dedup") <= aggressivenessOf("ccr"));
+  assert.ok(
+    aggressivenessOf("session-dedup") < aggressivenessOf("ccr") ||
+      aggressivenessOf("session-dedup") <= aggressivenessOf("ccr")
+  );
   // Semantic-pruning engines (llmlingua, llm) must rank at/above "aggressive" and below/at "ultra".
   assert.ok(aggressivenessOf("llmlingua") >= aggressivenessOf("aggressive"));
   assert.ok(aggressivenessOf("llmlingua") <= aggressivenessOf("ultra"));

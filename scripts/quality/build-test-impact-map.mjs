@@ -79,7 +79,10 @@ for (const tf of testFiles) {
 }
 for (const k of Object.keys(map)) map[k].sort();
 const out = path.join(ROOT, "config/quality/test-impact-map.json");
-fs.writeFileSync(out, JSON.stringify({ generatedFrom: "import-graph", sources: map }, null, 2) + "\n");
+fs.writeFileSync(
+  out,
+  JSON.stringify({ generatedFrom: "import-graph", sources: map }, null, 2) + "\n"
+);
 console.log(
   `test-impact-map: ${Object.keys(map).length} source files mapped from ${testFiles.length} test files`
 );

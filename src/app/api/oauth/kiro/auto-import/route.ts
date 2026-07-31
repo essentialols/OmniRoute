@@ -111,8 +111,7 @@ async function tryKiroCliSqlite(): Promise<{
         for (const table of ["auth_kv", "ItemTable", "storage"]) {
           try {
             const row = db.prepare(`SELECT value FROM ${table} WHERE key = ?`).get(key) as
-              | { value: string }
-              | undefined;
+              { value: string } | undefined;
             if (row?.value) {
               try {
                 tokenData = JSON.parse(row.value);
@@ -139,8 +138,7 @@ async function tryKiroCliSqlite(): Promise<{
         for (const table of ["auth_kv", "ItemTable", "storage"]) {
           try {
             const row = db.prepare(`SELECT value FROM ${table} WHERE key = ?`).get(key) as
-              | { value: string }
-              | undefined;
+              { value: string } | undefined;
             if (row?.value) {
               try {
                 regData = JSON.parse(row.value);

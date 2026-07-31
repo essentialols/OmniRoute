@@ -1,5 +1,10 @@
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import {
+  getParamFilterConfig,
+  isAutoLearnGloballyEnabled,
+  addParamToBlocklist,
+} from "@/lib/db/paramFilters";
+import {
   mergeClientAnthropicBeta,
   normalizeAnthropicHeaderVariants,
 } from "../config/anthropicHeaders.ts";

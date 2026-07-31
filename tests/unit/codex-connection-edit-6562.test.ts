@@ -40,9 +40,8 @@ process.env.JWT_SECRET = "test-jwt-secret-codex-edit-6562";
 process.env.INITIAL_PASSWORD = "admin-secret";
 
 const core = await import("../../src/lib/db/core.ts");
-const { createProviderConnection, getProviderConnectionById } = await import(
-  "../../src/lib/db/providers.ts"
-);
+const { createProviderConnection, getProviderConnectionById } =
+  await import("../../src/lib/db/providers.ts");
 const providerByIdRoute = await import("../../src/app/api/providers/[id]/route.ts");
 
 function resetDb() {

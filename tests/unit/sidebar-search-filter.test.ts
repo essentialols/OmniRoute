@@ -59,8 +59,7 @@ test("filters items inside a group, dropping non-matching group members", () => 
   const result = filterSidebarSectionsByQuery(makeSections(), "logs");
   assert.equal(result.length, 1);
   const group = result[0].children.find((c) => "type" in c && c.type === "group") as
-    | Group
-    | undefined;
+    Group | undefined;
   assert.ok(group, "expected the tools group to survive filtering");
   assert.deepEqual(
     group!.items.map((i) => i.id),

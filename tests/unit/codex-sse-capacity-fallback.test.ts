@@ -9,7 +9,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { CodexExecutor, __setCodexWebSocketTransportForTesting } from "../../open-sse/executors/codex.ts";
+import {
+  CodexExecutor,
+  __setCodexWebSocketTransportForTesting,
+} from "../../open-sse/executors/codex.ts";
 
 test.afterEach(() => {
   __setCodexWebSocketTransportForTesting(undefined);

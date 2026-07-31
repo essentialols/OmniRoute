@@ -115,10 +115,7 @@ describe("normalizeCodexImportRecord", () => {
     const expiresMs = Date.parse(result.payload.expiresAt);
     assert.ok(expiresMs > before, "expiresAt should be in the future");
     // Default lifetime is 10 days; allow a generous upper bound.
-    assert.ok(
-      expiresMs <= after + 11 * 24 * 60 * 60 * 1000,
-      "expiresAt should be within ~11 days",
-    );
+    assert.ok(expiresMs <= after + 11 * 24 * 60 * 60 * 1000, "expiresAt should be within ~11 days");
   });
 
   test("rejects invalid `expired` strings by falling back to default", () => {
@@ -135,13 +132,10 @@ describe("normalizeCodexImportRecord", () => {
 
   test("rejects records missing required fields", () => {
     assert.equal(normalizeCodexImportRecord({}).ok, false);
-    assert.equal(
-      normalizeCodexImportRecord({ access_token: "a", email: "x@y.z" }).ok,
-      false,
-    );
+    assert.equal(normalizeCodexImportRecord({ access_token: "a", email: "x@y.z" }).ok, false);
     assert.equal(
       normalizeCodexImportRecord({ access_token: "a", refresh_token: "r" }).ok,
-      false, // no email anywhere
+      false // no email anywhere
     );
   });
 

@@ -18,15 +18,12 @@ import assert from "node:assert/strict";
 // abort/error finish reasons, while a genuine clean STOP still maps to
 // "end_turn" (no regression).
 
-const { geminiToOpenAIResponse } = await import(
-  "../../open-sse/translator/response/gemini-to-openai.ts"
-);
-const { openaiToClaudeResponse } = await import(
-  "../../open-sse/translator/response/openai-to-claude.ts"
-);
-const { geminiToClaudeResponse } = await import(
-  "../../open-sse/translator/response/gemini-to-claude.ts"
-);
+const { geminiToOpenAIResponse } =
+  await import("../../open-sse/translator/response/gemini-to-openai.ts");
+const { openaiToClaudeResponse } =
+  await import("../../open-sse/translator/response/openai-to-claude.ts");
+const { geminiToClaudeResponse } =
+  await import("../../open-sse/translator/response/gemini-to-claude.ts");
 
 // Direct Gemini -> Claude translator (the path Claude Code hits through an
 // antigravity/Gemini-routed model — sourceFormat=CLAUDE, targetFormat=GEMINI —

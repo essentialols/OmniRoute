@@ -154,7 +154,8 @@ function filterByEnabledOverrides(
   const overrideIds = new Set(enabledOverrides.map((o) => o.providerId.toLowerCase()));
   const selected = active.filter(
     (c: any) =>
-      overrideIds.has((c.provider ?? "").toLowerCase()) || overrideIds.has((c.id ?? "").toLowerCase())
+      overrideIds.has((c.provider ?? "").toLowerCase()) ||
+      overrideIds.has((c.id ?? "").toLowerCase())
   );
   return selected.length > 0 ? selected : active; // fallback to all active
 }
@@ -305,7 +306,10 @@ async function dispatchToModel(
  * Uses a simple pooling approach: start up to `limit` tasks at once,
  * and as each completes, start the next one.
  */
-async function runWithConcurrencyLimit<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
+async function runWithConcurrencyLimit<T>(
+  tasks: (() => Promise<T>)[],
+  limit: number
+): Promise<T[]> {
   const results: T[] = new Array(tasks.length);
   let nextIndex = 0;
 

@@ -10,7 +10,10 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const pExecFile = promisify(execFile);
-const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "../../scripts/release/merge-train.sh");
+const SCRIPT = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../scripts/release/merge-train.sh"
+);
 
 async function run(args: string[]) {
   try {

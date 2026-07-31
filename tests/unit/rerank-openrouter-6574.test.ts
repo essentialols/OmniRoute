@@ -1,9 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { parseRerankModel, getRerankProvider, getAllRerankModels } = await import(
-  "../../open-sse/config/rerankRegistry.ts"
-);
+const { parseRerankModel, getRerankProvider, getAllRerankModels } =
+  await import("../../open-sse/config/rerankRegistry.ts");
 
 // #6574 — OpenRouter now exposes a Cohere-compatible /api/v1/rerank endpoint
 // (confirmed live: openrouter.ai/cohere/rerank-4-pro, model ids stay
