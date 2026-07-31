@@ -547,18 +547,73 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
 
   const limiter = getLimiter(provider, connectionId, model);
   const maxWaitMs = currentRequestQueueSettings.maxWaitMs;
-  const scheduleOpts = maxWaitMs && maxWaitMs > 0 ? { expiration: maxWaitMs } : {};
 
-  // Bottleneck's `expiration` rejects the wrapper promise but never cancels the
-  // job itself, so an expired request keeps running upstream as an orphan long
-  // after the client got its error. Same for the caller-abort race below. Hand
-  // `fn` a job signal we own and abort it on every path that stops awaiting the
-  // job. Never on the success path: that result may still be streaming.
+  // `maxWaitMs` is a QUEUE-WAIT budget: how long a job may sit waiting for a
+  // slot before we give up and let combo fall back. It is NOT a cap on how long
+  // the job may run. Bottleneck's `expiration` is the opposite: its clock starts
+  // when the job STARTS EXECUTING, so passing maxWaitMs there killed requests
+  // that never queued at all. Observed 2026-07-30: a prefix-cache hit with
+  // essentially zero prefill was dropped at exactly 240s of generation, and any
+  // response longer than roughly 5k tokens crossed the budget purely by decoding.
+  // So run the budget ourselves as a timer that we clear the instant the job
+  // body begins, and leave `expiration` unset.
+  let jobStarted = false;
+  let queueWaitTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearQueueWaitTimer = () => {
+    if (queueWaitTimer !== undefined) {
+      clearTimeout(queueWaitTimer);
+      queueWaitTimer = undefined;
+    }
+  };
+
+  // An expired or aborted job must also be cancelled upstream, otherwise it keeps
+  // running as an orphan long after the client got its error. Hand `fn` a job
+  // signal we own and abort it on every path that stops awaiting the job. Never
+  // on the success path: that result may still be streaming.
   const jobController = new AbortController();
   const abortJob = (reason: Error) => {
     if (!jobController.signal.aborted) jobController.abort(reason);
   };
-  const scheduleJob = () => limiter.schedule(scheduleOpts, () => fn(jobController.signal));
+
+  const buildQueueTimeoutError = () => {
+    const queueErr = new Error(
+      `Request dropped after waiting longer than the local rate-limit queue budget maxWaitMs ` +
+        `(${maxWaitMs}ms) for a free slot on ${model ? `${provider}/${model}` : provider}. This is ` +
+        `OmniRoute's request queue (resilienceSettings.requestQueue.maxWaitMs), not an upstream ` +
+        `timeout, and it does not cap how long a running request may take. Raise it in ` +
+        `Settings, Resilience if this is queue saturation rather than a slow provider.`
+    ) as Error & { code?: string };
+    queueErr.code = "RATE_LIMIT_QUEUE_TIMEOUT";
+    return queueErr;
+  };
+
+  const scheduleJob = () =>
+    limiter.schedule({}, () => {
+      // The job has a slot. The queue-wait budget has been satisfied, so stop the
+      // timer before doing any work: from here on the request may take as long as
+      // it legitimately needs.
+      jobStarted = true;
+      clearQueueWaitTimer();
+      return fn(jobController.signal);
+    });
+
+  const queueWaitPromise =
+    maxWaitMs && maxWaitMs > 0
+      ? new Promise<never>((_, reject) => {
+          queueWaitTimer = setTimeout(() => {
+            if (jobStarted) return;
+            const key = getLimiterKey(provider, connectionId, model);
+            logRateLimit(
+              `[RATE-LIMIT] ${key} waited ${Math.ceil(maxWaitMs / 1000)}s for a queue slot, dropping`
+            );
+            const queueErr = buildQueueTimeoutError();
+            // Bottleneck keeps the job queued even though we stopped awaiting it.
+            // Cancel it so it does not fire upstream after the caller gave up.
+            abortJob(queueErr);
+            reject(queueErr);
+          }, maxWaitMs);
+        })
+      : null;
 
   try {
     if (signal) {
@@ -589,35 +644,38 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
       });
 
       try {
-        return await Promise.race([scheduleJob(), abortPromise]);
+        const racers = [scheduleJob(), abortPromise];
+        if (queueWaitPromise) racers.push(queueWaitPromise);
+        return await Promise.race(racers);
       } finally {
+        clearQueueWaitTimer();
         if (abortListener) {
           signal.removeEventListener("abort", abortListener);
         }
       }
     } else {
-      return await scheduleJob();
+      try {
+        const racers = [scheduleJob()];
+        if (queueWaitPromise) racers.push(queueWaitPromise);
+        return await Promise.race(racers);
+      } finally {
+        clearQueueWaitTimer();
+      }
     }
   } catch (err) {
-    // Bottleneck's raw `This job timed out after <maxWaitMs> ms.` is
-    // indistinguishable from an upstream gateway timeout, so it leaks into 502
-    // bodies / call-log `last_error` and gets misdiagnosed as a provider outage
+    // Defensive: `expiration` is no longer set here, but a limiter configured
+    // elsewhere could still surface Bottleneck's raw
+    // `This job timed out after <maxWaitMs> ms.`, which is indistinguishable from
+    // an upstream gateway timeout and gets misdiagnosed as a provider outage
     // (#4165). Rewrite it into a clear, OmniRoute-owned error (knob named,
     // upstream disclaimed, original kept as `cause`, `code` for classification).
-    // Behavior is unchanged — the job is still dropped so combo can fall back.
     if (err?.message?.includes("This job timed out")) {
       const key = getLimiterKey(provider, connectionId, model);
       logRateLimit(
-        `⏰ [RATE-LIMIT] ${key} — job expired after ${Math.ceil((maxWaitMs || 0) / 1000)}s in queue, dropping`
+        `[RATE-LIMIT] ${key} job expired after ${Math.ceil((maxWaitMs || 0) / 1000)}s, dropping`
       );
-      const queueErr = new Error(
-        `Request dropped after exceeding the local rate-limit queue budget maxWaitMs (${maxWaitMs}ms) for ` +
-          `${model ? `${provider}/${model}` : provider} — this is OmniRoute's request queue ` +
-          `(resilienceSettings.requestQueue.maxWaitMs), not an upstream timeout. Raise it in ` +
-          `Settings → Resilience if this is queue saturation rather than a slow provider.`,
-        { cause: err }
-      ) as Error & { code?: string };
-      queueErr.code = "RATE_LIMIT_QUEUE_TIMEOUT";
+      const queueErr = buildQueueTimeoutError();
+      (queueErr as Error & { cause?: unknown }).cause = err;
       // Bottleneck only dropped its handle on the job. Cancel the in-flight
       // upstream request too, otherwise it keeps burning quota as an orphan.
       abortJob(queueErr);
