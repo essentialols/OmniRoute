@@ -2428,7 +2428,7 @@ export async function handleChatCore({
                 provider,
                 attemptConnectionId,
                 modelToCall,
-                async () => {
+                async (jobSignal?: AbortSignal) => {
                   trace("inside_rate_limit", { connectionId: attemptConnectionId });
                   updatePendingScope(pendingScope, {
                     stage: "rate_limit_slot_acquired",
@@ -2437,7 +2437,11 @@ export async function handleChatCore({
                     executor,
                     provider,
                     model: modelToCall,
-                    signal: streamController.signal,
+                    // Job signal from withRateLimit: a child of streamController's
+                    // signal that also fires when the rate-limit queue budget
+                    // expires, so a dropped job aborts the upstream request
+                    // instead of leaving it running orphaned.
+                    signal: jobSignal ?? streamController.signal,
                     log,
                     execute: (signal) =>
                       runWithCaptureScope(

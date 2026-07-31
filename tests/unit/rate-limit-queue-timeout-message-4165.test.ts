@@ -92,6 +92,76 @@ test("#4165 queue-timeout surfaces a clear OmniRoute error, not the raw upstream
   assert.match(String(caught.cause?.message ?? ""), /This job timed out/);
 });
 
+test("#4165 an expired job aborts the in-flight upstream request instead of orphaning it", async () => {
+  await rateLimitManager.applyRequestQueueSettings({
+    ...resilienceSettings.DEFAULT_RESILIENCE_SETTINGS.requestQueue,
+    autoEnableApiKeyProviders: false,
+    concurrentRequests: 1,
+    requestsPerMinute: 100000,
+    minTimeBetweenRequestsMs: 0,
+    maxWaitMs: 40,
+  });
+  rateLimitManager.enableRateLimitProtection("conn-queue-abort");
+
+  let jobSignal: AbortSignal | undefined;
+  let finished = false;
+  const promise = rateLimitManager.withRateLimit(
+    "openai",
+    "conn-queue-abort",
+    "gpt-4o",
+    async (signal?: AbortSignal) => {
+      jobSignal = signal;
+      await wait(400); // > maxWaitMs (40ms) → Bottleneck drops the job
+      finished = true;
+      return "should-not-reach";
+    }
+  );
+
+  await assert.rejects(promise, /maxWaitMs/);
+
+  // The dropped job must be told to stop, otherwise the upstream request keeps
+  // running (and burning provider quota) after the client already got a 502.
+  assert.ok(jobSignal, "fn must receive a job abort signal");
+  assert.equal(jobSignal?.aborted, true, "expired job signal must be aborted");
+  assert.equal(
+    (jobSignal?.reason as { code?: string } | undefined)?.code,
+    "RATE_LIMIT_QUEUE_TIMEOUT",
+    "abort reason should be the queue-timeout error"
+  );
+  assert.equal(finished, false, "job body should still be mid-flight when the abort lands");
+});
+
+test("#4165 a caller abort also cancels the in-flight job", async () => {
+  await rateLimitManager.applyRequestQueueSettings({
+    ...resilienceSettings.DEFAULT_RESILIENCE_SETTINGS.requestQueue,
+    autoEnableApiKeyProviders: false,
+    concurrentRequests: 1,
+    requestsPerMinute: 100000,
+    minTimeBetweenRequestsMs: 0,
+    maxWaitMs: 5000,
+  });
+  rateLimitManager.enableRateLimitProtection("conn-caller-abort");
+
+  const controller = new AbortController();
+  let jobSignal: AbortSignal | undefined;
+  const promise = rateLimitManager.withRateLimit(
+    "openai",
+    "conn-caller-abort",
+    "gpt-4o",
+    async (signal?: AbortSignal) => {
+      jobSignal = signal;
+      await wait(400);
+      return "should-not-reach";
+    },
+    controller.signal
+  );
+
+  await wait(50);
+  controller.abort();
+  await assert.rejects(promise, (err: Error) => err.name === "AbortError");
+  assert.equal(jobSignal?.aborted, true, "caller abort must reach the running job");
+});
+
 test("#4165 a job that completes within maxWaitMs is unaffected", async () => {
   await rateLimitManager.applyRequestQueueSettings({
     ...resilienceSettings.DEFAULT_RESILIENCE_SETTINGS.requestQueue,

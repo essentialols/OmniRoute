@@ -517,13 +517,15 @@ function getLimiter(provider, connectionId, model = null) {
  * @param {string} provider - Provider ID
  * @param {string} connectionId - Connection ID
  * @param {string} model - Model name (optional, for per-model limits)
- * @param {Function} fn - The async function to execute (e.g., executor.execute)
+ * @param {Function} fn - The async function to execute (e.g., executor.execute).
+ *   Receives a job AbortSignal; wire it into the upstream request so the job can
+ *   actually be cancelled when the queue budget expires or the caller aborts.
  * @param {AbortSignal} signal - Optional abort signal to cancel waiting
  * @returns {Promise<unknown>} Result of fn()
  */
 export async function withRateLimit(provider, connectionId, model, fn, signal = null) {
   if (!enabledConnections.has(connectionId)) {
-    return fn();
+    return fn(signal ?? undefined);
   }
 
   if (signal?.aborted) {
@@ -547,17 +549,35 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
   const maxWaitMs = currentRequestQueueSettings.maxWaitMs;
   const scheduleOpts = maxWaitMs && maxWaitMs > 0 ? { expiration: maxWaitMs } : {};
 
+  // Bottleneck's `expiration` rejects the wrapper promise but never cancels the
+  // job itself, so an expired request keeps running upstream as an orphan long
+  // after the client got its error. Same for the caller-abort race below. Hand
+  // `fn` a job signal we own and abort it on every path that stops awaiting the
+  // job. Never on the success path: that result may still be streaming.
+  const jobController = new AbortController();
+  const abortJob = (reason: Error) => {
+    if (!jobController.signal.aborted) jobController.abort(reason);
+  };
+  const scheduleJob = () => limiter.schedule(scheduleOpts, () => fn(jobController.signal));
+
   try {
     if (signal) {
       let abortListener: (() => void) | undefined;
       const abortPromise = new Promise<never>((_, reject) => {
         const onAbort = () => {
           const reason = signal.reason;
-          const err =
-            reason instanceof Error
-              ? reason
-              : new Error(typeof reason === "string" ? reason : "The operation was aborted");
-          err.name = "AbortError";
+          // `controller.abort()` with no reason yields a DOMException whose
+          // `name` is a getter (already "AbortError"), so assigning to it throws
+          // a TypeError inside this listener and the abort never propagates.
+          // Only name the errors we construct ourselves, same as the guard above.
+          let err: Error;
+          if (reason instanceof Error) {
+            err = reason;
+          } else {
+            err = new Error(typeof reason === "string" ? reason : "The operation was aborted");
+            err.name = "AbortError";
+          }
+          abortJob(err);
           reject(err);
         };
         if (signal.aborted) {
@@ -569,14 +589,14 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
       });
 
       try {
-        return await Promise.race([limiter.schedule(scheduleOpts, fn), abortPromise]);
+        return await Promise.race([scheduleJob(), abortPromise]);
       } finally {
         if (abortListener) {
           signal.removeEventListener("abort", abortListener);
         }
       }
     } else {
-      return await limiter.schedule(scheduleOpts, fn);
+      return await scheduleJob();
     }
   } catch (err) {
     // Bottleneck's raw `This job timed out after <maxWaitMs> ms.` is
@@ -598,6 +618,9 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
         { cause: err }
       ) as Error & { code?: string };
       queueErr.code = "RATE_LIMIT_QUEUE_TIMEOUT";
+      // Bottleneck only dropped its handle on the job. Cancel the in-flight
+      // upstream request too, otherwise it keeps burning quota as an orphan.
+      abortJob(queueErr);
       throw queueErr;
     }
     throw err;
