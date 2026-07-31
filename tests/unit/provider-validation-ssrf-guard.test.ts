@@ -28,7 +28,11 @@ for (const url of METADATA_TARGETS) {
         const msg = String((err as Error)?.message ?? err);
         // Must be a guard rejection, not a network timeout/connect error — i.e.
         // the request was refused before any socket was opened.
-        assert.match(msg, /guard|metadata|blocked|not allowed|URL/i, `expected guard block, got: ${msg}`);
+        assert.match(
+          msg,
+          /guard|metadata|blocked|not allowed|URL/i,
+          `expected guard block, got: ${msg}`
+        );
         return true;
       }
     );

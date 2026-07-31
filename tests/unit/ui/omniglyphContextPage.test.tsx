@@ -85,9 +85,8 @@ function setupFetchMock(): { puts: CapturedPut[] } {
 describe("OmniglyphContextPage", () => {
   it("renders the four sections with the measured numbers and the real render", async () => {
     setupFetchMock();
-    const { default: Page } = await import(
-      "../../../src/app/(dashboard)/dashboard/context/omniglyph/OmniglyphContextPageClient"
-    );
+    const { default: Page } =
+      await import("../../../src/app/(dashboard)/dashboard/context/omniglyph/OmniglyphContextPageClient");
     let container!: HTMLElement;
     await act(async () => {
       container = mount(<Page />);
@@ -115,16 +114,17 @@ describe("OmniglyphContextPage", () => {
 
   it("enabling the engine PUTs the full engines map with omniglyph on, preserving the others", async () => {
     const { puts } = setupFetchMock();
-    const { default: Page } = await import(
-      "../../../src/app/(dashboard)/dashboard/context/omniglyph/OmniglyphContextPageClient"
-    );
+    const { default: Page } =
+      await import("../../../src/app/(dashboard)/dashboard/context/omniglyph/OmniglyphContextPageClient");
     let container!: HTMLElement;
     await act(async () => {
       container = mount(<Page />);
     });
     await flush();
 
-    const toggle = container.querySelector('[data-testid="omniglyph-enable-toggle"] button') as HTMLButtonElement | null;
+    const toggle = container.querySelector(
+      '[data-testid="omniglyph-enable-toggle"] button'
+    ) as HTMLButtonElement | null;
     expect(toggle, "enable toggle button must exist").toBeTruthy();
     await act(async () => {
       toggle!.click();

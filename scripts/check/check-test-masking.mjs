@@ -106,9 +106,8 @@ function normalizeWhitespace(s) {
  */
 export function countSignificantTokens(cond) {
   const tokens =
-    (cond || "").match(
-      /===|!==|==|!=|>=|<=|&&|\|\||[<>+\-*/%!]|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?/g
-    ) || [];
+    (cond || "").match(/===|!==|==|!=|>=|<=|&&|\|\||[<>+\-*/%!]|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?/g) ||
+    [];
   let count = 0;
   for (const tk of tokens) {
     if (/^[A-Za-z_$]/.test(tk)) {
@@ -178,8 +177,7 @@ export function extractProdConditions(src) {
   }
 
   // Comparison-bearing ternaries: `<lhs> <cmp> <rhs> ? … : …` (best-effort, low-noise).
-  const ternRe =
-    /([A-Za-z_$][\w$).\]]*\s*(?:===|!==|==|!=|>=|<=|>|<)\s*[^?;{}\n]+?)\s*\?/g;
+  const ternRe = /([A-Za-z_$][\w$).\]]*\s*(?:===|!==|==|!=|>=|<=|>|<)\s*[^?;{}\n]+?)\s*\?/g;
   let t;
   while ((t = ternRe.exec(src))) {
     pushCond(t[1], ownerAt(t.index));
@@ -199,7 +197,10 @@ export function extractImports(src) {
   if (!src) return names;
   const addModule = (mod) => {
     names.add(mod);
-    const base = mod.split("/").pop().replace(/\.\w+$/, "");
+    const base = mod
+      .split("/")
+      .pop()
+      .replace(/\.\w+$/, "");
     if (base) names.add(base);
   };
   let m;
@@ -227,8 +228,7 @@ export function extractImports(src) {
 export function findReimplementedConditions(prodSources, testSource, testImports) {
   const flags = [];
   if (!testSource) return flags;
-  const imports =
-    testImports instanceof Set ? testImports : new Set(testImports || []);
+  const imports = testImports instanceof Set ? testImports : new Set(testImports || []);
   const squash = (s) => (s || "").replace(/\s+/g, "");
   const testSq = squash(testSource);
   const seen = new Set();

@@ -147,8 +147,7 @@ function getAntigravityLocalUsageUnits(
            AND timestamp < ?`
       )
       .get(provider, connectionId, modelId, windowStart, windowEnd) as
-      | { tokens?: unknown }
-      | undefined;
+      { tokens?: unknown } | undefined;
 
     const tokens = Number(row?.tokens || 0);
     if (!Number.isFinite(tokens) || tokens <= 0) return 0;

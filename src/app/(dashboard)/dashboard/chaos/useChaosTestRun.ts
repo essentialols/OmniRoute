@@ -10,7 +10,10 @@ import type { ChaosPageConfig, ChaosPageMessage } from "./chaosPageTypes";
  * of the page component to keep it under the complexity/size ratchet
  * (config/quality/complexity-baseline.json).
  */
-export function useChaosTestRun(config: ChaosPageConfig, setMessage: (message: ChaosPageMessage) => void) {
+export function useChaosTestRun(
+  config: ChaosPageConfig,
+  setMessage: (message: ChaosPageMessage) => void
+) {
   const t = useTranslations("chaosConfig");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ChaosTestResult | null>(null);

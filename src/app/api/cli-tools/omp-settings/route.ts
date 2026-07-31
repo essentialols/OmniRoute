@@ -86,10 +86,7 @@ export async function GET(request: Request) {
       configPath: getOmpModelsYmlPath(),
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: { message: sanitizeErrorMessage(error) } },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: { message: sanitizeErrorMessage(error) } }, { status: 500 });
   }
 }
 
@@ -140,10 +137,7 @@ export async function POST(request: Request) {
       configPath: getOmpModelsYmlPath(),
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: { message: sanitizeErrorMessage(error) } },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: { message: sanitizeErrorMessage(error) } }, { status: 500 });
   }
 }
 
@@ -172,9 +166,6 @@ export async function DELETE(request: Request) {
       message: "OmniRoute removed from Oh My Pi",
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: { message: sanitizeErrorMessage(error) } },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: { message: sanitizeErrorMessage(error) } }, { status: 500 });
   }
 }

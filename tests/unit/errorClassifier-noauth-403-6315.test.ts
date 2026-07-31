@@ -28,5 +28,8 @@ test("control: apikey-provider bare 403 still recoverable (null) — no regressi
 
 test("control: recognized ban phrase on a no-credential provider still terminal (ACCOUNT_DEACTIVATED)", () => {
   const body = "This service has been disabled in this account for violation of policy.";
-  assert.equal(classifyProviderError(403, body, "mimocode"), PROVIDER_ERROR_TYPES.ACCOUNT_DEACTIVATED);
+  assert.equal(
+    classifyProviderError(403, body, "mimocode"),
+    PROVIDER_ERROR_TYPES.ACCOUNT_DEACTIVATED
+  );
 });

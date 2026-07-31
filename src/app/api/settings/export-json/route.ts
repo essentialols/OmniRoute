@@ -75,9 +75,10 @@ export async function GET(request: Request) {
 
     // #6328: honor hidePaidModels at the export boundary so backup files
     // cannot silently smuggle paid model ids back in on import.
-    const combos = rawSettings.hidePaidModels === true
-      ? filterPaidComboSteps(combosRaw as Array<{ models?: unknown }>)
-      : combosRaw;
+    const combos =
+      rawSettings.hidePaidModels === true
+        ? filterPaidComboSteps(combosRaw as Array<{ models?: unknown }>)
+        : combosRaw;
 
     const exportData: Record<string, unknown> = {
       settings: safeSettings,

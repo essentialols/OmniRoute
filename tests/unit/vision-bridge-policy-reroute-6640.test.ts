@@ -21,8 +21,15 @@ import assert from "node:assert/strict";
 import { createChatPipelineHarness } from "../integration/_chatPipelineHarness.ts";
 
 const harness = await createChatPipelineHarness("vision-bridge-policy-reroute-6640");
-const { handleChat, buildRequest, buildOpenAIResponse, resetStorage, seedConnection, seedApiKey, settingsDb } =
-  harness;
+const {
+  handleChat,
+  buildRequest,
+  buildOpenAIResponse,
+  resetStorage,
+  seedConnection,
+  seedApiKey,
+  settingsDb,
+} = harness;
 
 function imageBearingBody(model: string) {
   return {

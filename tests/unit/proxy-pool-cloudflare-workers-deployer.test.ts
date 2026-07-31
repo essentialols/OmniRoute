@@ -66,10 +66,7 @@ test("buildCloudflareWorkerScript rejects requests without a valid x-relay-auth 
   // a 401 short-circuit when x-relay-auth does not match the embedded token.
   // We don't run the worker here — we check the source contains the guard.
   const src = buildCloudflareWorkerScript("the-secret");
-  assert.ok(
-    /x-relay-auth/.test(src),
-    "worker source must reference the x-relay-auth header"
-  );
+  assert.ok(/x-relay-auth/.test(src), "worker source must reference the x-relay-auth header");
   assert.ok(
     /401|Unauthorized/.test(src),
     "worker source must short-circuit unauthorised requests with 401"
@@ -180,10 +177,7 @@ test("proxyConfigToUrl returns the cloudflare worker URL (no HTTP-proxy dispatch
 // --------------------------------------------------------------------------
 
 test("buildVercelRelayHeaders is the shared relay-header builder used for cloudflare too", () => {
-  const headers = buildVercelRelayHeaders(
-    "https://api.openai.com/v1/chat/completions",
-    "cf-tok"
-  );
+  const headers = buildVercelRelayHeaders("https://api.openai.com/v1/chat/completions", "cf-tok");
   assert.deepEqual(headers, {
     "x-relay-target": "https://api.openai.com",
     "x-relay-path": "/v1/chat/completions",

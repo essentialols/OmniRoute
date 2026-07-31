@@ -588,8 +588,7 @@ function extractCodexSseErrorMessage(text: string, fallback: string): string {
       const parsed = JSON.parse(data) as Record<string, unknown>;
       const directError = parsed.error as Record<string, unknown> | undefined;
       const nestedError = (parsed.response as Record<string, unknown> | undefined)?.error as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       const message =
         (typeof directError?.message === "string" && directError.message) ||
         (typeof nestedError?.message === "string" && nestedError.message) ||
@@ -1309,8 +1308,7 @@ export class CodexExecutor extends BaseExecutor {
       // gpt-5.3-codex-spark (and other Spark-scope models) reject image_generation
       // upstream even on paid-plan accounts, so drop it independent of plan (#6651).
       dropImageGeneration:
-        isCodexFreePlan(credentials?.providerSpecificData) ||
-        getCodexModelScope(model) === "spark",
+        isCodexFreePlan(credentials?.providerSpecificData) || getCodexModelScope(model) === "spark",
       preserveCustomTools: nativeCodexPassthrough,
     });
 
@@ -1398,9 +1396,7 @@ export class CodexExecutor extends BaseExecutor {
       applyCodexClientMetadata(
         body,
         credentials?.providerSpecificData?.codexClientIdentity as
-          | CodexClientIdentity
-          | null
-          | undefined
+          CodexClientIdentity | null | undefined
       );
     }
 

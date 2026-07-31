@@ -52,7 +52,10 @@ test("changed e2e test → NOT selected (not a node:test unit file)", () => {
 });
 
 test("changed vitest file in uncurated tests/unit/autoCombo → NOT selected", () => {
-  const sel = selectImpacted({ changed: ["tests/unit/autoCombo/tieredRotation.test.ts"], map: MAP });
+  const sel = selectImpacted({
+    changed: ["tests/unit/autoCombo/tieredRotation.test.ts"],
+    map: MAP,
+  });
   assert.deepEqual(sel, []);
 });
 

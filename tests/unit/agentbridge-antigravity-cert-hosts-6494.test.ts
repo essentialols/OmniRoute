@@ -46,10 +46,7 @@ test("per-host leaf minted for each antigravity host carries a matching SAN", as
     const leaf = await certShim.issueLeafPems(host, ca);
     const cert = new X509Certificate(leaf.cert);
     const san = cert.subjectAltName ?? "";
-    assert.ok(
-      san.includes(host),
-      `expected per-host leaf SAN to include "${host}" - got: ${san}`
-    );
+    assert.ok(san.includes(host), `expected per-host leaf SAN to include "${host}" - got: ${san}`);
     assert.match(cert.subject, new RegExp(`CN=${host.replace(/\./g, "\\.")}`));
   }
 });

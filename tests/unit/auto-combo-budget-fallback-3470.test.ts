@@ -1,10 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  BudgetExceededError,
-  selectProvider,
-} from "../../open-sse/services/autoCombo/engine.ts";
+import { BudgetExceededError, selectProvider } from "../../open-sse/services/autoCombo/engine.ts";
 import {
   parseRequestBudgetFallback,
   resolveRequestAutoControls,
@@ -109,7 +106,11 @@ test("selectProvider still falls back to cheapest when budgetFallback is 'cheape
 });
 
 test("selectProvider defaults to cheapest fallback when budgetFallback is unset (backward compatible)", () => {
-  const result = selectProvider({ ...baseConfig, budgetCap: 0.001 }, overBudgetCandidates, "default");
+  const result = selectProvider(
+    { ...baseConfig, budgetCap: 0.001 },
+    overBudgetCandidates,
+    "default"
+  );
   assert.equal(result.provider, "cheap");
 });
 

@@ -384,9 +384,7 @@ export async function getKiroUsage(accessToken?: string, providerSpecificData?: 
     // HTTP-status failure (most informative) over a network-level error.
     throw new Error(
       outcome.lastHttpFailure ||
-        (errors.length > 0
-          ? errors[errors.length - 1]
-          : "no usage endpoint responded")
+        (errors.length > 0 ? errors[errors.length - 1] : "no usage endpoint responded")
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

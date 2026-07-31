@@ -569,9 +569,7 @@ export class DefaultExecutor extends BaseExecutor {
       withDefaults &&
       typeof withDefaults === "object" &&
       !Array.isArray(withDefaults) &&
-      (this.provider === "cerebras" ||
-        this.provider === "mistral" ||
-        this.provider === "nvidia") &&
+      (this.provider === "cerebras" || this.provider === "mistral" || this.provider === "nvidia") &&
       Object.prototype.hasOwnProperty.call(withDefaults, "client_metadata")
     ) {
       const withoutClientMetadata = { ...(withDefaults as Record<string, unknown>) };
