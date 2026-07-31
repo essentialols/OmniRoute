@@ -315,14 +315,13 @@ function hydrateQuotaCacheFromSnapshots(connectionId: string): QuotaCacheEntry |
   const quotas: Record<string, QuotaInfo> = {};
   let provider = "";
   let fetchedAt = 0;
-  let exhausted = false;
   let windowDurationMs: number | null = null;
+  const now = Date.now();
 
   for (const snapshot of snapshots) {
     const camelSnapshot = snapshot as unknown as {
       windowKey?: string;
       remainingPercentage?: number | null;
-      isExhausted?: number;
       nextResetAt?: string | null;
       windowDurationMs?: number | null;
       createdAt?: string;
@@ -330,24 +329,45 @@ function hydrateQuotaCacheFromSnapshots(connectionId: string): QuotaCacheEntry |
     const windowKey = camelSnapshot.windowKey ?? snapshot.window_key;
     if (!windowKey) continue;
     provider = provider || snapshot.provider || "";
-    quotas[windowKey] = {
-      remainingPercentage: clampPercent(
-        Number(camelSnapshot.remainingPercentage ?? snapshot.remaining_percentage ?? 0)
-      ),
-      resetAt: camelSnapshot.nextResetAt ?? snapshot.next_reset_at ?? null,
-    };
-    exhausted = exhausted || (camelSnapshot.isExhausted ?? snapshot.is_exhausted) === 1;
+    const remainingPercentage = clampPercent(
+      Number(camelSnapshot.remainingPercentage ?? snapshot.remaining_percentage ?? 0)
+    );
+    const resetAt = camelSnapshot.nextResetAt ?? snapshot.next_reset_at ?? null;
+    const createdAtVal = camelSnapshot.createdAt ?? snapshot.created_at;
+    const createdAtMs = createdAtVal ? parseDate(createdAtVal) : null;
+
+    // Drop stale, unverifiable exhaustion claims.
+    // `isAccountQuotaExhausted` only trusts an exhausted entry with no reset time for
+    // EXHAUSTED_TTL_MS; apply the same rule per window here. `saveQuotaSnapshot` only
+    // writes on change (#4438), so a window the provider STOPPED reporting (a retired
+    // model id) keeps its last row forever and would otherwise be resurrected as
+    // current quota state on every restart.
+    const staleExhaustionClaim =
+      remainingPercentage <= 0 &&
+      !resetAt &&
+      createdAtMs !== null &&
+      now - createdAtMs > EXHAUSTED_TTL_MS;
+    if (staleExhaustionClaim) continue;
+
+    quotas[windowKey] = { remainingPercentage, resetAt };
     const snapshotWindowDurationMs =
       camelSnapshot.windowDurationMs ?? snapshot.window_duration_ms ?? null;
     if (snapshotWindowDurationMs && snapshotWindowDurationMs > 0) {
       windowDurationMs = snapshotWindowDurationMs;
     }
-    const createdAtVal = camelSnapshot.createdAt ?? snapshot.created_at;
-    const createdAtMs = createdAtVal ? parseDate(createdAtVal) : null;
     if (createdAtMs !== null) fetchedAt = Math.max(fetchedAt, createdAtMs);
   }
 
   if (Object.keys(quotas).length === 0) return null;
+
+  // Connection-level exhaustion must mean the same thing whether the state
+  // came from a live fetch (`setQuotaCache` -> `isExhausted`: EVERY window at 0%) or
+  // from persisted snapshots. Reducing the per-window `is_exhausted` flags (#5923)
+  // with OR made ONE exhausted window block every model on the connection, and the
+  // borrowed `nextResetAt` below (earliest reset across ALL windows, including
+  // healthy ones) then kept both escape hatches in `isAccountQuotaExhausted` — the
+  // TTL expiry and the auto-advance — from ever clearing it.
+  const exhausted = isExhausted(quotas);
 
   const entry: QuotaCacheEntry = {
     connectionId,
