@@ -5,6 +5,18 @@ const { claudeToGeminiRequest } =
   await import("../../open-sse/translator/request/claude-to-gemini.ts");
 const { DEFAULT_SAFETY_SETTINGS } =
   await import("../../open-sse/translator/helpers/geminiHelper.ts");
+const { buildGeminiThoughtSignatureKey, storeGeminiThoughtSignature } =
+  await import("../../open-sse/services/geminiThoughtSignatureStore.ts");
+
+function seedSignature(namespace: string, toolCallId: string, signature: string) {
+  storeGeminiThoughtSignature(buildGeminiThoughtSignatureKey(namespace, toolCallId), signature);
+}
+
+function flattenParts(contents: unknown): Record<string, unknown>[] {
+  return (contents as Array<{ parts: Record<string, unknown>[] }>).flatMap(
+    (content) => content.parts
+  );
+}
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -34,6 +46,8 @@ function getFunctionResponse(part: unknown) {
 }
 
 test("Claude -> Gemini maps system, thinking, tool use, tool result and tools", () => {
+  const ns = "conn-map-basics";
+  seedSignature(ns, "tu_1", "SIG_MAP_BASICS");
   const result = claudeToGeminiRequest(
     "gemini-2.5-pro",
     {
@@ -72,7 +86,8 @@ test("Claude -> Gemini maps system, thinking, tool use, tool result and tools", 
       top_p: 0.8,
       thinking: { type: "enabled", budget_tokens: 512 },
     },
-    false
+    false,
+    { _signatureNamespace: ns }
   );
 
   assert.deepEqual(result.systemInstruction, {
@@ -82,6 +97,7 @@ test("Claude -> Gemini maps system, thinking, tool use, tool result and tools", 
   assert.equal(result.contents[0].role, "model");
   assert.deepEqual(result.contents[0].parts[0] as any, { thought: true, text: "need tool" });
   assert.deepEqual(result.contents[0].parts[1] as any, {
+    thoughtSignature: "SIG_MAP_BASICS",
     functionCall: { id: "tu_1", name: "weather", args: { city: "Tokyo" } },
   });
   assert.deepEqual(result.contents[1].parts[0] as any, {
@@ -162,29 +178,142 @@ test("Claude -> Gemini converts text and base64 images to Gemini parts", () => {
   ]);
 });
 
-test("Claude -> Gemini injects a fallback thoughtSignature on tool-call batches without thinking", () => {
+test("Claude -> Gemini never invents a thoughtSignature for an unsigned tool call", () => {
   const result = claudeToGeminiRequest(
     "gemini-2.5-flash",
     {
       messages: [
         {
           role: "assistant",
-          content: [{ type: "tool_use", id: "tu_1", name: "read_file", input: {} }],
+          content: [{ type: "tool_use", id: "tu_unsigned_1", name: "read_file", input: {} }],
         },
       ],
     },
     false
   );
 
-  assert.equal(result.contents.length, 1);
-  assert.equal(result.contents[0].role, "model");
-  assert.equal((result.contents[0].parts[0] as any).functionCall.name, "read_file");
-  assert.equal((result.contents[0].parts[0] as any).thoughtSignature, undefined);
+  for (const part of flattenParts(result.contents)) {
+    assert.equal(part.thoughtSignature, undefined);
+  }
+});
+
+// Regression for the 400 "Function call is missing a thought_signature in functionCall
+// parts ... position N" that Claude Code focused-agents hit on the direct Claude ->
+// Gemini path. A thinking-tier target must never receive an unsigned historical
+// functionCall; the call is dropped and its result is carried as inert context (#3688).
+test("Claude -> Gemini contextualizes unsigned historical tool calls on thinking models", () => {
+  const result = claudeToGeminiRequest(
+    "gemini-3.5-flash",
+    {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "list the files" }] },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tu_ctx_1", name: "Bash", input: { command: "ls" } }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tu_ctx_1",
+              content: [{ type: "text", text: "a\nb" }],
+            },
+          ],
+        },
+      ],
+    },
+    false,
+    { _signatureNamespace: "conn-ctx-unsigned" }
+  );
+
+  const allParts = flattenParts(result.contents);
+  assert.equal(
+    allParts.some((part) => part.functionCall !== undefined),
+    false,
+    "unsigned historical functionCall must not reach a thinking Gemini model"
+  );
+  assert.equal(
+    allParts.some((part) => part.functionResponse !== undefined),
+    false,
+    "an orphaned functionResponse must not reach a thinking Gemini model"
+  );
+  assert.equal(
+    allParts.some(
+      (part) => typeof part.text === "string" && part.text.includes("previous_tool_result_context")
+    ),
+    true,
+    "the tool result must survive as inert context"
+  );
+  // Dropping the model turn must not leave two adjacent user turns (Gemini 400
+  // "Request contains consecutive messages with the same role").
+  for (let i = 1; i < result.contents.length; i++) {
+    assert.notEqual(result.contents[i].role, result.contents[i - 1].role);
+  }
+});
+
+test("Claude -> Gemini re-attaches a cached thoughtSignature across six sequential tool calls", () => {
+  const ns = "conn-six-turns";
+  const messages: UnknownRecord[] = [{ role: "user", content: [{ type: "text", text: "go" }] }];
+
+  for (let turn = 1; turn <= 6; turn++) {
+    const toolId = `tu_seq_${turn}`;
+    seedSignature(ns, toolId, `SIG_SEQ_${turn}`);
+    messages.push({
+      role: "assistant",
+      content: [{ type: "tool_use", id: toolId, name: "Bash", input: { command: `echo ${turn}` } }],
+    });
+    messages.push({
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: toolId, content: [{ type: "text", text: `${turn}` }] },
+      ],
+    });
+  }
+
+  const result = claudeToGeminiRequest("gemini-3.5-flash", { messages }, false, {
+    _signatureNamespace: ns,
+  });
+
+  const allParts = flattenParts(result.contents);
+  const functionCallParts = allParts.filter((part) => part.functionCall !== undefined);
+  assert.equal(functionCallParts.length, 6);
+  for (let turn = 1; turn <= 6; turn++) {
+    assert.equal(functionCallParts[turn - 1].thoughtSignature, `SIG_SEQ_${turn}`);
+  }
+  assert.equal(allParts.filter((part) => part.functionResponse !== undefined).length, 6);
+});
+
+test("Claude -> Gemini keeps native tool history for non-thinking targets", () => {
+  const result = claudeToGeminiRequest(
+    "gemini-2.0-flash",
+    {
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tu_plain_1", name: "read_file", input: {} }],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tu_plain_1", content: "ok" }],
+        },
+      ],
+    },
+    false
+  );
+
+  assert.equal(result.contents.length, 2);
+  const modelParts = flattenParts([result.contents[0]]);
+  assert.equal(getFunctionCall(modelParts[0]).name, "read_file");
+  assert.equal(modelParts[0].thoughtSignature, undefined);
+  assert.equal(getFunctionResponse(flattenParts([result.contents[1]])[0]).name, "read_file");
 });
 
 test("Claude -> Gemini sanitizes long tool names and exposes a restore map", () => {
   const longToolName =
     "mcp__filesystem__read_multiple_files_with_validation_and_metadata_bundle_v2";
+  const ns = "conn-long-tool-names";
+  seedSignature(ns, "tu_long_1", "SIG_LONG_TOOL_NAME");
   const result = claudeToGeminiRequest(
     "gemini-2.5-pro",
     {
@@ -214,7 +343,8 @@ test("Claude -> Gemini sanitizes long tool names and exposes a restore map", () 
         },
       ],
     },
-    false
+    false,
+    { _signatureNamespace: ns }
   );
 
   const sanitizedToolName = (result as any).tools[0].functionDeclarations[0].name as string;

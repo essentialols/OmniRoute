@@ -228,11 +228,19 @@ export function translateRequest(
     if (directTranslator && sourceFormat !== FORMATS.OPENAI && targetFormat !== FORMATS.OPENAI) {
       // Thread the routed provider id so target translators can apply provider-specific
       // quirks (e.g. Vertex rejects function_call.id — #3440).
+      // Also thread the signature namespace: the direct Claude -> Gemini path needs the
+      // same `<connectionId>:<toolCallId>` cache key the hub path uses to re-attach a
+      // thinking model's thoughtSignature on follow-up turns (#2504). Without it a
+      // native Claude client (Claude Code) hitting a Gemini target sent unsigned
+      // historical functionCall parts and Gemini returned 400 "missing a
+      // thought_signature ... position N".
+      const hasDirectNs = options?.signatureNamespace != null;
       const directCredentials =
-        provider != null
+        provider != null || hasDirectNs
           ? {
               ...(credentials && typeof credentials === "object" ? credentials : {}),
-              _provider: provider,
+              ...(provider != null ? { _provider: provider } : {}),
+              ...(hasDirectNs ? { _signatureNamespace: options.signatureNamespace } : {}),
             }
           : credentials;
       result = directTranslator(model, result, stream, directCredentials);

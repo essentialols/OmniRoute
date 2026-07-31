@@ -8,6 +8,15 @@ import {
 import { DEFAULT_THINKING_GEMINI_SIGNATURE } from "../../config/defaultThinkingSignature.ts";
 import { buildGeminiTools, sanitizeGeminiToolName } from "../helpers/geminiToolsSanitizer.ts";
 import { capMaxOutputTokens, capThinkingBudget } from "../../../src/lib/modelCapabilities.ts";
+import {
+  buildGeminiThoughtSignatureKey,
+  resolveGeminiThoughtSignature,
+} from "../../services/geminiThoughtSignatureStore.ts";
+import {
+  buildHistoricalToolResultContext,
+  extractClientThoughtSignature,
+} from "./openai-to-gemini/helpers.ts";
+import { mergeConsecutiveSameRoleContents } from "./openai-to-gemini.ts";
 
 /**
  * Direct Claude → Gemini request translator.
@@ -25,6 +34,17 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
   // is scoped to the routed vertex provider only (threaded via credentials._provider).
   const provider = credentials && typeof credentials === "object" ? credentials._provider : null;
   const stripFunctionCallId = provider === "vertex" || provider === "vertex-partner";
+  // Only thinking-tier Gemini models validate thought_signature on historical
+  // functionCall parts. Same heuristic openaiToAntigravityRequest uses
+  // (openai-to-gemini.ts), so non-thinking targets keep their native tool history
+  // instead of being flattened into context text they never needed.
+  const modelLower = String(model || "").toLowerCase();
+  const isThinkingGemini =
+    !modelLower.includes("claude") &&
+    (modelLower.includes("thinking") ||
+      modelLower.includes("gemini-3") ||
+      modelLower.includes("gemini-2.5") ||
+      modelLower.includes("gemini-pro"));
   const result: {
     model: string;
     contents: Array<Record<string, unknown>>;
@@ -78,13 +98,36 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
   }
 
   // ── Build tool_use name lookup (for tool_result matching) ──────
+  // Also resolve the cached thoughtSignature for every historical tool_use id.
+  // Gemini 3+ thinking models reject a functionCall part that carries no
+  // thought_signature (400 "Function call is missing a thought_signature ...
+  // position N"). The signature is captured on the response turn by
+  // gemini-to-claude.ts under `<connectionId>:<toolCallId>` and re-attached here
+  // (#2504). Tool calls we cannot sign are represented as inert context instead of
+  // being sent unsigned, the same context-mode fallback the hub path uses (#3688).
+  const signatureNamespace =
+    credentials &&
+    typeof credentials === "object" &&
+    typeof credentials._signatureNamespace === "string"
+      ? credentials._signatureNamespace
+      : null;
   const toolUseNames = {};
+  const rawToolUseNames: Record<string, string> = {};
+  const resolvedSignatures = new Map<string, string>();
   if (body.messages && Array.isArray(body.messages)) {
     for (const msg of body.messages) {
       if (msg.role === "assistant" && Array.isArray(msg.content)) {
         for (const block of msg.content) {
           if (block.type === "tool_use" && block.id && block.name) {
             toolUseNames[block.id] = sanitizeToolName(block.name);
+            rawToolUseNames[block.id] = block.name;
+            const resolved = resolveGeminiThoughtSignature(
+              buildGeminiThoughtSignatureKey(signatureNamespace, block.id),
+              extractClientThoughtSignature(block)
+            );
+            if (typeof resolved === "string" && resolved.length > 0) {
+              resolvedSignatures.set(block.id, resolved);
+            }
           }
         }
       }
@@ -95,6 +138,20 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
   if (body.messages && Array.isArray(body.messages)) {
     for (const msg of body.messages) {
       const parts = [];
+
+      // Gemini wants the signature on the FIRST functionCall part of a model turn
+      // only; repeating it across a parallel tool-call batch is rejected (#1316).
+      // Pick the first resolvable signature in this turn and spend it once.
+      let turnSignature: string | undefined;
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block.type === "tool_use" && block.id && resolvedSignatures.has(block.id)) {
+            turnSignature = resolvedSignatures.get(block.id);
+            break;
+          }
+        }
+      }
+      let turnSignatureUnspent = turnSignature !== undefined;
 
       if (Array.isArray(msg.content)) {
         for (const block of msg.content) {
@@ -110,8 +167,19 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
               }
               break;
 
-            case "tool_use":
+            case "tool_use": {
+              if (isThinkingGemini && !resolvedSignatures.has(block.id)) {
+                // Context-mode fallback (#3688): standard Gemini rejects an unsigned
+                // historical functionCall part, so omit it here. The paired
+                // tool_result is emitted as inert context in the branch below, which
+                // keeps the transcript readable without a pseudo tool-call record the
+                // model can echo back as its visible answer.
+                break;
+              }
+              const partSignature = turnSignatureUnspent ? turnSignature : undefined;
+              if (partSignature) turnSignatureUnspent = false;
               parts.push({
+                ...(partSignature ? { thoughtSignature: partSignature } : {}),
                 functionCall: {
                   ...(stripFunctionCallId ? {} : { id: block.id }),
                   name: sanitizeToolName(block.name),
@@ -119,6 +187,7 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
                 },
               });
               break;
+            }
 
             case "tool_result": {
               let content = block.content;
@@ -126,6 +195,18 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
                 content = content
                   .map((c) => (c.type === "text" ? c.text : JSON.stringify(c)))
                   .join("\n");
+              }
+              if (isThinkingGemini && !resolvedSignatures.has(block.tool_use_id)) {
+                // The matching functionCall was omitted above, so a native
+                // functionResponse here would be an orphan. Emit the result as
+                // inert context text instead (#3688).
+                parts.push({
+                  text: buildHistoricalToolResultContext(
+                    rawToolUseNames[block.tool_use_id] || "unknown",
+                    content
+                  ),
+                });
+                break;
               }
               let parsedContent = tryParseJSON(content);
               if (parsedContent === null) {
@@ -164,16 +245,20 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
         // Map Claude roles to Gemini roles
         const geminiRole = msg.role === "assistant" ? "model" : "user";
 
-        // Gemini 3+ expects the signature on all functionCall parts in a tool-call
-        // batch. If there is no real signature, we don't inject a fake one because
-        // Gemini API strictly validates it and returns 400.
-        if (geminiRole === "model") {
-          // No operation needed since we no longer inject fake signatures.
-        }
-
+        // Gemini 3+ expects the signature on the functionCall part itself. It is
+        // attached above from the signature cache; a fake one is never injected
+        // because the Gemini API validates it strictly and returns 400.
         result.contents.push({ role: geminiRole, parts });
       }
     }
+
+    // A model turn whose only content was unsigned tool_use blocks is dropped by the
+    // context-mode fallback above, which can leave two adjacent user turns. Gemini
+    // rejects consecutive same-role contents with 400 INVALID_ARGUMENT, so apply the
+    // same merge the hub path already does.
+    result.contents = mergeConsecutiveSameRoleContents(
+      result.contents as Parameters<typeof mergeConsecutiveSameRoleContents>[0]
+    ) as typeof result.contents;
   }
 
   // ── Convert tools ──────────────────────────────────────────────

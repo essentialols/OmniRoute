@@ -1,6 +1,10 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { isAbortFinishReason } from "../../utils/finishReason.ts";
+import {
+  buildGeminiThoughtSignatureKey,
+  storeGeminiThoughtSignature,
+} from "../../services/geminiThoughtSignatureStore.ts";
 
 /**
  * Direct Gemini → Claude response translator.
@@ -51,6 +55,16 @@ export function geminiToClaudeResponse(chunk, state) {
       const hasThoughtSig = part.thoughtSignature || part.thought_signature;
       const isThought = part.thought === true;
 
+      // Gemini can emit the thoughtSignature either on the functionCall part itself
+      // or as a standalone part immediately before it. Keep the latest one pending so
+      // the following functionCall can be cached under `<connectionId>:<toolCallId>`
+      // and re-attached on the next turn (#2504). The Claude wire format has nowhere
+      // to carry it, so without this cache the follow-up request sends an unsigned
+      // functionCall and Gemini answers 400 "missing a thought_signature".
+      if (typeof hasThoughtSig === "string" && hasThoughtSig) {
+        state.pendingThoughtSignature = hasThoughtSig;
+      }
+
       // Thinking content → thinking block (always open+close per chunk)
       if (isThought && part.text) {
         // Close any open text block first
@@ -85,6 +99,18 @@ export function geminiToClaudeResponse(chunk, state) {
         const restoredToolName = state.toolNameMap?.get(rawToolName) || rawToolName;
         const idx = state.contentBlockIndex++;
         const toolId = fc.id || `toolu_${Date.now()}_${idx}`;
+
+        const signature =
+          (typeof part.thoughtSignature === "string" && part.thoughtSignature) ||
+          (typeof part.thought_signature === "string" && part.thought_signature) ||
+          state.pendingThoughtSignature;
+        if (typeof signature === "string" && signature) {
+          storeGeminiThoughtSignature(
+            buildGeminiThoughtSignatureKey(state.signatureNamespace, toolId),
+            signature
+          );
+          state.pendingThoughtSignature = null;
+        }
 
         results.push({
           type: "content_block_start",
