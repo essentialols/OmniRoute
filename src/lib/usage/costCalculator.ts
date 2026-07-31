@@ -237,7 +237,10 @@ export function computeAudioCost(
   }
   const characters = toNumber(usage.characters, 0);
   if (characters > 0) {
-    const perChar = toNumber(pricing.input_cost_per_character ?? pricing.output_cost_per_character, 0);
+    const perChar = toNumber(
+      pricing.input_cost_per_character ?? pricing.output_cost_per_character,
+      0
+    );
     // Round to 10 decimals to drop binary-FP artifacts (e.g. 0.000015 * 1000).
     if (perChar > 0) return Math.round(perChar * characters * 1e10) / 1e10;
   }

@@ -9,9 +9,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { errorResponseWithComboDiagnostics, sanitizeComboDiagnostics } = await import(
-  "../../open-sse/utils/error.ts"
-);
+const { errorResponseWithComboDiagnostics, sanitizeComboDiagnostics } =
+  await import("../../open-sse/utils/error.ts");
 
 test("combo diagnostics: headers + body carry the sanitized trace (code override preserved)", async () => {
   const res = errorResponseWithComboDiagnostics(

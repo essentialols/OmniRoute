@@ -11,9 +11,7 @@ import assert from "node:assert/strict";
  * paths (path assertion mirrors the URL the handler sees post-rewrite).
  */
 
-const catchAll = await import(
-  "../../../src/app/api/[...omnirouteApiCatchAll]/route.ts"
-);
+const catchAll = await import("../../../src/app/api/[...omnirouteApiCatchAll]/route.ts");
 
 function makeReq(pathname: string, method = "GET"): Request {
   return new Request(`http://localhost:20128${pathname}`, { method });
@@ -56,7 +54,7 @@ test("api catchall returns JSON 404 for rewritten /debug and /.env", async () =>
     assert.equal(res.status, 404, `${p} status`);
     assert.ok(
       (res.headers.get("content-type") || "").includes("application/json"),
-      `${p} content-type`,
+      `${p} content-type`
     );
     const body = (await res.json()) as { error: { type: string } };
     assert.equal(body.error.type, "not_found", `${p} error.type`);
@@ -77,6 +75,6 @@ test("api catchall OPTIONS preflight exposes CORS headers for rewritten paths", 
   const res = await catchAll.OPTIONS();
   assert.ok(
     res.headers.get("access-control-allow-methods"),
-    "OPTIONS must expose CORS methods header",
+    "OPTIONS must expose CORS methods header"
   );
 });

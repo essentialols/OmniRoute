@@ -29,9 +29,7 @@ function isAnthropicPngImageBlock(value: unknown): value is AnthropicImageBlock 
   const source = block.source as Record<string, unknown> | undefined;
   if (!source || typeof source !== "object") return false;
   return (
-    source.type === "base64" &&
-    source.media_type === "image/png" &&
-    typeof source.data === "string"
+    source.type === "base64" && source.media_type === "image/png" && typeof source.data === "string"
   );
 }
 

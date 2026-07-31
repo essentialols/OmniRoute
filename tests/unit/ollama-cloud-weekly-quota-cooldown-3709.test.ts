@@ -21,11 +21,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 const { checkFallbackError } = await import("../../open-sse/services/accountFallback.ts");
-const { isWeeklyUsageLimitText, buildWeeklyQuotaFallback } = await import(
-  "../../open-sse/services/quotaTextCooldowns.ts"
-);
+const { isWeeklyUsageLimitText, buildWeeklyQuotaFallback } =
+  await import("../../open-sse/services/quotaTextCooldowns.ts");
 const { RateLimitReason, BACKOFF_CONFIG } = await import("../../open-sse/config/constants.ts");
-const { BACKOFF_CONFIG: ERROR_BACKOFF_CONFIG } = await import("../../open-sse/config/errorConfig.ts");
+const { BACKOFF_CONFIG: ERROR_BACKOFF_CONFIG } =
+  await import("../../open-sse/config/errorConfig.ts");
 
 const WEEKLY_BODY = "you (acme-corp) have reached your weekly usage limit";
 

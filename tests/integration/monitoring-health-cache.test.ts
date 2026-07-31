@@ -54,7 +54,7 @@ test("DELETE (circuit-breaker reset) invalidates the cache immediately", async (
     new Request("http://localhost/api/monitoring/health", {
       method: "DELETE",
       headers: { cookie: `auth_token=${authToken}` },
-    }),
+    })
   );
   assert.ok(delRes.status < 400, `DELETE should succeed, got ${delRes.status}`);
   await new Promise((r) => setTimeout(r, 5)); // ensure the clock advances past ms precision

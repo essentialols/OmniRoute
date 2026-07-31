@@ -58,7 +58,12 @@ const STRIP_RULES: StripRule[] = [
   // MoonshotAI/kimi-cli#1124), and by upstream decolua/9router#2460. Scoped to
   // OmniRoute's actual volcengine Kimi id (not a broad /kimi/i regex) so it
   // never clamps an unrelated future Kimi listing whose Ark cap may differ.
-  { provider: "volcengine", match: /^kimi-k2-5-260127$/, maxOutputCap: 32768, clampToModelMaxOutput: true },
+  {
+    provider: "volcengine",
+    match: /^kimi-k2-5-260127$/,
+    maxOutputCap: 32768,
+    clampToModelMaxOutput: true,
+  },
 ];
 
 function matches(rule: StripRule, model: string): boolean {

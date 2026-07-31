@@ -23,13 +23,17 @@ function okResponse(content: string, delayMs = 0): Promise<Response> {
   const body = JSON.stringify({ choices: [{ message: { role: "assistant", content } }] });
   const make = () =>
     new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
-  return delayMs > 0 ? new Promise((r) => setTimeout(() => r(make()), delayMs)) : Promise.resolve(make());
+  return delayMs > 0
+    ? new Promise((r) => setTimeout(() => r(make()), delayMs))
+    : Promise.resolve(make());
 }
 function errResponse(status: number, delayMs = 0): Promise<Response> {
   const body = JSON.stringify({ error: { message: "boom" } });
   const make = () =>
     new Response(body, { status, headers: { "Content-Type": "application/json" } });
-  return delayMs > 0 ? new Promise((r) => setTimeout(() => r(make()), delayMs)) : Promise.resolve(make());
+  return delayMs > 0
+    ? new Promise((r) => setTimeout(() => r(make()), delayMs))
+    : Promise.resolve(make());
 }
 
 test("fusion #6454: minPanel=1 lets the grace-timer fire on the FIRST success (no unbounded wait for a 2nd)", async () => {
@@ -61,9 +65,9 @@ test("fusion #6454: minPanel=1 lets the grace-timer fire on the FIRST success (n
 
 test("fusion #6454: total panel failure 503 surfaces per-member reason (status codes visible)", async () => {
   const handleSingleModel = async (_b: Body, m: string) => {
-    if (m === "p/a") return (await errResponse(429));
-    if (m === "p/b") return (await errResponse(503));
-    return (await errResponse(500));
+    if (m === "p/a") return await errResponse(429);
+    if (m === "p/b") return await errResponse(503);
+    return await errResponse(500);
   };
   const res = await handleFusionChat({
     body: { messages: [{ role: "user", content: "Q" }] },

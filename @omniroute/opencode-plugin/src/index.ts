@@ -236,9 +236,7 @@ function trimLeadingDashes(value: string): string {
  * applying defaults. Centralises the providerId fallback so every hook
  * sees a consistent identifier.
  */
-export function resolveOmniRoutePluginOptions(
-  opts?: OmniRoutePluginOptions
-): Required<
+export function resolveOmniRoutePluginOptions(opts?: OmniRoutePluginOptions): Required<
   Pick<OmniRoutePluginOptions, "providerId" | "displayName" | "modelCacheTtl">
 > & {
   /**
@@ -292,7 +290,9 @@ export function resolveOmniRoutePluginOptions(
  * idempotent-prefix handling above.
  */
 function trimLeadingOpencodePrefix(rawProviderId: string): string {
-  return rawProviderId.startsWith("opencode-") ? rawProviderId.slice("opencode-".length) : rawProviderId;
+  return rawProviderId.startsWith("opencode-")
+    ? rawProviderId.slice("opencode-".length)
+    : rawProviderId;
 }
 
 /**

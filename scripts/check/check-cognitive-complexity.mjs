@@ -5,10 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  countCognitiveViolations,
-  getComplexityEslintReport,
-} from "./complexityEslintReport.mjs";
+import { countCognitiveViolations, getComplexityEslintReport } from "./complexityEslintReport.mjs";
 
 // Re-export for existing unit tests.
 export { countCognitiveViolations };

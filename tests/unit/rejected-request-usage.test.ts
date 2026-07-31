@@ -24,7 +24,8 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 const core = await import("../../src/lib/db/core.ts");
 const usageHistory = await import("../../src/lib/usage/usageHistory.ts");
 const callLogs = await import("../../src/lib/usage/callLogs.ts");
-const { recordRejectedRequestUsage } = await import("../../src/sse/handlers/rejectedRequestUsage.ts");
+const { recordRejectedRequestUsage } =
+  await import("../../src/sse/handlers/rejectedRequestUsage.ts");
 
 test.beforeEach(() => {
   core.resetDbInstance();
@@ -53,13 +54,17 @@ test("gate-rejected request is attributed to the api key in usage_history", asyn
 
   // usage_history row exists, attributed to the key, marked as a failure.
   const rows = (await usageHistory.getUsageDb()).data.history;
-  const keyRows = rows.filter((r: { apiKeyId?: string | null }) => r.apiKeyId === "key-opencode-mac");
+  const keyRows = rows.filter(
+    (r: { apiKeyId?: string | null }) => r.apiKeyId === "key-opencode-mac"
+  );
   assert.equal(keyRows.length, 1, "expected one usage_history row for the rejected request");
   assert.equal(keyRows[0].success, false, "rejected request must be recorded as success:false");
 
   // call_logs visibility is preserved (dashboard/logs).
   const logs = await callLogs.getCallLogs({});
-  const rejected = (logs.logs ?? logs).filter?.((l: { apiKeyName?: string | null }) => l.apiKeyName === "opencode-mac");
+  const rejected = (logs.logs ?? logs).filter?.(
+    (l: { apiKeyName?: string | null }) => l.apiKeyName === "opencode-mac"
+  );
   assert.ok(rejected && rejected.length >= 1, "expected a call_logs row for the rejected request");
 });
 
@@ -78,7 +83,9 @@ test("combo-exhausted rejection is also counted per api key", async () => {
   });
 
   const rows = (await usageHistory.getUsageDb()).data.history;
-  const keyRows = rows.filter((r: { apiKeyId?: string | null }) => r.apiKeyId === "key-opencode-mac");
+  const keyRows = rows.filter(
+    (r: { apiKeyId?: string | null }) => r.apiKeyId === "key-opencode-mac"
+  );
   assert.equal(keyRows.length, 1);
   assert.equal(keyRows[0].success, false);
 });

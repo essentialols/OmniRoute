@@ -18,10 +18,7 @@ import {
 } from "@/shared/constants/providers";
 import { filterModelsByQuery, pickDefaultModel, resolveModelFilterKey } from "./modelSelection";
 import ReasoningControls from "./ReasoningControls";
-import {
-  resolveReasoningControls,
-  type ReasoningControlSpec,
-} from "./reasoningControlUtils";
+import { resolveReasoningControls, type ReasoningControlSpec } from "./reasoningControlUtils";
 
 export interface ConfigState {
   endpoint: PlaygroundEndpoint;
@@ -93,8 +90,11 @@ export default function StudioConfigPane({ configState, setConfigState }: Studio
     selectedProviderOption?.modelPrefix,
     isCompatibleConnectionId
   );
-  const { availableModels, modelCapabilities, loading: loadingModels } =
-    useAvailableModels(modelFilterKey);
+  const {
+    availableModels,
+    modelCapabilities,
+    loading: loadingModels,
+  } = useAvailableModels(modelFilterKey);
 
   // #4086: filter the dropdown by the search query, but always keep the currently selected
   // model in the list even when it doesn't match — otherwise typing a query would silently

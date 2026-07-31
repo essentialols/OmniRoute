@@ -217,7 +217,9 @@ test("addDNSEntries: entry passed as stdin data, not shell-interpolated", () => 
     "entry content must be built from missingEntries for stdin, not interpolated in args"
   );
   assert.ok(
-    src.includes('execFileWithPassword("sudo", ["-S", "tee", "-a", HOSTS_FILE], sudoPassword, data)'),
+    src.includes(
+      'execFileWithPassword("sudo", ["-S", "tee", "-a", HOSTS_FILE], sudoPassword, data)'
+    ),
     "entry data must be passed as stdin to tee, not interpolated in args"
   );
 });

@@ -31,7 +31,10 @@ export default function RequestCountDateFilter({
           className="px-2 py-1 rounded-md text-xs bg-black/[0.03] dark:bg-white/[0.03] border border-black/5 dark:border-white/5"
         />
         {value && (
-          <button onClick={() => onChange("")} className="text-xs text-text-muted hover:text-text-main">
+          <button
+            onClick={() => onChange("")}
+            className="text-xs text-text-muted hover:text-text-main"
+          >
             <span className="material-symbols-outlined text-[14px]">close</span>
           </button>
         )}

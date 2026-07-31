@@ -61,7 +61,11 @@ export async function fetchAntigravityUserQuotaSummaryCached(
 
   const cacheKey = buildCacheKey(accessToken, projectId);
   const cached = _weeklyQuotaCache.get(cacheKey);
-  if (!options.forceRefresh && cached && Date.now() - cached.fetchedAt < WEEKLY_QUOTA_CACHE_TTL_MS) {
+  if (
+    !options.forceRefresh &&
+    cached &&
+    Date.now() - cached.fetchedAt < WEEKLY_QUOTA_CACHE_TTL_MS
+  ) {
     return cached.data;
   }
 

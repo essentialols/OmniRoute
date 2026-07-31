@@ -37,7 +37,9 @@ const {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-function makeTarget(connectionId: string): import("../../open-sse/services/combo/types.ts").ResolvedComboTarget {
+function makeTarget(
+  connectionId: string
+): import("../../open-sse/services/combo/types.ts").ResolvedComboTarget {
   return {
     kind: "model",
     stepId: `step-${connectionId}`,

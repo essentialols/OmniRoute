@@ -3,10 +3,7 @@
 // leaks a system-prompt injection into a plain connection test.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  buildInternalChatRequest,
-  buildInternalRerankRequest,
-} from "@/lib/api/modelTestRunner.ts";
+import { buildInternalChatRequest, buildInternalRerankRequest } from "@/lib/api/modelTestRunner.ts";
 
 test("buildInternalChatRequest sends X-OmniRoute-Compression: off", () => {
   const controller = new AbortController();

@@ -42,10 +42,7 @@ test("buildAuggieSpawnOptions sets shell:true on win32 (fixes spawn EINVAL)", ()
 test("buildAuggieSpawnOptions leaves shell falsy on posix platforms", () => {
   for (const platform of ["linux", "darwin"]) {
     const options = withPlatform(platform, () => buildAuggieSpawnOptions(["pipe", "pipe", "pipe"]));
-    assert.ok(
-      !options.shell,
-      `spawn() should not need shell interpretation on ${platform}`
-    );
+    assert.ok(!options.shell, `spawn() should not need shell interpretation on ${platform}`);
   }
 });
 

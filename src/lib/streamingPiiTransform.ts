@@ -168,21 +168,24 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
       typeof lastJson.type === "string" &&
       (lastJson.type.startsWith("message") || lastJson.type.startsWith("content_block"))
     ) {
-      // Claude buffers are keyed by content-block index (`${N}_0`); a hardcoded "0_0" only
-      // ever read the FIRST block, so a text block at index 1 (after a thinking block at 0)
-      // never flushed its held-back tail. Read the buffer for THIS block being closed.
+      // Flush the buffer for the block being closed. sanitizeObject keys Claude buffers
+      // by the content-block index (a content_block_delta with index N buffers under
+      // `${N}_0`), so a hardcoded "0_0" only ever saw the FIRST block (typically the
+      // thinking block at index 0) and silently dropped the held-back tail of every
+      // later block (e.g. the text block at index 1 -> the answer was truncated).
       const blockIndex = typeof lastJson.index === "number" ? lastJson.index : 0;
       const buffers = getBuffers(`${blockIndex}_0`);
-      // A Claude content_block_delta carries EXACTLY ONE typed delta that must match the
-      // block it targets: reasoning => thinking_delta (thinking block), content =>
-      // text_delta (text block), tool args => input_json_delta (tool_use block). The old
-      // code hardcoded `type:"text_delta"` and attached buffered reasoning as
-      // `delta.thinking`, so flushing a thinking block's held-back tail emitted a
-      // text_delta on a thinking block. Claude Code rejects that
-      // ("content_block_type_mismatch_text"), falls back to non-streaming, and re-issues
-      // the identical request, doubling every reasoning turn on the local MLX path. Each
-      // stop signal closes one block, so only the matching buffer is non-empty here; pick
-      // the delta type that matches the buffered field so the flush stays valid.
+      // A Claude content_block_delta carries EXACTLY ONE typed delta that must match
+      // the block it targets: reasoning => thinking_delta (thinking block), content =>
+      // text_delta (text block), tool args => input_json_delta (tool_use block). The
+      // previous code hardcoded `type: "text_delta"` and then attached the buffered
+      // reasoning as `delta.thinking`, so flushing a thinking block's held-back tail
+      // emitted a `text_delta` targeting a thinking block. Claude Code rejects that with
+      // "Content block is not a text block", falls back to non-streaming, and re-issues
+      // the identical request, doubling every reasoning turn on the local MLX path.
+      // Each stop signal closes a single block, so only the matching buffer is non-empty
+      // here; pick the delta type that matches the buffered field so the flush stays
+      // valid for the block being closed.
       let delta: Record<string, unknown> | null = null;
       if (buffers.reasoning) {
         delta = { type: "thinking_delta", thinking: buffers.reasoning };

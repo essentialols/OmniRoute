@@ -151,10 +151,7 @@ test("getCursorAgentCliVersion reads CURSOR_DATA_DIR via isolated HOME", () => {
       () => {
         resetCursorAgentCliVersionCache();
         assert.equal(getCursorAgentCliVersion(), id);
-        assert.equal(
-          formatCursorAgentClientVersion(getCursorAgentCliVersion()),
-          `cli-${id}`
-        );
+        assert.equal(formatCursorAgentClientVersion(getCursorAgentCliVersion()), `cli-${id}`);
       }
     );
   } finally {
