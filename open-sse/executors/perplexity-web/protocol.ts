@@ -72,7 +72,6 @@ export const THINKING_MAP: Record<string, string> = {
   "pplx-kimi": "kimik26thinking",
 };
 
-export const CITATION_RE = /\[\d+\]/g;
 export const GROK_TAG_RE = /<grok:[^>]*>.*?<\/grok:[^>]*>/gs;
 export const GROK_SELF_RE = /<grok:[^>]*\/>/g;
 export const XML_DECL_RE = /<[?]xml[^?]*[?]>/g;
@@ -83,9 +82,11 @@ export const MULTI_NL = /\n{3,}/g;
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 export function cleanResponse(text: string, strip = true): string {
+  // Citation markers ([1], [2], ...) are deliberately preserved: they index into
+  // the Sources list appended by extractContent, and a research answer without
+  // its evidence trail is the failure mode this provider exists to avoid.
   let t = text;
   t = t.replace(XML_DECL_RE, "");
-  t = t.replace(CITATION_RE, "");
   t = t.replace(GROK_TAG_RE, "");
   t = t.replace(GROK_SELF_RE, "");
   t = t.replace(RESPONSE_TAG_RE, "");
@@ -285,6 +286,12 @@ export function buildPplxRequestBody(
     client_coordinates: null,
     mentions: [],
     dsl_query: dslQuery && dslQuery.trim() ? dslQuery : query,
+    // Leave the search classifier alone. Forcing it (skip_search_enabled:false +
+    // always_search_override/override_no_search:true) was measured WORSE on
+    // 2026-08-01: the same prompt that returned a correct sourced news story
+    // under the classifier came back refusing, on junk results. These are
+    // reverse-engineered fields and "force a search" is not what they do; the
+    // real cause of unsearched answers was tools[] (stripped in the gateway).
     skip_search_enabled: true,
     is_nav_suggestions_disabled: false,
     source: "default",
@@ -380,6 +387,14 @@ export function applyMarkdownDiff(acc: MarkdownAccumulator, patches: PplxDiffPat
   }
 }
 
+export function renderSources(sources: Map<string, string>): string {
+  if (sources.size === 0) return "";
+  const lines = [...sources.entries()].map(
+    ([url, title], i) => `[${i + 1}] ${title ? `${title}: ` : ""}${url}`
+  );
+  return `\n\n**Sources:**\n${lines.join("\n")}`;
+}
+
 export async function* extractContent(
   eventStream: ReadableStream<Uint8Array>,
   signal?: AbortSignal | null
@@ -391,6 +406,9 @@ export async function* extractContent(
   // Per-usage reconstructed answer-text blocks + the locked primary usage.
   const mdState = new Map<string, MarkdownAccumulator>();
   let primaryUsage: string | null = null;
+  // url -> title, in arrival order. Perplexity's [n] markers are 1-based indexes
+  // into this same order, so insertion order is what makes the markers resolve.
+  const webSources = new Map<string, string>();
 
   for await (const event of readPplxSseEvents(eventStream, signal)) {
     if (event.error_code || event.error_message) {
@@ -438,6 +456,11 @@ export async function* extractContent(
             yield { thinking: desc, backendUuid: backendUuid ?? undefined };
           }
         }
+      }
+
+      for (const r of block.web_result_block?.web_results ?? []) {
+        const url = (r.url ?? "").trim();
+        if (url && !webSources.has(url)) webSources.set(url, (r.name ?? "").trim());
       }
 
       // Content: answer-text blocks (schematized diff frames OR materialized
@@ -497,6 +520,12 @@ export async function* extractContent(
     // on a still-PENDING frame BEFORE the COMPLETED frame that materializes the
     // full markdown_block — breaking on `final` there drops the answer.
     if (event.status === "COMPLETED") break;
+  }
+
+  const sources = renderSources(webSources);
+  if (sources) {
+    fullAnswer += sources;
+    yield { delta: sources, answer: fullAnswer, backendUuid: backendUuid ?? undefined };
   }
 
   yield { delta: "", answer: fullAnswer, backendUuid: backendUuid ?? undefined, done: true };

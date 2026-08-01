@@ -140,10 +140,19 @@ test("Non-streaming: simple text response", async () => {
   }
 });
 
-test("Non-streaming: strips citations from response", async () => {
+test("Non-streaming: preserves citations and appends the source list", async () => {
   const pplxEvents = [
     {
       blocks: [
+        {
+          intended_usage: "web_results",
+          web_result_block: {
+            web_results: [
+              { url: "https://a.example/one", name: "Source One" },
+              { url: "https://b.example/two", name: "" },
+            ],
+          },
+        },
         {
           intended_usage: "markdown",
           markdown_block: {
@@ -169,10 +178,11 @@ test("Non-streaming: strips citations from response", async () => {
     });
 
     const json = (await result.response.json()) as any;
-    assert.ok(!json.choices[0].message.content.includes("[1]"));
-    assert.ok(!json.choices[0].message.content.includes("[2]"));
-    assert.ok(!json.choices[0].message.content.includes("[3]"));
-    assert.ok(json.choices[0].message.content.includes("The answer is 42"));
+    const content = json.choices[0].message.content as string;
+    assert.ok(content.includes("The answer is 42[1] according to sources[2][3]."));
+    assert.ok(content.includes("**Sources:**"));
+    assert.ok(content.includes("[1] Source One: https://a.example/one"));
+    assert.ok(content.includes("[2] https://b.example/two"));
   } finally {
     restore();
   }
