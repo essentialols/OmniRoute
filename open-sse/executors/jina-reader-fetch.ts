@@ -28,16 +28,21 @@ interface JinaReaderFetchOptions {
 export async function jinaReaderFetch(opts: JinaReaderFetchOptions): Promise<WebFetchResult> {
   const { url, format, includeMetadata, credentials } = opts;
 
-  if (!credentials.apiKey) {
-    const body = buildErrorBody(401, "Jina Reader API key required");
-    return { success: false, status: 401, error: body.error.message };
-  }
-
+  // r.jina.ai serves anonymous requests (rate-limited) and returns the same JSON
+  // shape as an authenticated one, so a missing key must NOT be a hard failure.
+  // The web_fetch builtin explicitly falls back to "the keyless jina-reader ...
+  // so local setups still work" (src/lib/skills/builtins.ts), but this guard made
+  // that path unreachable: every uncredentialed WebFetch returned 401 "Jina Reader
+  // API key required" instead of fetching. Verified 2026-08-07: an unauthenticated
+  // GET of https://r.jina.ai/<url> returns 200 with data.title/data.content.
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${credentials.apiKey}`,
     Accept: "application/json",
     "X-Return-Format": format === "html" ? "html" : "markdown",
   };
+
+  if (credentials.apiKey) {
+    headers.Authorization = `Bearer ${credentials.apiKey}`;
+  }
 
   if (includeMetadata) {
     headers["X-With-Generated-Alt"] = "true";
