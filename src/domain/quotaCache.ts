@@ -23,7 +23,7 @@ import {
   getLatestQuotaSnapshotsForConnection,
 } from "@/lib/db/quotaSnapshots";
 import { recordProviderQuotaResetEventIfChanged } from "@/lib/db/quotaResetEvents";
-import { getCodexQuotaWindowFilterForModel } from "@omniroute/open-sse/config/codexQuotaScopes.ts";
+import { getQuotaWindowFilterForRequest } from "@/domain/quotaWindowScopes";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -205,18 +205,38 @@ export function __clearForTests() {
   cache.clear();
 }
 
+/**
+ * Per-request quota verdict, scoped to the model that was actually asked for.
+ *
+ * Layered ON TOP of the account-wide `isAccountQuotaExhausted()` aggregate — it can
+ * only ever RELAX it, never tighten it. The aggregate's AND-across-windows semantics
+ * (and the snapshot hydration that mirrors them) stay untouched on purpose: reducing
+ * per-window flags with OR is what caused #5923/#4438, where one dead window blocked
+ * every model on the connection.
+ *
+ * Which windows govern a model is provider-specific and lives in
+ * `domain/quotaWindowScopes` (codex scope labels, antigravity/agy model-keyed windows).
+ * Providers absent from that registry keep the account-wide verdict verbatim.
+ */
 export function isQuotaExhaustedForRequest(
   connectionId: string,
   provider: string,
   requestedModel: string | null = null
 ): boolean {
+  // NOTE: also hydrates the cache from persisted snapshots, so the `getQuotaCache`
+  // read below sees the snapshot-backed windows rather than an empty entry.
   if (!isAccountQuotaExhausted(connectionId)) return false;
-  if (provider !== "codex" || !requestedModel) return true;
+  const filterWindow = getQuotaWindowFilterForRequest(provider, requestedModel);
+  if (!filterWindow) return true;
   const entry = getQuotaCache(connectionId);
   const quotaNames = Object.keys(entry?.quotas || {});
+  // No window data at all (e.g. `markAccountExhaustedFrom429`) — nothing to scope to,
+  // so the account-wide verdict stands.
   if (quotaNames.length === 0) return true;
-  const filterWindow = getCodexQuotaWindowFilterForModel(requestedModel);
-  const scopedWindowNames = quotaNames.filter((windowName) => filterWindow?.(windowName));
+  const scopedWindowNames = quotaNames.filter((windowName) => filterWindow(windowName));
+  // No window matched the requested model: the upstream usage fetch only returns a
+  // subset of windows, so an absent window is missing evidence, not evidence of
+  // exhaustion. Fail open (as the codex branch already did) rather than refuse.
   return (
     scopedWindowNames.length > 0 &&
     scopedWindowNames.every(
