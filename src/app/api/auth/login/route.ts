@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
 import { getSettings } from "@/lib/localDb";
 import { SignJWT } from "jose";
-import { cookies } from "next/headers";
 import {
   ensurePersistentManagementPasswordHash,
   getStoredManagementPassword,
@@ -20,11 +19,6 @@ if (!process.env.JWT_SECRET) {
 function getJwtSecret(): Uint8Array {
   return new TextEncoder().encode(process.env.JWT_SECRET || "");
 }
-
-// Test seam for cookie store injection without affecting runtime behavior.
-export const authRouteInternals = {
-  getCookieStore: cookies,
-};
 
 export async function POST(request) {
   const auditContext = getAuditRequestContext(request);
@@ -136,8 +130,12 @@ export async function POST(request) {
         .setExpirationTime("30d")
         .sign(getJwtSecret());
 
-      const cookieStore = await authRouteInternals.getCookieStore();
-      cookieStore.set("auth_token", token, {
+      // Set the auth cookie on the response object (not via next/headers cookies())
+      // so it never depends on Next's per-request async store. The indirect cookies()
+      // call was invisible to Next static analysis and ran without a request scope,
+      // throwing "cookies was called outside a request scope" under the prod build.
+      const response = NextResponse.json({ success: true });
+      response.cookies.set("auth_token", token, {
         httpOnly: true,
         secure: useSecureCookie,
         sameSite: "lax",
@@ -163,7 +161,7 @@ export async function POST(request) {
       });
 
       clearLoginAttempts(clientIp);
-      return NextResponse.json({ success: true });
+      return response;
     }
 
     const failureDecision = recordLoginFailure(clientIp, { enabled: bruteForceEnabled });

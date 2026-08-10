@@ -17,8 +17,6 @@ const loginRoute = await import("../../src/app/api/auth/login/route.ts");
 const logoutRoute = await import("../../src/app/api/auth/logout/route.ts");
 const providersRoute = await import("../../src/app/api/providers/route.ts");
 const providerByIdRoute = await import("../../src/app/api/providers/[id]/route.ts");
-const originalGetLoginCookieStore = loginRoute.authRouteInternals.getCookieStore;
-const originalGetLogoutCookieStore = logoutRoute.logoutRouteInternals.getCookieStore;
 
 function resetDb() {
   core.resetDbInstance();
@@ -30,27 +28,12 @@ test.beforeEach(() => {
   resetDb();
 });
 
-test.afterEach(() => {
-  loginRoute.authRouteInternals.getCookieStore = originalGetLoginCookieStore;
-  logoutRoute.logoutRouteInternals.getCookieStore = originalGetLogoutCookieStore;
-});
-
 test.after(() => {
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 });
 
 test("auth login/logout routes emit structured audit events with ip and request id", async () => {
-  const setCalls = [];
-  const deleteCalls = [];
-
-  loginRoute.authRouteInternals.getCookieStore = async () => ({
-    set: (...args) => setCalls.push(args),
-  });
-  logoutRoute.logoutRouteInternals.getCookieStore = async () => ({
-    delete: (...args) => deleteCalls.push(args),
-  });
-
   const loginResponse = await loginRoute.POST(
     new Request("http://localhost/api/auth/login", {
       method: "POST",
@@ -65,7 +48,10 @@ test("auth login/logout routes emit structured audit events with ip and request 
 
   assert.equal(loginResponse.status, 200);
   assert.deepEqual(await loginResponse.json(), { success: true });
-  assert.equal(setCalls.length, 1);
+  assert.ok(
+    (loginResponse.cookies.get("auth_token")?.value ?? "").length > 0,
+    "login must set an auth_token cookie on the response"
+  );
 
   const logoutResponse = await logoutRoute.POST(
     new Request("http://localhost/api/auth/logout", {
@@ -79,7 +65,9 @@ test("auth login/logout routes emit structured audit events with ip and request 
 
   assert.equal(logoutResponse.status, 200);
   assert.deepEqual(await logoutResponse.json(), { success: true });
-  assert.deepEqual(deleteCalls, [["auth_token"]]);
+  const clearedCookie = logoutResponse.cookies.get("auth_token");
+  assert.equal(clearedCookie?.value, "");
+  assert.equal(clearedCookie?.maxAge, 0);
 
   const loginEvent = compliance.getAuditLog({ action: "auth.login.success" })[0];
   assert.equal(loginEvent.actor, "admin");
@@ -96,10 +84,6 @@ test("auth login/logout routes emit structured audit events with ip and request 
 });
 
 test("auth login route records failed password attempts", async () => {
-  loginRoute.authRouteInternals.getCookieStore = async () => ({
-    set() {},
-  });
-
   const response = await loginRoute.POST(
     new Request("http://localhost/api/auth/login", {
       method: "POST",
