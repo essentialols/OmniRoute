@@ -31,6 +31,7 @@ import {
 } from "../services/antigravityCredits.ts";
 import { persistCreditBalance, getAllPersistedCreditBalances } from "@/lib/db/creditBalance";
 import { setConnectionRateLimitUntil } from "@/lib/db/providers";
+import { getLatestQuotaSnapshotsForConnection } from "@/lib/db/quotaSnapshots";
 import { getMitmAlias } from "@/lib/db/models";
 import { obfuscateSensitiveWords } from "../services/antigravityObfuscation.ts";
 import { resolveAntigravityVersion } from "../services/antigravityVersion.ts";
@@ -67,6 +68,10 @@ import * as prl from "../utils/providerRequestLogging.ts";
 const MAX_RETRY_AFTER_MS = 60_000;
 const LONG_RETRY_THRESHOLD_MS = 60_000;
 const CREDITS_EXHAUSTED_TTL_MS = 5 * 60 * 60 * 1000; // 5 hours
+// Upper bound for any quota-exhaustion cooldown we persist. Mirrors
+// MAX_PROVIDER_COOLDOWN_MS in services/accountFallback.ts: an adversarial or buggy
+// upstream reset timestamp must never lock a connection out indefinitely.
+const MAX_QUOTA_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Cap for transient 5xx backoff — shorter than the 429 cap to avoid long stalls on
 // infra hiccups ("Agent execution terminated", "high traffic", capacity errors).
 const ANTIGRAVITY_TRANSIENT_RETRY_MAX_MS = 15_000;
@@ -307,10 +312,76 @@ function markCreditsExhausted(accountId: string): void {
  */
 export function markConnectionQuotaExhausted(connectionId: string, retryAfterMs: number): void {
   try {
-    setConnectionRateLimitUntil(connectionId, Date.now() + retryAfterMs);
+    const boundedMs = Math.min(retryAfterMs, MAX_QUOTA_COOLDOWN_MS);
+    setConnectionRateLimitUntil(connectionId, Date.now() + boundedMs);
   } catch {
     // DB write failure must never crash the request path
   }
+}
+
+/**
+ * Resolve a quota-exhaustion cooldown from the persisted quota snapshots.
+ *
+ * Google's 429 RESOURCE_EXHAUSTED body frequently carries no parseable duration, in
+ * which case `decide429` falls back to a blind 24h cooldown. But the real reset time
+ * is already recorded in `quota_snapshots.next_reset_at` (written by the usage poller
+ * via the quota cache) and can be several DAYS out — so the blind 24h releases the
+ * connection early and it 429s again immediately.
+ *
+ * Returns the ms until the EARLIEST FUTURE `next_reset_at` among this connection's
+ * EXHAUSTED windows — mirroring the `earliestResetAt()` convention in
+ * src/domain/quotaCache.ts. Only exhausted windows are considered: a healthy window's
+ * (typically much nearer) reset would otherwise drag the cooldown back down.
+ *
+ * Clamped to 30 days, mirroring MAX_PROVIDER_COOLDOWN_MS in services/accountFallback.ts.
+ *
+ * Returns null when there is no snapshot, no exhausted window, or no parseable FUTURE
+ * reset — the caller then keeps the existing 24h default. Exported for unit testing.
+ * @internal
+ */
+export function resolveQuotaCooldownFromSnapshots(
+  connectionId: string,
+  nowMs: number = Date.now()
+): number | null {
+  if (!connectionId || connectionId === "unknown") return null;
+
+  let snapshots: ReturnType<typeof getLatestQuotaSnapshotsForConnection>;
+  try {
+    snapshots = getLatestQuotaSnapshotsForConnection(connectionId);
+  } catch {
+    // A missing table / DB error must never affect the request path.
+    return null;
+  }
+  if (!snapshots || snapshots.length === 0) return null;
+
+  let earliestResetMs = Infinity;
+
+  for (const snapshot of snapshots) {
+    // `rowToCamel` camelizes the row, but the declared row type is snake_case —
+    // read both, exactly like hydrateQuotaCacheFromSnapshots does.
+    const camel = snapshot as unknown as {
+      nextResetAt?: string | null;
+      isExhausted?: number | null;
+      remainingPercentage?: number | null;
+    };
+
+    const isExhausted = Number(camel.isExhausted ?? snapshot.is_exhausted ?? 0) === 1;
+    const remainingRaw = camel.remainingPercentage ?? snapshot.remaining_percentage ?? null;
+    const remainingIsZero = remainingRaw !== null && Number(remainingRaw) <= 0;
+    if (!isExhausted && !remainingIsZero) continue;
+
+    const resetAt = camel.nextResetAt ?? snapshot.next_reset_at ?? null;
+    if (!resetAt) continue; // absent
+
+    const resetMs = new Date(resetAt).getTime();
+    if (!Number.isFinite(resetMs)) continue; // unparseable
+    if (resetMs <= nowMs) continue; // in the past
+
+    if (resetMs < earliestResetMs) earliestResetMs = resetMs;
+  }
+
+  if (!Number.isFinite(earliestResetMs)) return null;
+  return Math.min(earliestResetMs - nowMs, MAX_QUOTA_COOLDOWN_MS);
 }
 
 /**
@@ -1290,6 +1361,11 @@ export class AntigravityExecutor extends BaseExecutor {
 
         // Parse retry time for 429/503 responses
         let retryMs: number | null = null;
+        // Set when this 429 is an ACCOUNT-scoped quota exhaustion. All hosts in
+        // config/antigravityUpstream.ts serve the same account quota, so a quota 429 on
+        // host 1 is deterministic on hosts 2 and 3: fanning out just burns two more
+        // round trips. Per-host `rate_limited` 429s keep the fan-out.
+        let fullQuotaExhausted = false;
 
         if (
           response.status === HTTP_STATUS.RATE_LIMITED ||
@@ -1325,15 +1401,33 @@ export class AntigravityExecutor extends BaseExecutor {
               //    full_quota_exhausted can skip the credits attempt entirely
               //    (avoids ~41s hold on an already-exhausted account) and
               //    persist the cooldown to DB for post-restart routing.
-              const decision: Decision = decide429(category, parsedRetryMs);
+              //    When Google gives no parseable duration, prefer the real reset time
+              //    recorded in quota_snapshots.next_reset_at over decide429's blind 24h
+              //    default (the true reset can be days out, and a short cooldown just
+              //    releases the connection into another 429). Only quota_exhausted is
+              //    affected: rate_limited / soft_rate_limit keep their existing inputs.
+              const snapshotCooldownMs =
+                category === "quota_exhausted" && parsedRetryMs == null
+                  ? resolveQuotaCooldownFromSnapshots(accountId)
+                  : null;
+              const resolvedRetryMs = parsedRetryMs ?? snapshotCooldownMs;
+              if (snapshotCooldownMs != null) {
+                log?.debug?.(
+                  "AG_429",
+                  `No parseable retry duration; using quota_snapshots next_reset_at (${Math.ceil(snapshotCooldownMs / 1000)}s)`
+                );
+              }
+
+              const decision: Decision = decide429(category, resolvedRetryMs);
               retryMs = decision.retryAfterMs;
               log?.debug?.(
                 "AG_429",
                 `Category: ${category}, Decision: ${decision.kind} — ${decision.reason}`
               );
 
-              if (decision.kind === "full_quota_exhausted" && retryMs) {
-                markConnectionQuotaExhausted(accountId, retryMs);
+              if (decision.kind === "full_quota_exhausted") {
+                fullQuotaExhausted = true;
+                if (retryMs) markConnectionQuotaExhausted(accountId, retryMs);
               }
 
               const creditsAlreadyInjected =
@@ -1489,12 +1583,17 @@ export class AntigravityExecutor extends BaseExecutor {
           );
           lastStatus = response.status;
 
-          if (urlIndex + 1 < fallbackCount) {
+          if (fullQuotaExhausted) {
+            log?.debug?.(
+              "RETRY",
+              `429 quota exhausted on ${url}: skipping the remaining ${Math.max(0, fallbackCount - urlIndex - 1)} host(s), they share the same account quota`
+            );
+          } else if (urlIndex + 1 < fallbackCount) {
             continue;
           }
         }
 
-        if (this.shouldRetry(response.status, urlIndex)) {
+        if (!fullQuotaExhausted && this.shouldRetry(response.status, urlIndex)) {
           log?.debug?.("RETRY", `${response.status} on ${url}, trying fallback ${urlIndex + 1}`);
           lastStatus = response.status;
           continue;
