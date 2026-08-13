@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { resolveChatRequestBody } from "./requestBody";
 import { normalizeReasoningRequest } from "@/shared/reasoning/effortStandardization";
+import { normalizeSamplingRequest } from "@/shared/sampling/requestMarker";
 import { resolveRoutingModel } from "./resolveRoutingModel";
 import {
   getProviderCredentialsWithQuotaPreflight,
@@ -239,6 +240,7 @@ export async function handleChat(
   // downstream mapper (Anthropic / Gemini / xAI / Responses). An explicit client
   // reasoning_effort / reasoning / object-shaped thinking always wins (backward compatible).
   body = normalizeReasoningRequest(body);
+  body = normalizeSamplingRequest(body);
 
   // Early guard: an invalid `messages` field is rejected here with a clear
   // OmniRoute-level 400 before any routing or upstream call (#5110, #6402).

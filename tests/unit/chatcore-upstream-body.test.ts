@@ -46,6 +46,32 @@ test("leaves the model untouched when it already matches", async () => {
   assert.equal(out.model, "model-a");
 });
 
+test("preserves local llama.cpp sampling fields for OpenAI-compatible upstreams", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "pym-q2-abliterated",
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 1,
+      top_p: 0.95,
+      top_k: 20,
+      min_p: 0,
+      presence_penalty: 1.5,
+      repeat_penalty: 1.1,
+    },
+    modelToCall: "pym-q2-abliterated",
+    provider: "openai-compatible-chat-h1-llamaswap",
+    targetFormat: "openai",
+    credentials: null,
+  });
+
+  assert.equal(out.temperature, 1);
+  assert.equal(out.top_p, 0.95);
+  assert.equal(out.top_k, 20);
+  assert.equal(out.min_p, 0);
+  assert.equal(out.presence_penalty, 1.5);
+  assert.equal(out.repeat_penalty, 1.1);
+});
+
 // PR #5563: the `effectiveToolLimit < MAX_TOOLS_LIMIT` gate was removed from
 // truncateToolList, so providers whose proactive limit is >= the 128 default
 // (e.g. grok-cli at 200) are actually truncated. Without the gate removal these
