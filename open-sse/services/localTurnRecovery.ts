@@ -395,6 +395,36 @@ export interface LocalTurnRecoveryGateInput {
   nativeCodexPassthrough: boolean;
   isResponsesEndpoint: boolean;
   recoveryHeaderPresent: boolean;
+  /**
+   * Whether the REQUEST declares a bridgeable tool (see {@link BRIDGED_TOOL_NAMES}). When it does
+   * not, recovery has nothing to bridge and engaging it costs the client its entire
+   * time-to-first-byte for no benefit. See the gate for the one behaviour this trades away.
+   */
+  requestDeclaresBridgeableTool: boolean;
+}
+
+/**
+ * True when the client's request declares at least one tool this module can execute server-side.
+ *
+ * Accepts both shapes seen on the wire: Claude's `tools: [{ name }]` and OpenAI's
+ * `tools: [{ function: { name } }]`. Unknown shapes return false, which disables recovery rather
+ * than silently forcing a non-streaming upstream call.
+ */
+export function requestDeclaresBridgeableTool(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) return false;
+  const tools = (body as { tools?: unknown }).tools;
+  if (!Array.isArray(tools)) return false;
+  return tools.some((tool) => {
+    if (typeof tool !== "object" || tool === null) return false;
+    const direct = (tool as { name?: unknown }).name;
+    if (typeof direct === "string" && BRIDGED_TOOL_NAMES.has(direct)) return true;
+    const fn = (tool as { function?: unknown }).function;
+    if (typeof fn === "object" && fn !== null) {
+      const nested = (fn as { name?: unknown }).name;
+      if (typeof nested === "string" && BRIDGED_TOOL_NAMES.has(nested)) return true;
+    }
+    return false;
+  });
 }
 
 /**
@@ -411,6 +441,16 @@ export function resolveLocalTurnRecoveryPlan(input: LocalTurnRecoveryGateInput):
   if (input.nativeCodexPassthrough || input.isResponsesEndpoint) return { active: false };
   if (input.recoveryHeaderPresent) return { active: false };
   if (!matchesLocalAllowlist(input.provider, input.model)) return { active: false };
+  // No bridgeable tool in the request means there is nothing to execute server-side, so the only
+  // thing an active plan would still buy is the "empty" dead-turn resample. That is not worth what
+  // it costs: an active plan forces the UPSTREAM call non-streaming (chatCore's `upstreamStream`),
+  // so OmniRoute cannot emit a byte until the local model has finished generating. On a slow local
+  // model that starves the client's progress watchdog and shows up as multi-minute stalls and 502s.
+  // Deliberately traded away: for a request with NO bridgeable tools, a completely empty turn is no
+  // longer auto-resampled once; the client sees the empty turn. The other dead-turn reasons
+  // (tool_call_leak, announcement, refusal) are already gated on a bridged tool being available,
+  // so they are unaffected.
+  if (!input.requestDeclaresBridgeableTool) return { active: false };
   return { active: true };
 }
 

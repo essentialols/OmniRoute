@@ -11,6 +11,7 @@ import {
   isLocalBridgeProvider,
   extractLeakedSearchQuery,
   TERMINAL_FALLBACK_TEXT,
+  requestDeclaresBridgeableTool,
 } from "../../open-sse/services/localTurnRecovery.ts";
 
 // Real provider ids are composed (`openai-compatible-chat-h1-llamaswap`), so an exact-only
@@ -49,6 +50,7 @@ test("recovery gate activates for the composed H1 provider id", () => {
       nativeCodexPassthrough: false,
       isResponsesEndpoint: false,
       recoveryHeaderPresent: false,
+      requestDeclaresBridgeableTool: true,
     }),
     { active: true }
   );
@@ -147,6 +149,7 @@ test("gate: active only for allowlisted local provider on streaming Claude path"
     nativeCodexPassthrough: false,
     isResponsesEndpoint: false,
     recoveryHeaderPresent: false,
+    requestDeclaresBridgeableTool: true,
   };
   assert.equal(resolveLocalTurnRecoveryPlan(base).active, true);
   assert.equal(resolveLocalTurnRecoveryPlan({ ...base, provider: "openai" }).active, false);
@@ -341,6 +344,7 @@ test("recovery gate activates for P7P via the model", () => {
       nativeCodexPassthrough: false,
       isResponsesEndpoint: false,
       recoveryHeaderPresent: false,
+      requestDeclaresBridgeableTool: true,
     }),
     { active: true }
   );
@@ -356,6 +360,7 @@ test("recovery gate stays inactive for P7P when the model is unknown", () => {
       nativeCodexPassthrough: false,
       isResponsesEndpoint: false,
       recoveryHeaderPresent: false,
+      requestDeclaresBridgeableTool: true,
     }).active,
     false
   );
@@ -534,4 +539,58 @@ test("legitimate refusals about a concrete object stay untouched even with a too
   ]) {
     assert.equal(detectDeadTurn(completion({ content: c }), true).recover, false, c);
   }
+});
+
+// ── bridgeable-tool gate ────────────────────────────────────────────────────────────────────
+//
+// An active plan forces the UPSTREAM call non-streaming, so nothing reaches the client until the
+// local model finishes generating. On a request with no bridgeable tool there is nothing to
+// execute server-side, so that cost buys only the "empty" dead-turn resample. These tests pin the
+// trade so it cannot regress silently in either direction.
+
+test("gate: inactive when the request declares no bridgeable tool", () => {
+  const base = {
+    provider: "rapid-mlx",
+    isClaudeSource: true,
+    clientWantsStream: true,
+    nativeCodexPassthrough: false,
+    isResponsesEndpoint: false,
+    recoveryHeaderPresent: false,
+  };
+  // Positive control: identical input WITH a bridgeable tool stays active, so the assertion
+  // below cannot pass merely because some other condition is failing.
+  assert.equal(
+    resolveLocalTurnRecoveryPlan({ ...base, requestDeclaresBridgeableTool: true }).active,
+    true,
+    "control: a bridgeable tool must keep the plan active"
+  );
+  assert.equal(
+    resolveLocalTurnRecoveryPlan({ ...base, requestDeclaresBridgeableTool: false }).active,
+    false,
+    "no bridgeable tool must not force a non-streaming upstream call"
+  );
+});
+
+test("requestDeclaresBridgeableTool: both wire shapes, and no false positives", () => {
+  // Claude shape.
+  assert.equal(requestDeclaresBridgeableTool({ tools: [{ name: "WebSearch" }] }), true);
+  assert.equal(requestDeclaresBridgeableTool({ tools: [{ name: "WebFetch" }] }), true);
+  // OpenAI function shape.
+  assert.equal(
+    requestDeclaresBridgeableTool({ tools: [{ function: { name: "web_search" } }] }),
+    true
+  );
+  // The fallback tool OmniRoute injects for native web_search.
+  assert.equal(requestDeclaresBridgeableTool({ tools: [{ name: "omniroute_web_search" }] }), true);
+  // Non-bridgeable tools must NOT activate the plan.
+  assert.equal(
+    requestDeclaresBridgeableTool({ tools: [{ name: "Bash" }, { name: "Read" }] }),
+    false
+  );
+  // Malformed / absent input must not throw and must not activate.
+  assert.equal(requestDeclaresBridgeableTool({}), false);
+  assert.equal(requestDeclaresBridgeableTool({ tools: "nope" }), false);
+  assert.equal(requestDeclaresBridgeableTool({ tools: [null, 42, { name: 7 }] }), false);
+  assert.equal(requestDeclaresBridgeableTool(null), false);
+  assert.equal(requestDeclaresBridgeableTool(undefined), false);
 });

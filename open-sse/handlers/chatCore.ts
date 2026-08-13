@@ -309,6 +309,7 @@ import {
   hasRecoveryAttemptHeader,
   RECOVERY_ATTEMPT_HEADER,
   RECOVERY_SAMPLING,
+  requestDeclaresBridgeableTool,
 } from "../services/localTurnRecovery.ts";
 import { synthesizeOpenAiSseFromJson } from "../utils/jsonToSse.ts";
 import { builtinSkills } from "@/lib/skills/builtins";
@@ -947,6 +948,7 @@ export async function handleChatCore({
     nativeCodexPassthrough,
     isResponsesEndpoint,
     recoveryHeaderPresent: hasRecoveryAttemptHeader(clientRawRequest?.headers),
+    requestDeclaresBridgeableTool: requestDeclaresBridgeableTool(body),
   });
 
   // `settings` is already consolidated once near the top of handleChatCore
