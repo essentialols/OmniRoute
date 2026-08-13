@@ -85,8 +85,24 @@ actually grows. "It didn't crash" is not evidence that it wrote.
 ## Tests
 
 ```
-npx vitest run tests/unit/local-turn-recovery.test.ts    # 47/47
+npm run test:unit          # the whole unit suite, which includes this file
 ```
+
+To run only this file, use NODE'S BUILT-IN TEST RUNNER, not vitest:
+
+```
+npx cross-env DISABLE_SQLITE_AUTO_BACKUP=true node --import tsx/esm \
+  --import ./open-sse/utils/setupPolyfill.ts --import ./tests/_setup/isolateDataDir.ts \
+  --test --test-force-exit tests/unit/local-turn-recovery.test.ts     # 47/47
+```
+
+**Do not reach for `npx vitest run` here.** This repo runs TWO test runners. `vitest.config.ts`
+covers `tests/unit/**/*.test.tsx` plus one explicitly named `.ts` file, while everything matching
+`tests/unit/*.test.ts` runs under `node --test` via the `test:unit` npm script. Pointing vitest at a
+`tests/unit/*.test.ts` file reports `No test files found` and exits 1, which reads exactly like a
+missing or broken suite and is not. An earlier revision of this document gave the vitest command and
+was wrong; it cost two separate wrong conclusions in one day. A new test placed outside the
+`test:unit` glob is invisible to CI no matter how good it is.
 
 Oracle-verified: reverting line 283 to `ANNOUNCE_RE.test(norm)` alone produces exactly two failures,
 `"LONG planning prose that announces actions is NOT a dead turn, tool available"` and
