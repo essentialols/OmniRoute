@@ -7,6 +7,7 @@ import { FORMATS } from "../formats.ts";
 import { appendToolCallArgumentDelta } from "../../utils/toolCallArguments.ts";
 import { fallbackToolCallId } from "../helpers/toolCallHelper.ts";
 import { shouldParseTextualReasoningTags } from "../../handlers/responseSanitizer.ts";
+import { shouldDropResponsesCommentaryEvent } from "../../utils/responsesCommentaryDrop.ts";
 import {
   normalizeToolName,
   stripEmptyOptionalToolArgs,
@@ -767,6 +768,32 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
     state.created = Math.floor(Date.now() / 1000);
     state.toolCallIndex = 0;
     state.currentToolCallId = null;
+  }
+
+  // #6199/#6561: GPT-5.5/Codex tags internal reasoning-preamble assistant messages
+  // with phase "commentary" (e.g. "Need inspect sections. Use Read text."). Those must
+  // never surface as the visible answer. The Responses passthrough path already drops
+  // them via shouldDropResponsesCommentaryEvent; this translation path (Responses to
+  // Chat to Claude, used by Claude Code subagents) never wired that in, so commentary
+  // leaked into the visible text content block. Reuse the same stateful drop here: the
+  // output_item.added event announces the phase, and follow-up output_text.delta,
+  // output_text.done, and output_item.done events for that item are keyed off item_id /
+  // output_index and dropped too.
+  if (!(state.commentaryItemIds instanceof Set)) state.commentaryItemIds = new Set();
+  if (!(state.commentaryIndexes instanceof Set)) state.commentaryIndexes = new Set();
+  if (
+    shouldDropResponsesCommentaryEvent(
+      {
+        type: eventType,
+        item: data.item,
+        item_id: data.item_id,
+        output_index: data.output_index,
+      },
+      state.commentaryItemIds,
+      state.commentaryIndexes
+    )
+  ) {
+    return null;
   }
 
   // Text content delta
