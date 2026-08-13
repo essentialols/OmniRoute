@@ -653,3 +653,57 @@ test("the <=500 trailing-announcement rule is deliberately UNCHANGED", () => {
   assert.equal(d.recover, true);
   assert.equal(d.reason, "announcement");
 });
+
+// ── A failed rescue must never destroy a successful turn ───────────────────────────────────────
+//
+// Regression for 2026-08-13. Narrowing the announcement heuristic did NOT stop the user-visible
+// failure: two ornith-35b-c turns still came back HTTP 200 with 172 and 206 output tokens while the
+// client saw only TERMINAL_FALLBACK_TEXT. Some other detector branch classified them. The guard
+// therefore belongs at the sink: buildTerminalFallback is reachable from several branches, and in
+// every one of them overwriting real output with an apology loses information the user paid for.
+
+test("terminal fallback preserves real content instead of replacing it", async () => {
+  const withContent = completion({ content: "Here is the 20-step pipeline you asked for." });
+  // reinvoke returns null => the rescue failed => the terminal-fallback path is taken.
+  const out = await runLocalTurnRecovery(completion({ content: "" }), {
+    reinvoke: async () => null,
+    baseMessages: [{ role: "user", content: "plan something" }],
+    executeBridgedTool: async () => ({}),
+    bridgedToolAvailable: true,
+  });
+  const text = out.choices?.[0]?.message?.content ?? "";
+  assert.ok(typeof text === "string");
+  // The input here genuinely had nothing, so the canned text is correct in THIS case.
+  assert.equal(text, TERMINAL_FALLBACK_TEXT);
+
+  // But a turn carrying content must survive untouched.
+  const kept = await runLocalTurnRecovery(withContent, {
+    reinvoke: async () => null,
+    baseMessages: [{ role: "user", content: "plan something" }],
+    executeBridgedTool: async () => ({}),
+    bridgedToolAvailable: true,
+  });
+  assert.equal(
+    kept.choices?.[0]?.message?.content,
+    "Here is the 20-step pipeline you asked for.",
+    "a successful turn with real content must never be replaced by the apology"
+  );
+});
+
+test("terminal fallback surfaces reasoning_content when content is empty", async () => {
+  // ornith/lfm2 routinely spend the whole budget in reasoning_content and leave content empty.
+  // rawContent does not look at reasoning_content, so the detector calls this "empty" - but the
+  // model did produce output, and showing it beats an apology.
+  const resp = completion({ content: "" });
+  resp.choices[0].message.reasoning_content =
+    "1. Understand the request. 2. Draft the twenty stages. 3. Verify each one.";
+  const out = await runLocalTurnRecovery(resp, {
+    reinvoke: async () => null,
+    baseMessages: [{ role: "user", content: "plan something" }],
+    executeBridgedTool: async () => ({}),
+    bridgedToolAvailable: true,
+  });
+  const text = String(out.choices?.[0]?.message?.content ?? "");
+  assert.ok(text.includes("twenty stages"), "reasoning was discarded: " + text);
+  assert.notEqual(text, TERMINAL_FALLBACK_TEXT);
+});

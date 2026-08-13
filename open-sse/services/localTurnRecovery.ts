@@ -509,11 +509,53 @@ function buildAssistantToolCallMessage(message: JsonRecord | null): JsonRecord {
   };
 }
 
-function buildTerminalFallback(resp: JsonRecord): JsonRecord {
+/**
+ * Last resort when recovery could not produce a better turn.
+ *
+ * It must NEVER destroy output the model actually produced. A failed rescue means we have nothing
+ * better to offer, so overwriting a successful 200 with a twelve-word apology strictly loses
+ * information: the user pays for the tokens, waits for them, and is then told nothing happened.
+ *
+ * Observed 2026-08-13 on ornith-35b-c: two consecutive turns returned HTTP 200 with 172 and 206
+ * output tokens and the client saw only TERMINAL_FALLBACK_TEXT. Narrowing the announcement
+ * heuristic did not stop it, because some OTHER branch classified the turn, which is exactly why
+ * this guard belongs here at the sink rather than in any single detector.
+ *
+ * Order of preference:
+ *   1. real content            -> return the turn untouched
+ *   2. reasoning_content only  -> surface the reasoning; these models (ornith, lfm2) routinely
+ *                                 spend their whole budget there and leave `content` empty, and
+ *                                 rawContent deliberately does not look at it, so such a turn
+ *                                 reads as "empty" to the detector while carrying the real answer
+ *   3. genuinely nothing       -> the canned text, which is now the only case it can appear in
+ */
+function buildTerminalFallback(resp: JsonRecord, originalTurn?: JsonRecord): JsonRecord {
   const clone: JsonRecord = { ...resp };
   const choice = getFirstChoice(resp);
   const baseChoice = choice ? { ...choice } : { index: 0 };
-  baseChoice.message = { role: "assistant", content: TERMINAL_FALLBACK_TEXT };
+
+  // Prefer whatever the FIRST turn produced. By the time we get here the rescue has already
+  // failed, so we have nothing better to offer, and the first turn is the one the user actually
+  // paid for and waited on. Note this deliberately looks at `originalTurn`, not `resp`: `resp` is
+  // the RECOVERY's output, which in the dead-stop path is itself the useless announcement we just
+  // rejected, so preserving that instead would be worse than saying nothing.
+  const originalMessage = originalTurn ? getFirstMessage(originalTurn) : null;
+  const originalContent = rawContent(originalMessage);
+  if (originalContent.trim().length > 0) {
+    return originalTurn as JsonRecord;
+  }
+
+  // Nothing in `content`, but these models (ornith, lfm2) routinely spend their whole budget in
+  // `reasoning_content` and leave `content` empty. rawContent deliberately ignores that field, so
+  // such a turn reads as "empty" to the detector while still carrying the model's real work.
+  // Surfacing it beats a twelve-word apology.
+  const reasoning =
+    originalMessage && typeof originalMessage.reasoning_content === "string"
+      ? originalMessage.reasoning_content
+      : "";
+  const salvaged = reasoning.trim().length > 0 ? reasoning : TERMINAL_FALLBACK_TEXT;
+
+  baseChoice.message = { role: "assistant", content: salvaged };
   baseChoice.finish_reason = "stop";
   clone.choices = [baseChoice];
   return clone;
@@ -703,7 +745,7 @@ export async function runLocalTurnRecovery(
   messages.push({ role: "user", content: RECOVERY_NUDGE });
 
   const recovered = await ctx.reinvoke(messages);
-  if (!recovered) return buildTerminalFallback(current);
+  if (!recovered) return buildTerminalFallback(current, current);
 
   // The recovery attempt may itself emit a bridged tool call; execute it within the leftover budget.
   const afterRecovery = await bridgeToolLoop(recovered, messages, ctx, bridged.budget);
@@ -713,7 +755,7 @@ export async function runLocalTurnRecovery(
       "LOCAL_RECOVERY",
       "recovery attempt also dead-stopped; emitting terminal fallback"
     );
-    return buildTerminalFallback(afterRecovery.response);
+    return buildTerminalFallback(afterRecovery.response, current);
   }
   return afterRecovery.response;
 }
