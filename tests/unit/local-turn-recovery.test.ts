@@ -707,3 +707,30 @@ test("terminal fallback surfaces reasoning_content when content is empty", async
   assert.ok(text.includes("twenty stages"), "reasoning was discarded: " + text);
   assert.notEqual(text, TERMINAL_FALLBACK_TEXT);
 });
+
+// The recovery trace must ACTUALLY reach disk. The first attempt used `require`, which is
+// undefined in this ESM module, so every write threw into a silent catch and recorded nothing --
+// the same class of failure as ctx.log, which is wired but never reaches daemon.log. Instrumentation
+// that silently records nothing is worse than none, so this asserts a real file append.
+test("dead-turn classifications are recorded to disk", async () => {
+  const os = await import("node:os");
+  const fs = await import("node:fs");
+  const trace = `${os.homedir()}/.omniroute/local-recovery.log`;
+  const before = fs.existsSync(trace) ? fs.statSync(trace).size : 0;
+
+  await runLocalTurnRecovery(completion({ content: "" }), {
+    baseMessages: [],
+    executeBridgedTool: async () => ({}),
+    reinvoke: async () => null,
+  });
+
+  // The append is fire-and-forget; give the microtask + fs a moment.
+  await new Promise((r) => setTimeout(r, 200));
+  assert.ok(fs.existsSync(trace), "trace file was never created at " + trace);
+  const after = fs.statSync(trace).size;
+  assert.ok(after > before, "trace file did not grow; the write path is silently failing");
+  const last = fs.readFileSync(trace, "utf8").trim().split("\n").pop() || "";
+  const row = JSON.parse(last);
+  assert.equal(row.reason, "empty");
+  assert.equal(typeof row.content_len, "number");
+});

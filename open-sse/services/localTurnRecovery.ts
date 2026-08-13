@@ -529,6 +529,48 @@ function buildAssistantToolCallMessage(message: JsonRecord | null): JsonRecord {
  *                                 reads as "empty" to the detector while carrying the real answer
  *   3. genuinely nothing       -> the canned text, which is now the only case it can appear in
  */
+/**
+ * Append one line per dead-turn classification to a file.
+ *
+ * WHY A FILE AND NOT ctx.log: the logger IS wired (chatCore passes it), and the reason IS logged
+ * above, yet ~/.omniroute/daemon.log contains nothing but the startup banner. Application-level
+ * log lines do not reach disk, so the single most useful diagnostic in this module has been
+ * invisible. Two separate live incidents were debugged blind for exactly that reason.
+ *
+ * Deliberately records ONLY shape, never message text: reason, lengths, finish_reason, model.
+ * Set OMNIROUTE_RECOVERY_TRACE=0 to disable. Failures here must never affect a response.
+ */
+function recordRecoveryEvent(reason: string, turn: JsonRecord): void {
+  if ((process.env.OMNIROUTE_RECOVERY_TRACE ?? "1").trim() === "0") return;
+  try {
+    const msg = getFirstMessage(turn);
+    const choice = getFirstChoice(turn);
+    const reasoning =
+      msg && typeof msg.reasoning_content === "string" ? msg.reasoning_content.length : 0;
+    const line =
+      JSON.stringify({
+        t: new Date().toISOString(),
+        reason,
+        finish_reason:
+          choice && typeof choice.finish_reason === "string" ? choice.finish_reason : null,
+        content_len: rawContent(msg).trim().length,
+        reasoning_len: reasoning,
+        tool_calls: extractToolCalls(msg).length,
+        model: typeof turn.model === "string" ? turn.model : null,
+      }) + "\n";
+    // Dynamic import, not require: this file is ESM, so `require` is undefined here and threw
+    // straight into the catch below, writing nothing. Instrumentation that silently records
+    // nothing is worse than none, so this path is covered by a test.
+    void Promise.all([import("node:fs"), import("node:os")])
+      .then(([fs, os]) => {
+        fs.appendFileSync(`${os.homedir()}/.omniroute/local-recovery.log`, line);
+      })
+      .catch(() => {});
+  } catch {
+    // Diagnostics must never break a turn.
+  }
+}
+
 function buildTerminalFallback(resp: JsonRecord, originalTurn?: JsonRecord): JsonRecord {
   const clone: JsonRecord = { ...resp };
   const choice = getFirstChoice(resp);
@@ -691,6 +733,7 @@ export async function runLocalTurnRecovery(
   if (!detection.recover) return current;
 
   ctx.log?.info?.("LOCAL_RECOVERY", `dead-turn detected (${detection.reason}); resampling once`);
+  recordRecoveryEvent(detection.reason, current);
 
   // SALVAGE. A leaked tool call already contains the query the model wanted to run, so a bare
   // nudge-resample throws away work and usually just leaks again (observed: H1 gemma leaks,
