@@ -18,7 +18,12 @@ import path from "node:path";
  * The account-wide flag itself (`isExhausted` = AND across all windows, mirrored by
  * `hydrateQuotaCacheFromSnapshots`) is deliberately NOT changed here — reducing the
  * per-window flags with OR is what caused #5923/#4438. The model scope is a per-request
- * check layered on top, so it can only relax the aggregate, never tighten it.
+ * check computed from ONLY the requested model's own governing windows, so it decides that
+ * one request in BOTH directions (relax AND tighten) without ever touching the account-wide
+ * value. The tightening direction matters because the AND aggregate reports "available" as
+ * soon as one window is healthy — which sent requests to a model sitting at 0% and burned a
+ * 429 every time. The #5923 guard is that a sibling model on the SAME connection must stay
+ * unaffected; that is asserted explicitly below.
  */
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omni-quota-model-scope-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
@@ -163,5 +168,111 @@ test("a 429-marked account with no window data stays refused for every model", (
     quotaCache.isQuotaExhaustedForRequest(connectionId, "agy", "gemini-2.5-flash"),
     true,
     "no cached windows means nothing to scope to — the 429 cooldown must hold"
+  );
+});
+
+/**
+ * The tightening direction — the live bug this file was extended for.
+ *
+ * `isExhausted` is an AND across every window, so ONE healthy window makes the whole
+ * connection report "available". Measured 2026-08-10 on `agy`: the account aggregate was
+ * false (its `gemini-2.5-*` windows were fine) while `gemini-3.5-flash-medium` sat at
+ * `remaining_percentage` 0 / `is_exhausted` 1, reset 2026-08-14T02:07Z. The combo engine's
+ * quota pre-skip therefore did NOT skip it, dispatched, and ate a 429 — 3 wasted upstream
+ * 429s and ~4s of latency on every request before the combo fell through to a working step.
+ */
+test("agy: a model whose own window is exhausted is refused even when the account aggregate is false", () => {
+  const connectionId = "conn-agy-aggregate-available";
+  quotaCache.__clearForTests();
+
+  quotaCache.setQuotaCache(connectionId, "agy", {
+    // The burned model — its own window is the whole evidence base for this request.
+    "gemini-3.5-flash-medium": { remainingPercentage: 0, resetAt: isoAhead(82 * HOUR_MS) },
+    // Healthy siblings on the SAME connection. These are what make the AND aggregate false.
+    "gemini-2.5-flash": { remainingPercentage: 100, resetAt: isoAhead(11 * HOUR_MS) },
+    "claude-sonnet-4-6": { remainingPercentage: 42, resetAt: isoAhead(5 * 24 * HOUR_MS) },
+  });
+
+  assert.equal(
+    quotaCache.isAccountQuotaExhausted(connectionId),
+    false,
+    "precondition: the account-wide aggregate reports the connection as AVAILABLE"
+  );
+
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(connectionId, "agy", "gemini-3.5-flash-medium"),
+    true,
+    "the requested model's own window is at 0% — it must be pre-skipped, not sent a 429"
+  );
+
+  // ── #5923 guard ──────────────────────────────────────────────────────────────
+  // #5923 was one dead window being OR-ed into the ACCOUNT-WIDE verdict, which blocked
+  // every model on the connection. The verdict above is computed from the requested
+  // model's own windows only, so the siblings sharing this connection must be untouched.
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(connectionId, "agy", "gemini-2.5-flash"),
+    false,
+    "#5923 guard: a sibling model with a healthy window on the SAME connection stays available"
+  );
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(connectionId, "agy", "claude-sonnet-4-6"),
+    false,
+    "#5923 guard: a partially-used sibling window is not exhaustion"
+  );
+  assert.equal(
+    quotaCache.isAccountQuotaExhausted(connectionId),
+    false,
+    "#5923 guard: the account-wide aggregate itself must NOT have been tightened"
+  );
+  assert.equal(
+    quotaCache.getQuotaCache(connectionId)?.exhausted,
+    false,
+    "#5923 guard: the cached connection-level flag is never written by the per-request check"
+  );
+
+  // Unscopable requests keep falling back to the (available) account-wide verdict.
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(connectionId, "agy", null),
+    false,
+    "no requested model — nothing to scope to, so the account verdict (available) stands"
+  );
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(connectionId, "agy", "gemini-2.5-flash-lite"),
+    false,
+    "an absent window is still missing evidence, not evidence of exhaustion — fail open"
+  );
+});
+
+test("an unregistered provider is never tightened by a single dead window", () => {
+  const connectionId = "conn-generic-provider-mixed";
+  quotaCache.__clearForTests();
+
+  quotaCache.setQuotaCache(connectionId, "kimi-coding", {
+    "session (5h)": { remainingPercentage: 0, resetAt: isoAhead(2 * HOUR_MS) },
+    "weekly (7d)": { remainingPercentage: 80, resetAt: isoAhead(3 * 24 * HOUR_MS) },
+  });
+
+  assert.equal(quotaCache.isAccountQuotaExhausted(connectionId), false);
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(connectionId, "kimi-coding", "kimi-k2-thinking"),
+    false,
+    "a provider with no per-model window registry keeps the account-wide verdict verbatim"
+  );
+});
+
+test("agy: a window whose reset already passed does not tighten the verdict", () => {
+  const connectionId = "conn-agy-expired-window";
+  quotaCache.__clearForTests();
+
+  quotaCache.setQuotaCache(connectionId, "agy", {
+    // 0% remaining, but the window rolled over an hour ago.
+    "gemini-3.5-flash-medium": { remainingPercentage: 0, resetAt: isoAhead(-1 * HOUR_MS) },
+    "gemini-2.5-flash": { remainingPercentage: 100, resetAt: isoAhead(11 * HOUR_MS) },
+  });
+
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(connectionId, "agy", "gemini-3.5-flash-medium"),
+    false,
+    "a stale 0% reading past its own resetAt must not pin the model shut"
   );
 });

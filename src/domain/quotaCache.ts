@@ -208,11 +208,26 @@ export function __clearForTests() {
 /**
  * Per-request quota verdict, scoped to the model that was actually asked for.
  *
- * Layered ON TOP of the account-wide `isAccountQuotaExhausted()` aggregate — it can
- * only ever RELAX it, never tighten it. The aggregate's AND-across-windows semantics
- * (and the snapshot hydration that mirrors them) stay untouched on purpose: reducing
- * per-window flags with OR is what caused #5923/#4438, where one dead window blocked
- * every model on the connection.
+ * The account-wide `isAccountQuotaExhausted()` aggregate is the DEFAULT verdict, used
+ * verbatim whenever the request cannot be scoped to a model's own quota windows. When it
+ * CAN be scoped, the governing windows are AUTHORITATIVE IN BOTH DIRECTIONS:
+ *   - not all governing windows exhausted -> available, even if the aggregate says exhausted
+ *   - all governing windows exhausted     -> exhausted, even if the aggregate says available
+ *
+ * The tightening direction exists because the aggregate is an AND across every window, so a
+ * single healthy window makes the whole connection look available and a model whose OWN
+ * window is at 0% got dispatched and ate a 429. Observed 2026-08-10 on `agy`:
+ * `gemini-3.5-flash-medium` at `remaining_percentage` 0 / `is_exhausted` 1 (reset
+ * 2026-08-14T02:07Z) was reported available because the `gemini-2.5-*` windows were at 100%,
+ * costing 3 wasted upstream 429s per request before the combo fell through.
+ *
+ * This is NOT the #5923/#4438 failure mode. Those were caused by OR-ing per-window flags into
+ * the ACCOUNT-WIDE value (`entry.exhausted` and its snapshot-hydration mirror), so one dead
+ * window blocked EVERY model on the connection. Nothing here writes to or widens that
+ * aggregate: `isExhausted()`, `setQuotaCache()` and `hydrateQuotaCacheFromSnapshots()` are
+ * untouched, and the verdict below is recomputed per request from ONLY the windows that
+ * `quotaWindowScopes` says govern the requested model. A dead window can therefore block just
+ * the model(s) it actually keys; every sibling model on the same connection is unaffected.
  *
  * Which windows govern a model is provider-specific and lives in
  * `domain/quotaWindowScopes` (codex scope labels, antigravity/agy model-keyed windows).
@@ -223,25 +238,32 @@ export function isQuotaExhaustedForRequest(
   provider: string,
   requestedModel: string | null = null
 ): boolean {
-  // NOTE: also hydrates the cache from persisted snapshots, so the `getQuotaCache`
-  // read below sees the snapshot-backed windows rather than an empty entry.
-  if (!isAccountQuotaExhausted(connectionId)) return false;
+  // MUST stay first on every path: besides producing the account-wide verdict this also
+  // hydrates the cache from persisted snapshots, so the `getQuotaCache` read below sees the
+  // snapshot-backed windows rather than an empty entry on a cold cache.
+  const accountExhausted = isAccountQuotaExhausted(connectionId);
+
   const filterWindow = getQuotaWindowFilterForRequest(provider, requestedModel);
-  if (!filterWindow) return true;
+  // Provider absent from the scope registry, or no model requested — nothing to scope to.
+  if (!filterWindow) return accountExhausted;
+
   const entry = getQuotaCache(connectionId);
   const quotaNames = Object.keys(entry?.quotas || {});
   // No window data at all (e.g. `markAccountExhaustedFrom429`) — nothing to scope to,
-  // so the account-wide verdict stands.
-  if (quotaNames.length === 0) return true;
+  // so the account-wide verdict stands and the 429 cooldown keeps refusing.
+  if (quotaNames.length === 0) return accountExhausted;
+
   const scopedWindowNames = quotaNames.filter((windowName) => filterWindow(windowName));
   // No window matched the requested model: the upstream usage fetch only returns a
   // subset of windows, so an absent window is missing evidence, not evidence of
   // exhaustion. Fail open (as the codex branch already did) rather than refuse.
-  return (
-    scopedWindowNames.length > 0 &&
-    scopedWindowNames.every(
-      (windowName) => getQuotaWindowStatus(connectionId, windowName, 100)?.reachedThreshold
-    )
+  if (scopedWindowNames.length === 0) return false;
+
+  // Governing windows found — they, and only they, decide this request. A window whose
+  // `resetAt` already passed reports `reachedThreshold: false` (see `getQuotaWindowStatus`),
+  // so a stale 0% reading cannot pin a model shut past its own reset.
+  return scopedWindowNames.every(
+    (windowName) => getQuotaWindowStatus(connectionId, windowName, 100)?.reachedThreshold
   );
 }
 
