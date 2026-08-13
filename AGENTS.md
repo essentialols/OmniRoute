@@ -590,6 +590,7 @@ For any non-trivial change, read the matching deep-dive first:
 | Architecture                               | [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md)                                        |
 | Engineering reference                      | [`docs/architecture/CODEBASE_DOCUMENTATION.md`](docs/architecture/CODEBASE_DOCUMENTATION.md)                    |
 | Auto-Combo (12-factor, 18 strategies)      | [`docs/routing/AUTO-COMBO.md`](docs/routing/AUTO-COMBO.md)                                                      |
+| Local turn recovery (dead-turn repair)     | [`docs/routing/LOCAL-TURN-RECOVERY.md`](docs/routing/LOCAL-TURN-RECOVERY.md)                                    |
 | Resilience (3 layers)                      | [`docs/architecture/RESILIENCE_GUIDE.md`](docs/architecture/RESILIENCE_GUIDE.md)                                |
 | Skills                                     | [`docs/frameworks/SKILLS.md`](docs/frameworks/SKILLS.md)                                                        |
 | Memory                                     | [`docs/frameworks/MEMORY.md`](docs/frameworks/MEMORY.md)                                                        |
