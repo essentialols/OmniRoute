@@ -594,3 +594,62 @@ test("requestDeclaresBridgeableTool: both wire shapes, and no false positives", 
   assert.equal(requestDeclaresBridgeableTool(null), false);
   assert.equal(requestDeclaresBridgeableTool(undefined), false);
 });
+
+// ── Announcement at unlimited length needs a CLAIM OF RESULTS to be fabrication ────────────────
+//
+// Regression for a live incident on 2026-08-13. A user asked ornith-35b-c (local lane) to build a
+// 20-step workflow pipeline. Upstream returned HTTP 200 with 332 output tokens of real planning
+// prose. The client saw only TERMINAL_FALLBACK_TEXT, twice in a row: the unlimited-length branch
+// matched on announcement language alone, the rescue resample then failed, and a correct answer was
+// deleted and replaced with a 12-word apology.
+//
+// That branch's documented safety property was `bridgedToolAvailable`, but Claude Code offers
+// WebSearch/WebFetch on essentially every request, so the gate is true almost always and cannot
+// carry the weight. Announcing AND claiming results already in hand is what separates fabrication
+// from planning.
+//
+// NOTE the division of labour, which these tests pin: the <=500 branch inspects only the TRAILING
+// sentences, so "announced an action and then stopped" is still a dead turn and is still recovered.
+// Only the unlimited-length branch is narrowed here.
+
+test("LONG planning prose that announces actions is NOT a dead turn, tool available", () => {
+  const planning =
+    "Here is how I will approach the 20-step pipeline for the game. " +
+    "Each stage covers brainstorming, puzzle design, implementation and verification. ".repeat(8) +
+    "I will use the existing workflow conventions rather than inventing new ones.";
+  assert.ok(planning.length > 500, "fixture must exceed 500 chars to reach the branch under test");
+  const d = detectDeadTurn(completion({ content: planning }), true);
+  assert.equal(d.recover, false, "planning claims no results, so it is not fabrication");
+  assert.equal(d.reason, "ok");
+});
+
+test("a LONG correct answer whose last sentence announces is NOT a dead turn", () => {
+  const long =
+    "Here is the full design for the game. " +
+    "The verb-coin interface needs nine verbs and an inventory pane. ".repeat(30) +
+    "Let me run through the remaining steps.";
+  assert.ok(long.length > 500);
+  assert.equal(detectDeadTurn(completion({ content: long }), true).recover, false);
+});
+
+test("LONG announcement PLUS a claim of results is still caught as fabrication", () => {
+  const fabricated =
+    "I'll search for Monkey Island design documents and pull the relevant ones. " +
+    "Here's what I found: the SCUMM engine shipped in 1990 and the verb list was standardised. " +
+    "Community archives host scans of the original design notes and puzzle dependency charts. ".repeat(
+      4
+    );
+  assert.ok(fabricated.length > 500);
+  const d = detectDeadTurn(completion({ content: fabricated }), true);
+  assert.equal(d.recover, true, "announce + results-claim is the fabrication shape");
+  assert.equal(d.reason, "announced_without_tool_call");
+});
+
+test("the <=500 trailing-announcement rule is deliberately UNCHANGED", () => {
+  // Announced an action and then stopped: still a dead turn, still worth a nudge.
+  const short = "I will read the plan document and summarise the twenty stages.";
+  assert.ok(short.length <= 500);
+  const d = detectDeadTurn(completion({ content: short }), true);
+  assert.equal(d.recover, true);
+  assert.equal(d.reason, "announcement");
+});

@@ -86,6 +86,12 @@ const LEAK_RE =
 const ANNOUNCE_RE =
   /(?:i(?:'ll| will| am going to)|i'?m going to|let me|let's|next[, ]+i(?:'ll| will))\s+(?:actually\s+)?(?:call|use|run|read|inspect|check|search|browse|fetch|dispatch|delegate|open|look up|make (?:those|these|the) calls?)|next action:\s*(?:dispatch|search|run|read|fetch|call|use|browse)|make (?:those|these|the) calls? now/i;
 
+// Claim that results are already in hand. Pairs with ANNOUNCE_RE to separate fabrication ("I'll
+// search ... here's what I found") from ordinary planning ("I'll check the conventions first").
+// Only the combination is evidence; either alone appears constantly in correct answers.
+const RESULTS_CLAIM_RE =
+  /here(?:'|’)?s what i (?:found|got)|here is what i (?:found|got)|key findings|search results?\s*:|based on (?:my|the) search|according to (?:my|the) search|\(\s*hypothetical|i (?:found|retrieved|located)\s+(?:the following|these|several|a few)/i;
+
 // False-capability refusal ("I don't have the ability to search the web", "I can't browse online").
 //
 // The refusal must name a CAPABILITY or TOOLING object, not just any object. An unqualified
@@ -260,7 +266,23 @@ export function detectDeadTurn(
   // `bridgedToolAvailable`: a turn that never had a search tool cannot be failing to call one, so
   // an ordinary long answer that merely mentions searching is untouched.
   if (bridgedToolAvailable && !norm.endsWith("?")) {
-    if (ANNOUNCE_RE.test(norm)) return { recover: true, reason: "announced_without_tool_call" };
+    // The announcement alone is NOT sufficient evidence at unlimited length. `bridgedToolAvailable`
+    // was documented above as the safety property, but Claude Code offers WebSearch/WebFetch on
+    // essentially every request, so that gate is true almost always and cannot carry the weight.
+    // Measured false positives with announcement-only matching: a 192-char planning turn ("I will
+    // build a 20-step pipeline. Let me check the existing conventions first"), a 62-char "I will
+    // read the plan document", and a 1997-char correct answer whose LAST sentence happened to be
+    // "Let me run through the remaining steps." Each was replaced by TERMINAL_FALLBACK_TEXT, so a
+    // real 200 response with hundreds of output tokens reached the user as a 12-word apology.
+    // Observed 2026-08-13 on ornith-35b-c: two consecutive turns destroyed this way.
+    //
+    // Fabrication is what this rule exists to catch, and fabrication announces AND THEN CLAIMS
+    // RESULTS ("I'll search for X ... Here's what I found: ... (Hypothetical Approach)"). Require
+    // both. Announcing an action you are about to take, with no claim of having already taken it,
+    // is ordinary planning prose and must survive.
+    if (ANNOUNCE_RE.test(norm) && RESULTS_CLAIM_RE.test(norm)) {
+      return { recover: true, reason: "announced_without_tool_call" };
+    }
     // A refusal is PROVABLY false when the tool was on the request. Observed verbatim from H1
     // gemma: "I do not have access to a web search tool or any other external tools by default.
     // Therefore, I cannot perform a live web search for you. However, based on my internal
