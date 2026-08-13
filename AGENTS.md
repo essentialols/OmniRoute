@@ -80,6 +80,56 @@ codebase. Run it locally before pushing docs; it runs in CI via `npm run check:d
 | `.build/` | Build intermediates (`distDir = .build/next`)      | Yes        |
 | `dist/`   | Shippable bundle assembled by `assembleStandalone` | Yes        |
 
+> **Local daemon safety:** `com.omniroute.gateway` runs this checkout directly. Do not
+> restart/kickstart it while `dist/` is absent (for example, during the initial
+> `rm -rf .build dist` phase of `build:release`). `serve.mjs` selects `dist/` or the
+> legacy `app/` directory once at process startup; if launched during that gap it locks
+> onto missing `app/server.js` and the API remains unavailable even after the build
+> restores `dist/server.js`. Finish the build first, verify `dist/server.js` exists, then
+> restart the LaunchAgent once.
+
+> **Claude Code `ConnectionRefused` on this machine:** FFF/Claude sessions do not
+> connect directly to OmniRoute. They export `HTTP_PROXY` and `HTTPS_PROXY` as
+> `http://127.0.0.1:18888`; that listener is `com.claude-inspector.daemon`, which
+> then routes focused agents to OmniRoute on `:20128`. If OmniRoute health on
+> `:20128` is 200 but Claude reports `ConnectionRefused`, check/restart the inspector
+> LaunchAgent and verify both listeners. Restarting OmniRoute alone cannot repair a
+> missing `:18888` proxy.
+> The inspector LaunchAgent must use unconditional `KeepAlive=true`; crash-only
+> keepalive does not recover when agent cleanup sends SIGKILL, because launchd may
+> classify that as an intentional stop. Do not weaken it back to `Crashed=true`.
+
+> **Validating the route: `--noproxy ''` is mandatory.** A listening socket is not proof
+> the route works, and curl bypasses a proxy for localhost by default, so a probe without
+> `--noproxy ''` silently tests the DIRECT path and reports success while `:18888` is dead.
+> Both of these must return healthy before dispatching or resuming agents:
+>
+> ```
+> curl -fsS --max-time 10 http://127.0.0.1:20128/api/monitoring/health | jq '{status, version}'
+> curl -fsS --max-time 10 --proxy http://127.0.0.1:18888 --noproxy '' \
+>   http://127.0.0.1:20128/api/monitoring/health | jq '{status, version}'
+> ```
+
+> **What actually gets served (get this wrong and your fix is dead on arrival):** the running
+> daemon executes the COMPILED bundle under `dist/.build`. It is NOT the loose `.ts` files, and
+> NOT `dist/open-sse/**.ts`, which are copied alongside and go stale, making it look as though
+> source is being served. `bin/omniroute.mjs` does register `tsx/esm`, which reinforces the
+> illusion. Consequence: editing repo source and restarting changes NOTHING. A source change only
+> goes live after a rebuild whose output reaches `dist/.build`. Verify before and after with a
+> symbol that only your change introduces:
+> `rg -l '<yourNewSymbol>' dist/.build | wc -l` (0 = not deployed), plus a positive control on a
+> symbol you know is already present.
+
+> **Deploying while this checkout is live:** never build over the active artifact.
+> `build:release` deletes `.build` and `dist/` up front, so running it here takes
+> production down for the length of the build. Build and validate in a SEPARATE staging
+> checkout, confirm `dist/server.js` and `dist/BUILD_SHA` exist there, then switch the
+> artifact atomically and `launchctl kickstart -k` only the one affected service. Never
+> restart both by default, never kill/crash-test in production, and before a planned
+> restart stop new agent dispatch and let in-flight requests drain (`lsof -nP -iTCP:20128`).
+> If a probe fails afterwards, read `~/.omniroute/daemon.err.log`, `~/.omniroute/daemon.log`
+> and `~/.claude-inspector/daemon.log` rather than restarting repeatedly.
+
 The pipeline is a single `next build` pass — intermediates land in `.build/next/`, the
 assembled bundle in `dist/`. VPS deploys rsync `dist/` into the remote
 `/usr/lib/node_modules/omniroute/app/` directory (VPS image path is unchanged).
