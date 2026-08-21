@@ -29,9 +29,11 @@ describe("issue #6400 — HEAD /v1/models returns immediately", () => {
   });
 
   it("HEAD returns 200 with a null body (no streaming)", async () => {
-    const head = (modelsRoute as unknown as {
-      HEAD: () => Promise<Response>;
-    }).HEAD;
+    const head = (
+      modelsRoute as unknown as {
+        HEAD: () => Promise<Response>;
+      }
+    ).HEAD;
     const response = await head();
     assert.equal(response.status, 200);
     assert.equal(response.body, null, "HEAD body must be null per RFC 9110 §9.3.2");

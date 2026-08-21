@@ -27,7 +27,10 @@ export function useChaosConfigPage() {
   const addOverride = useCallback(() => {
     setConfig((prev) => ({
       ...prev,
-      providerOverrides: [...prev.providerOverrides, { providerId: "", modelId: "", enabled: true }],
+      providerOverrides: [
+        ...prev.providerOverrides,
+        { providerId: "", modelId: "", enabled: true },
+      ],
     }));
   }, [setConfig]);
 

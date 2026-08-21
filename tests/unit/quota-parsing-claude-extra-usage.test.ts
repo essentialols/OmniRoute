@@ -71,7 +71,11 @@ test("#6806: parseQuotaData still surfaces extraUsage credits when quotas is als
 
   const parsed = parseQuotaData("claude", data);
 
-  assert.equal(parsed.length, 2, `expected session quota + credits row, got: ${JSON.stringify(parsed)}`);
+  assert.equal(
+    parsed.length,
+    2,
+    `expected session quota + credits row, got: ${JSON.stringify(parsed)}`
+  );
   const creditRow = parsed.find((row: QuotaRow) => row.isCredits);
   assert.ok(creditRow, "expected a credits-style quota row derived from extraUsage");
   assert.equal(creditRow.remainingPercentage, 80, "utilization 20% means 80% remaining");
@@ -94,5 +98,8 @@ test("#6806: parseQuotaData does not add a credits row when extraUsage is disabl
   const parsed = parseQuotaData("claude", data);
 
   assert.equal(parsed.length, 1, `expected only the session quota, got: ${JSON.stringify(parsed)}`);
-  assert.equal(parsed.some((row: QuotaRow) => row.isCredits), false);
+  assert.equal(
+    parsed.some((row: QuotaRow) => row.isCredits),
+    false
+  );
 });
