@@ -15,6 +15,7 @@ import { getModelSpec } from "../../../src/shared/constants/modelSpecs.ts";
 import {
   buildChangedToolNameMap,
   buildHistoricalToolResultContext,
+  extractClientThoughtSignature,
   mergeConsecutiveSameRoleContents,
   type GeminiContent,
 } from "./openai-to-gemini/helpers.ts";
@@ -45,6 +46,17 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
     typeof credentials._signatureNamespace === "string"
       ? credentials._signatureNamespace
       : null;
+  // Only thinking-tier Gemini models validate thought_signature on historical
+  // functionCall parts. Same heuristic openaiToAntigravityRequest uses
+  // (openai-to-gemini.ts), so non-thinking targets keep their native tool history
+  // instead of being flattened into context text they never needed.
+  const modelLower = String(model || "").toLowerCase();
+  const isThinkingGemini =
+    !modelLower.includes("claude") &&
+    (modelLower.includes("thinking") ||
+      modelLower.includes("gemini-3") ||
+      modelLower.includes("gemini-2.5") ||
+      modelLower.includes("gemini-pro"));
   const result: {
     model: string;
     contents: GeminiContent[];
@@ -104,8 +116,11 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
   // Standard Gemini rejects signature-less native functionCall parts with
   // HTTP 400 (#8979). Match the OPENAI→GEMINI "context" policy (#3688): only
   // emit native functionCall/functionResponse when a real signature is
-  // available; otherwise represent history as context text.
+  // available; otherwise represent history as context text. The signature is
+  // captured on the response turn by gemini-to-claude.ts under
+  // `<connectionId>:<toolCallId>` and re-attached here (#2504).
   const toolUseNames: Record<string, string> = {};
+  const rawToolUseNames: Record<string, string> = {};
   const resolvedSignatures = new Map<string, string>();
   if (body.messages && Array.isArray(body.messages)) {
     for (const msg of body.messages) {
@@ -113,13 +128,10 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
         for (const block of msg.content) {
           if (block.type === "tool_use" && block.id && block.name) {
             toolUseNames[block.id] = sanitizeToolName(block.name);
-            const clientSignature =
-              (typeof block.thoughtSignature === "string" && block.thoughtSignature) ||
-              (typeof block.thought_signature === "string" && block.thought_signature) ||
-              null;
+            rawToolUseNames[block.id] = block.name;
             const resolved = resolveGeminiThoughtSignature(
               buildGeminiThoughtSignatureKey(signatureNamespace, block.id),
-              clientSignature
+              extractClientThoughtSignature(block)
             );
             if (typeof resolved === "string" && resolved.length > 0) {
               resolvedSignatures.set(block.id, resolved);
@@ -137,6 +149,9 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
     const omittedToolCallIds = new Set<string>();
     for (const msg of body.messages) {
       const parts = [];
+      // Gemini wants the signature on the FIRST functionCall part of a model turn
+      // only; repeating it across a parallel tool-call batch is rejected (#1316).
+      // Spend the first resolvable signature of the turn once.
       let shouldUseEmbeddedSignature = true;
 
       if (Array.isArray(msg.content)) {
@@ -156,8 +171,12 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
             case "tool_use": {
               const signatureForToolCall = resolvedSignatures.get(block.id);
               // Signature-less historical tool_use → omit native functionCall
-              // (context mode). Matching tool_result becomes context text below.
-              if (!signatureForToolCall) {
+              // (context mode, #3688). The paired tool_result is emitted as inert
+              // context text below, which keeps the transcript readable without a
+              // pseudo tool-call record the model can echo back as its answer.
+              // Only thinking-tier Gemini validates thought_signature, so
+              // non-thinking targets keep their native (unsigned) tool history.
+              if (isThinkingGemini && !signatureForToolCall) {
                 break;
               }
 
@@ -196,12 +215,16 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
               const toolUseId = block.tool_use_id;
               const name = toolUseNames[toolUseId] || "unknown";
 
-              // Signature-less history: represent as context text so Gemini 3+
-              // does not reject a native functionResponse without a matching
-              // signed functionCall (#8979 / #3688).
-              if (!resolvedSignatures.has(toolUseId)) {
+              // Signature-less history: the matching functionCall was omitted above,
+              // so represent this as context text instead of an orphaned native
+              // functionResponse Gemini 3+ would reject (#8979 / #3688). Only
+              // thinking-tier targets need this; the rest keep native tool history.
+              if (isThinkingGemini && !resolvedSignatures.has(toolUseId)) {
                 parts.push({
-                  text: buildHistoricalToolResultContext(name, content),
+                  text: buildHistoricalToolResultContext(
+                    rawToolUseNames[toolUseId] || name,
+                    content
+                  ),
                 });
                 break;
               }
@@ -236,6 +259,10 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
       if (parts.length > 0) {
         // Map Claude roles to Gemini roles
         const geminiRole = msg.role === "assistant" ? "model" : "user";
+
+        // Gemini 3+ expects the signature on the functionCall part itself. It is
+        // attached above from the signature cache; a fake one is never injected
+        // because the Gemini API validates it strictly and returns 400.
         result.contents.push({ role: geminiRole, parts });
       }
     }
