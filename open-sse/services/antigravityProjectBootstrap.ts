@@ -29,10 +29,24 @@ const LOAD_CODE_ASSIST_PATH = "/v1internal:loadCodeAssist";
 const BOOTSTRAP_TIMEOUT_MS = 8_000;
 const ONBOARD_TIMEOUT_MS = 15_000;
 const DEFAULT_TIER_ID = "legacy-tier";
+// onboardUser is a long-running operation. In practice Google reports `done` on the 2nd
+// poll; cap the attempts so a request can never hang on a stuck LRO.
+const ONBOARD_MAX_ATTEMPTS = 4;
+const ONBOARD_POLL_INTERVAL_MS = 5_000;
 
 /** Ordered list of loadCodeAssist endpoint URLs. */
 export function getAntigravityLoadCodeAssistUrls(): string[] {
   return ANTIGRAVITY_BOOTSTRAP_BASE_URLS.map((base) => `${base}${LOAD_CODE_ASSIST_PATH}`);
+}
+
+/** `cloudaicompanionProject` is either a bare string or an object carrying `id`. */
+export function extractCloudaicompanionProjectId(value: unknown): string {
+  const raw = (value as Record<string, unknown> | undefined)?.cloudaicompanionProject;
+  if (typeof raw === "string") return raw.trim();
+  if (raw && typeof raw === "object" && typeof (raw as Record<string, unknown>).id === "string") {
+    return ((raw as Record<string, unknown>).id as string).trim();
+  }
+  return "";
 }
 
 /** Max entries in the per-token caches (prevents unbounded growth). */
@@ -83,6 +97,9 @@ function markRequiresManualProject(key: string): void {
 /** Outcome of an onboardUser attempt — three-way so the caller can distinguish
  * "transient failure (retry later)" from "Google says bring your own project". */
 type AntigravityOnboardStatus = "onboarded" | "requires_manual_project" | "failed";
+
+/** onboardUser outcome plus the project id Google returned in the LRO envelope (if any). */
+type AntigravityOnboardResult = { status: AntigravityOnboardStatus; projectId?: string };
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -165,7 +182,12 @@ async function tryLoadCodeAssist(
 /**
  * Attempt onboardUser to create a Cloud Code project for the account.
  * Called when loadCodeAssist returns no project — the account has never
- * been onboarded. Returns true if any endpoint reports success.
+ * been onboarded.
+ *
+ * onboardUser is a long-running operation, so a 200 answer with `done: false` means the
+ * project is still being provisioned: poll (bounded) instead of treating it as a failure or
+ * as BYOP. When Google reports the provisioned project inside the LRO `response` envelope we
+ * return it directly, which saves the caller a second loadCodeAssist round-trip.
  */
 async function tryOnboardUser(
   accessToken: string,
@@ -173,53 +195,94 @@ async function tryOnboardUser(
   clientProfile: AntigravityClientProfile,
   tierId: string,
   signal?: AbortSignal
-): Promise<AntigravityOnboardStatus> {
+): Promise<AntigravityOnboardResult> {
   const urls = getAntigravityOnboardUrls();
   const headers = getAntigravityContentHeaders(clientProfile, accessToken);
 
   for (const url of urls) {
     if (signal?.aborted) throw signal.reason;
-    try {
-      const timeoutSignal = AbortSignal.timeout(ONBOARD_TIMEOUT_MS);
-      const response = await fetchImpl(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          tier_id: tierId,
-          metadata: getAntigravityLoadCodeAssistMetadata(),
-        }),
-        signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
-      });
+    let pendingLro = false;
+    for (let attempt = 1; attempt <= ONBOARD_MAX_ATTEMPTS; attempt++) {
+      if (signal?.aborted) throw signal.reason;
+      try {
+        const timeoutSignal = AbortSignal.timeout(ONBOARD_TIMEOUT_MS);
+        const response = await fetchImpl(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            tier_id: tierId,
+            metadata: getAntigravityLoadCodeAssistMetadata(),
+          }),
+          signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+        });
 
-      if (response.ok) {
-        // Accounts Google expects to Bring Their Own Project: onboardUser
-        // returns 200 without a `cloudaicompanionProject` in the body — no
-        // automatic project creation for standard-tier/personal accounts
-        // (tracked in #8491). Detect that so we can fail fast with a clear
-        // instruction instead of retrying forever or fabricating an id that
-        // Google later rejects with a delayed 429 RESOURCE_EXHAUSTED.
-        const body = await response.text().catch(() => "");
-        if (body && !/cloudaicompanionProject/.test(body)) {
-          console.warn(
-            `[models] antigravity onboardUser done but no project in response at ${url} — Google BYOP (user-defined GCP project) required`
-          );
-          return "requires_manual_project";
+        if (response.ok) {
+          const body = await response.text().catch(() => "");
+          let payload: Record<string, unknown> = {};
+          try {
+            payload = body ? (JSON.parse(body) as Record<string, unknown>) : {};
+          } catch {
+            payload = {};
+          }
+
+          // Google returns the provisioned project inside the LRO `response` envelope
+          // (some endpoints put it at the top level instead).
+          const projectId =
+            extractCloudaicompanionProjectId(payload.response) ||
+            extractCloudaicompanionProjectId(payload);
+          if (projectId) {
+            console.warn(
+              `[models] antigravity onboardUser provisioned project ${projectId} (tier=${tierId})`
+            );
+            return { status: "onboarded", projectId };
+          }
+
+          // Still provisioning — re-poll rather than misreading an in-flight LRO as BYOP.
+          if (payload.done === false) {
+            pendingLro = true;
+            if (attempt < ONBOARD_MAX_ATTEMPTS) {
+              await new Promise((resolve) => setTimeout(resolve, ONBOARD_POLL_INTERVAL_MS));
+              continue;
+            }
+            console.warn(
+              `[models] antigravity onboardUser still running after ${ONBOARD_MAX_ATTEMPTS} polls at ${url} — trying next`
+            );
+            break;
+          }
+
+          // Accounts Google expects to Bring Their Own Project: onboardUser
+          // returns 200 without a `cloudaicompanionProject` in the body — no
+          // automatic project creation for standard-tier/personal accounts
+          // (tracked in #8491). Detect that so we can fail fast with a clear
+          // instruction instead of retrying forever or fabricating an id that
+          // Google later rejects with a delayed 429 RESOURCE_EXHAUSTED.
+          if (body && !/cloudaicompanionProject/.test(body)) {
+            console.warn(
+              `[models] antigravity onboardUser done but no project in response at ${url} — Google BYOP (user-defined GCP project) required`
+            );
+            return { status: "requires_manual_project" };
+          }
+          return { status: "onboarded" };
         }
-        return "onboarded";
-      }
 
-      console.warn(
-        `[models] antigravity onboardUser failed at ${url} (${response.status}) — trying next`
-      );
-    } catch (error) {
-      if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
-        throw signal?.reason ?? error;
+        console.warn(
+          `[models] antigravity onboardUser failed at ${url} (${response.status}) — trying next`
+        );
+        break;
+      } catch (error) {
+        if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+          throw signal?.reason ?? error;
+        }
+        const msg = error instanceof Error ? error.message : String(error);
+        console.warn(`[models] antigravity onboardUser threw for ${url}: ${msg} — trying next`);
+        break;
       }
-      const msg = error instanceof Error ? error.message : String(error);
-      console.warn(`[models] antigravity onboardUser threw for ${url}: ${msg} — trying next`);
     }
+    // A still-running LRO is transient: leave it to the failure backoff rather than
+    // marking the account BYOP.
+    if (pendingLro) return { status: "failed" };
   }
-  return "failed";
+  return { status: "failed" };
 }
 
 /**
@@ -310,23 +373,27 @@ export async function ensureAntigravityProjectAssigned(
         let succeeded = false;
         let requiresManual = false;
         try {
-          const status = await tryOnboardUser(
+          const onboard = await tryOnboardUser(
             accessToken,
             fetchImpl,
             clientProfile,
             tierId,
             signal
           );
-          if (status === "requires_manual_project") {
+          if (onboard.status === "requires_manual_project") {
             markRequiresManualProject(cacheKey);
             requiresManual = true;
             return;
           }
-          if (status === "onboarded") {
-            const retry = await tryLoadCodeAssist(accessToken, fetchImpl, clientProfile, signal);
-            if (retry.projectId) {
+          if (onboard.status === "onboarded") {
+            // Prefer the project onboardUser itself reported; only re-run discovery when
+            // the LRO envelope carried none.
+            const provisioned =
+              onboard.projectId ||
+              (await tryLoadCodeAssist(accessToken, fetchImpl, clientProfile, signal)).projectId;
+            if (provisioned) {
               evictOldest(projectCache);
-              projectCache.set(cacheKey, retry.projectId);
+              projectCache.set(cacheKey, provisioned);
               succeeded = true;
               return;
             }
