@@ -59,10 +59,12 @@ test("markAccountUnavailable skips transient cooldown when disableCooling is set
   assert.ok(after.lastError, "lastError must still be recorded");
 });
 
-// #2997 — Test 2 (load-bearing): the flag must NEVER rescue a terminal state.
-// A 401 still expires the connection; a 402 still exhausts credits — both DESPITE
+// #2997 — Test 2 (load-bearing): the flag must NEVER rescue a genuinely terminal
+// state. An EXPLICIT account-deactivation body still bans the connection DESPITE
 // disableCooling being set. The guard only skips the TRANSIENT cooldown branch.
-test("markAccountUnavailable still applies terminal 'expired' despite disableCooling", async () => {
+// (A bare 401 is now a recoverable cooldown, not terminal — see
+// auth-terminal-status.test.ts; disableCooling then keeps it selectable.)
+test("markAccountUnavailable still applies a terminal ban despite disableCooling", async () => {
   await resetStorage();
 
   const conn = await providersDb.createProviderConnection({
@@ -77,14 +79,14 @@ test("markAccountUnavailable still applies terminal 'expired' despite disableCoo
   const result = await auth.markAccountUnavailable(
     (conn as any).id,
     401,
-    "unauthorized",
+    "Your account has been deactivated",
     "openai",
     "gpt-4.1"
   );
   const after = await providersDb.getProviderConnectionById((conn as any).id);
 
   assert.equal(result.shouldFallback, true);
-  assert.equal(after.testStatus, "expired");
+  assert.equal(after.testStatus, "banned");
 });
 
 test("markAccountUnavailable still applies terminal 'credits_exhausted' despite disableCooling", async () => {
@@ -102,7 +104,7 @@ test("markAccountUnavailable still applies terminal 'credits_exhausted' despite 
   const result = await auth.markAccountUnavailable(
     (conn as any).id,
     402,
-    "payment required",
+    "Insufficient account balance",
     "openai",
     "gpt-4.1"
   );

@@ -10,6 +10,16 @@ import { extractCodeAssistOnboardTierId } from "@omniroute/open-sse/services/cod
 
 const POSTEXCHANGE_TIMEOUT_MS = 8_000;
 
+/** `cloudaicompanionProject` is either a bare string or an object carrying `id`. */
+export function extractCloudaicompanionProjectId(value: unknown): string {
+  const raw = (value as Record<string, unknown> | undefined)?.cloudaicompanionProject;
+  if (typeof raw === "string") return raw.trim();
+  if (raw && typeof raw === "object" && typeof (raw as Record<string, unknown>).id === "string") {
+    return ((raw as Record<string, unknown>).id as string).trim();
+  }
+  return "";
+}
+
 type AntigravityOAuthConfig = typeof ANTIGRAVITY_CONFIG;
 type AntigravityTokenPayload = {
   access_token: string;
@@ -150,6 +160,7 @@ async function postExchangeAntigravity(
 
   let projectId = "";
   let tierId = "legacy-tier";
+  let loadSucceeded = false;
   try {
     const response = await fetchFirstOk(
       config.loadCodeAssistEndpoints,
@@ -159,27 +170,43 @@ async function postExchangeAntigravity(
     const data = (await response.json()) as Record<string, unknown>;
     projectId = extractProjectId(data);
     tierId = extractCodeAssistOnboardTierId(data);
+    loadSucceeded = true;
   } catch (error) {
     console.log("Failed to load code assist:", error);
   }
 
   if (projectId) {
+    // A project already exists: onboardUser is just an idempotent refresh, so keep it
+    // fire-and-forget and never block the login on it. (#5180-followup / login hang)
     void onboardAntigravityUser(config, headers, tierId, metadata).catch(() => {});
-  } else if (config.onboardUserEndpoints.length > 0) {
-    // Accounts without an existing Cloud Code project need one bounded inline
-    // onboarding attempt before loadCodeAssist can discover their project.
+  } else if (loadSucceeded && config.onboardUserEndpoints.length > 0) {
+    // loadCodeAssist answered but the account owns no cloudaicompanionProject: it never
+    // completed Gemini Code Assist onboarding. onboardUser (free tier) is the ONLY way it can
+    // ever get one, and persisting a connection with an empty projectId produces a dead account
+    // that 422s ("Missing Google projectId") on every single request. We onboard ONLY when
+    // loadCodeAssist actually succeeded with an empty project: if it stalled or errored we do
+    // not know the account's real state, so we leave projectId empty (the request-time
+    // bootstrap retries) rather than block the login on an onboarding round-trip.
     try {
-      await fetchFirstOk(
+      const onboardResponse = await fetchFirstOk(
         config.onboardUserEndpoints,
         { method: "POST", headers, body: JSON.stringify({ tier_id: tierId, metadata }) },
         POSTEXCHANGE_TIMEOUT_MS
       );
-      const retryResponse = await fetchFirstOk(
-        config.loadCodeAssistEndpoints,
-        { method: "POST", headers, body: JSON.stringify({ metadata }) },
-        POSTEXCHANGE_TIMEOUT_MS
-      );
-      projectId = extractProjectId((await retryResponse.json()) as Record<string, unknown>);
+      // onboardUser is a long-running operation: Google returns the project it provisions in
+      // the LRO envelope, so prefer that over a second discovery round-trip.
+      const onboardResult = (await onboardResponse.json()) as Record<string, unknown>;
+      projectId =
+        extractCloudaicompanionProjectId(onboardResult.response) ||
+        extractCloudaicompanionProjectId(onboardResult);
+      if (!projectId) {
+        const retryResponse = await fetchFirstOk(
+          config.loadCodeAssistEndpoints,
+          { method: "POST", headers, body: JSON.stringify({ metadata }) },
+          POSTEXCHANGE_TIMEOUT_MS
+        );
+        projectId = extractProjectId((await retryResponse.json()) as Record<string, unknown>);
+      }
     } catch {
       // Lazy request-time bootstrap retries if onboarding or discovery is unavailable.
     }

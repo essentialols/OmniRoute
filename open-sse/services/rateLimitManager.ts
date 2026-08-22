@@ -28,6 +28,7 @@ import {
 } from "./rateLimitManager/headers";
 import { checkQueueAdmission } from "./rateLimitManager/admission";
 import {
+  LEGACY_RATE_LIMIT_QUEUE_TIMEOUT_CODE,
   markLocalRateLimitError,
   RATE_LIMIT_EXECUTION_TIMEOUT_CODE,
   RATE_LIMIT_QUEUE_WEDGED_CODE,
@@ -527,13 +528,15 @@ function getLimiter(provider, connectionId, model = null) {
  * @param {string} provider - Provider ID
  * @param {string} connectionId - Connection ID
  * @param {string} model - Model name (optional, for per-model limits)
- * @param {Function} fn - The async function to execute (e.g., executor.execute)
+ * @param {Function} fn - The async function to execute (e.g., executor.execute).
+ *   Receives a job AbortSignal; wire it into the upstream request so the job can
+ *   actually be cancelled when the queue budget expires or the caller aborts.
  * @param {AbortSignal} signal - Optional abort signal to cancel waiting
  * @returns {Promise<unknown>} Result of fn()
  */
 export async function withRateLimit(provider, connectionId, model, fn, signal = null) {
   if (!enabledConnections.has(connectionId)) {
-    return fn();
+    return fn(signal ?? undefined);
   }
 
   if (signal?.aborted) {
@@ -550,13 +553,6 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
   await awaitProviderDefaultSlot(provider, connectionId, signal, maxWaitMs);
 
   const limiter = getLimiter(provider, connectionId, model);
-  // Bottleneck's `expiration` starts only after a job leaves QUEUED. The
-  // legacy maxWaitMs setting therefore bounds limiter-managed execution; it
-  // is not a queue-wait deadline.
-  const executionExpirationMs = maxWaitMs;
-  const scheduleOpts =
-    executionExpirationMs && executionExpirationMs > 0 ? { expiration: executionExpirationMs } : {};
-
   // Issue #6593: opt-in admission cap — fast-reject before Bottleneck's
   // schedule() (and before any downstream compression/prompt work runs) when
   // the queue is already at/over maxQueueDepth. Default 0 = disabled.
@@ -572,6 +568,76 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
     throw admissionErr;
   }
 
+  // `maxWaitMs` is a QUEUE-WAIT budget: how long a job may sit waiting for a
+  // slot before we give up and let combo fall back. It is NOT a cap on how long
+  // the job may run. Bottleneck's `expiration` is the opposite: its clock starts
+  // when the job STARTS EXECUTING, so passing maxWaitMs there killed requests
+  // that never queued at all. Observed 2026-07-30: a prefix-cache hit with
+  // essentially zero prefill was dropped at exactly 240s of generation, and any
+  // response longer than roughly 5k tokens crossed the budget purely by decoding.
+  // So run the budget ourselves as a timer that we clear the instant the job
+  // body begins, and leave `expiration` unset.
+  let jobStarted = false;
+  let queueWaitTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearQueueWaitTimer = () => {
+    if (queueWaitTimer !== undefined) {
+      clearTimeout(queueWaitTimer);
+      queueWaitTimer = undefined;
+    }
+  };
+
+  // An expired or aborted job must also be cancelled upstream, otherwise it keeps
+  // running as an orphan long after the client got its error. Hand `fn` a job
+  // signal we own and abort it on every path that stops awaiting the job. Never
+  // on the success path: that result may still be streaming.
+  const jobController = new AbortController();
+  const abortJob = (reason: Error) => {
+    if (!jobController.signal.aborted) jobController.abort(reason);
+  };
+
+  const buildQueueTimeoutError = () => {
+    // Branded as an OmniRoute-owned local failure so downstream classification
+    // trusts its provenance (WeakMap identity) instead of the code string alone.
+    return markLocalRateLimitError(
+      new Error(
+        `Request dropped after waiting longer than the local rate-limit queue budget maxWaitMs ` +
+          `(${maxWaitMs}ms) for a free slot on ${model ? `${provider}/${model}` : provider}. This is ` +
+          `OmniRoute's request queue (resilienceSettings.requestQueue.maxWaitMs), not an upstream ` +
+          `timeout, and it does not cap how long a running request may take. Raise it in ` +
+          `Settings, Resilience if this is queue saturation rather than a slow provider.`
+      ),
+      LEGACY_RATE_LIMIT_QUEUE_TIMEOUT_CODE
+    );
+  };
+
+  const scheduleJob = () =>
+    limiter.schedule({}, () => {
+      // The job has a slot. The queue-wait budget has been satisfied, so stop the
+      // timer before doing any work: from here on the request may take as long as
+      // it legitimately needs.
+      jobStarted = true;
+      clearQueueWaitTimer();
+      return fn(jobController.signal);
+    });
+
+  const queueWaitPromise =
+    maxWaitMs && maxWaitMs > 0
+      ? new Promise<never>((_, reject) => {
+          queueWaitTimer = setTimeout(() => {
+            if (jobStarted) return;
+            const key = getLimiterKey(provider, connectionId, model);
+            logRateLimit(
+              `[RATE-LIMIT] ${key} waited ${Math.ceil(maxWaitMs / 1000)}s for a queue slot, dropping`
+            );
+            const queueErr = buildQueueTimeoutError();
+            // Bottleneck keeps the job queued even though we stopped awaiting it.
+            // Cancel it so it does not fire upstream after the caller gave up.
+            abortJob(queueErr);
+            reject(queueErr);
+          }, maxWaitMs);
+        })
+      : null;
+
   try {
     if (signal) {
       let abortListener: (() => void) | undefined;
@@ -581,6 +647,9 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
         // Preserve native Error reasons (including AbortController's
         // read-only DOMException) instead of mutating or wrapping them.
         if (reason instanceof Error) {
+          // The caller gave up: cancel the job upstream too, otherwise it keeps
+          // running as an orphan.
+          abortJob(reason);
           rejectAbort(reason);
           return;
         }
@@ -589,6 +658,7 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
         if (reason !== undefined) {
           (err as Error & { cause?: unknown }).cause = reason;
         }
+        abortJob(err);
         rejectAbort(err);
       };
       if (signal.aborted) {
@@ -599,43 +669,68 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
       }
 
       try {
-        // Race the work against the abort signal. When abort wins, fn is still
-        // running inside Bottleneck's limiter — its eventual rejection must not
-        // surface as an unhandledRejection. The .catch(noop) silences only the
-        // orphaned branch; the real rejection comes from abortPromise.
-        const scheduled = limiter.schedule(scheduleOpts, fn);
+        // Race the work against the abort signal and the queue-wait budget. When
+        // one of those wins, fn is still running inside Bottleneck's limiter, so
+        // its eventual rejection must not surface as an unhandledRejection. The
+        // .catch(noop) silences only the orphaned branches; the real rejection
+        // comes from whichever racer won.
+        const scheduled = scheduleJob();
         scheduled.catch(() => {}); // prevent unhandledRejection when abort wins
         abortPromise.catch(() => {}); // prevent unhandledRejection when scheduled wins
-        return await Promise.race([scheduled, abortPromise]);
+        const racers: Promise<unknown>[] = [scheduled, abortPromise];
+        if (queueWaitPromise) {
+          queueWaitPromise.catch(() => {}); // prevent unhandledRejection when scheduled wins
+          racers.push(queueWaitPromise);
+        }
+        return await Promise.race(racers);
       } finally {
+        clearQueueWaitTimer();
         if (abortListener) {
           signal.removeEventListener("abort", abortListener);
         }
       }
     } else {
-      return await limiter.schedule(scheduleOpts, fn);
+      try {
+        const scheduled = scheduleJob();
+        const racers: Promise<unknown>[] = [scheduled];
+        if (queueWaitPromise) {
+          scheduled.catch(() => {}); // prevent unhandledRejection when the budget wins
+          queueWaitPromise.catch(() => {}); // prevent unhandledRejection when scheduled wins
+          racers.push(queueWaitPromise);
+        }
+        return await Promise.race(racers);
+      } finally {
+        clearQueueWaitTimer();
+      }
     }
   } catch (err) {
     // Only Bottleneck-owned failures are rewritten. Application code can throw
     // the same text and must retain its original identity and semantics.
+    // Defensive: `expiration` is no longer set here (maxWaitMs is a queue-wait
+    // budget, enforced by our own timer above), but a limiter configured
+    // elsewhere could still expire a job.
     if (
       err instanceof Bottleneck.BottleneckError &&
       /^This job timed out after \d+ ms\.$/.test(err.message)
     ) {
       const key = getLimiterKey(provider, connectionId, model);
       logRateLimit(
-        `⏰ [RATE-LIMIT] ${key} — limiter-managed execution expired after ${Math.ceil((executionExpirationMs || 0) / 1000)}s`
+        `⏰ [RATE-LIMIT] ${key} — limiter-managed execution expired after ${Math.ceil((maxWaitMs || 0) / 1000)}s`
       );
-      throw markLocalRateLimitError(
+      const expiredErr = markLocalRateLimitError(
         new Error(
           `Request exceeded OmniRoute's local rate-limit execution expiration ` +
-            `(legacy resilienceSettings.requestQueue.maxWaitMs=${executionExpirationMs}ms) for ` +
+            `(legacy resilienceSettings.requestQueue.maxWaitMs=${maxWaitMs}ms) for ` +
             `${model ? `${provider}/${model}` : provider}. Bottleneck applies this deadline only ` +
             `after dispatch; it does not bound queue wait and is not an upstream-generated timeout.`,
           { cause: err }
         ),
         RATE_LIMIT_EXECUTION_TIMEOUT_CODE
       );
+      // Bottleneck only dropped its handle on the job. Cancel the in-flight
+      // upstream request too, otherwise it keeps burning quota as an orphan.
+      abortJob(expiredErr);
+      throw expiredErr;
     }
 
     if (
@@ -662,7 +757,10 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
         { cause: err }
       ) as Error & { cleanupError?: unknown };
       if (cleanupError !== undefined) wedgeErr.cleanupError = cleanupError;
-      throw markLocalRateLimitError(wedgeErr, RATE_LIMIT_QUEUE_WEDGED_CODE);
+      const markedWedgeErr = markLocalRateLimitError(wedgeErr, RATE_LIMIT_QUEUE_WEDGED_CODE);
+      // The job was dropped with the wedged queue: cancel it upstream too.
+      abortJob(markedWedgeErr);
+      throw markedWedgeErr;
     }
     throw err;
   }
