@@ -65,7 +65,7 @@ test("POST /v1/chat/completions with a chat model still reaches routing (guard i
   });
 
   const res = await handleChat(request);
-  // The guard must not fire on a chat model — the response is whatever downstream
+  // The guard must not fire on a chat model, so the response is whatever downstream
   // routing produces (typically a credentials/connection error in the harness).
   // The critical assertion is: it is NOT the image-guard 400.
   if (res.status === 400) {
@@ -117,6 +117,30 @@ test("POST /v1/chat/completions allows a model registered for both chat and imag
       msg,
       /image-generation model/i,
       "a model present in the chat catalog must not trip the image-only guard"
+    );
+  }
+});
+
+test("POST /v1/chat/completions with a dual-purpose model (codex/gpt-5.5) is NOT image-blocked", async () => {
+  // codex/gpt-5.5 is registered as BOTH a codex chat model and an image model
+  // (Responses image_generation tool). The old getImageModelEntry() truthiness guard
+  // wrongly rejected it on the chat endpoint with the image-generation 400. It must
+  // now pass the guard and reach normal routing.
+  const request = buildRequest({
+    body: {
+      model: "codex/gpt-5.5",
+      messages: [{ role: "user", content: "hi" }],
+    },
+  });
+
+  const res = await handleChat(request);
+  if (res.status === 400) {
+    const body = (await res.json()) as { error?: { message?: string } };
+    const msg = body?.error?.message || JSON.stringify(body);
+    assert.doesNotMatch(
+      msg,
+      /image-generation model/i,
+      "dual-purpose codex/gpt-5.5 must not trip the image guard on chat"
     );
   }
 });

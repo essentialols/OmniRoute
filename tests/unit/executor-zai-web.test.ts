@@ -1,3 +1,15 @@
+// Tests for the Z.ai web executor (chat.z.ai, session-token auth).
+//
+// Pins: token extraction, X-FE-Version header, the live v2 endpoint, dual-shape
+// SSE frame parsing (internal `{type:"chat:completion",data:{delta_content,phase}}`
+// envelope + pass-through OpenAI `choices[].delta`), upstream-error-frame
+// surfacing (403 / CAPTCHA), and streaming + non-streaming aggregation.
+//
+// Endpoint/version facts were confirmed by direct probe of chat.z.ai:
+//   - POST /api/v2/chat/completions → live endpoint (v1 /api/chat/completions 404s)
+//   - X-FE-Version required         → omitting it yields a 426 "outdated" frame
+//   - every completion CAPTCHA-gated → FRONTEND_CAPTCHA_REQUIRED without a param
+//     (the browser transport supplies the per-request proof)
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
@@ -146,6 +158,8 @@ describe("ZaiWebExecutor", () => {
 
   it("returns empty string when no cookie is provided", () => {
     assert.equal(mod.extractZaiToken(""), "");
+    // A Cookie header that carries no `token=` pair is not a usable credential.
+    assert.equal(mod.extractZaiToken("a=1; b=2"), "");
   });
 
   it("parses the internal z.ai delta_content/phase SSE envelope", () => {
@@ -190,6 +204,33 @@ describe("ZaiWebExecutor", () => {
     assert.equal(mod.parseZaiFrame(null), null);
     assert.equal(mod.parseZaiFrame({}), null);
     assert.equal(mod.parseZaiFrame({ data: { phase: "answer" } }), null);
+  });
+
+  it("surfaces a user-level 403 error frame as a terminal delta", () => {
+    const delta = mod.parseZaiFrame({
+      type: "chat:completion",
+      data: {
+        error: { detail: "Model not available for current user level", code: 403 },
+        done: true,
+      },
+    });
+    assert.equal(delta?.done, true);
+    assert.match(String(delta?.error), /current user level/);
+  });
+
+  it("surfaces a FRONTEND_CAPTCHA_REQUIRED error frame", () => {
+    const delta = mod.parseZaiFrame({
+      data: { error: { code: "FRONTEND_CAPTCHA_REQUIRED" }, done: true },
+    });
+    assert.match(String(delta?.error), /CAPTCHA/i);
+  });
+
+  it("leaves a normal content frame free of an error", () => {
+    const delta = mod.parseZaiFrame({
+      type: "chat:completion",
+      data: { delta_content: "hi", phase: "answer" },
+    });
+    assert.equal(delta?.error, undefined);
   });
 
   it("folds multimodal message content into text without leaking image payloads", () => {
@@ -662,6 +703,43 @@ describe("ZaiWebExecutor", () => {
       assert.match(text, /"content":"Hi"/);
       assert.match(text, /"finish_reason":"stop"/);
       assert.match(text, /data: \[DONE\]/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("surfaces an upstream 403 user-level error frame as a 502 (non-streaming)", async () => {
+    const originalFetch = installZaiFetch(
+      () =>
+        new Response(
+          [
+            `data: ${JSON.stringify({
+              type: "chat:completion",
+              data: {
+                error: { detail: "Model not available for current user level", code: 403 },
+                done: true,
+              },
+            })}`,
+            "",
+            "",
+          ].join("\n"),
+          { headers: { "Content-Type": "text/event-stream" } }
+        )
+    );
+
+    try {
+      const executor = new mod.ZaiWebExecutor();
+      const result = await executor.execute({
+        model: "GLM-5.1",
+        body: { messages: [{ role: "user", content: "hi" }] },
+        stream: false,
+        credentials: { apiKey: TEST_CREDENTIAL },
+        signal: null,
+      });
+
+      assert.equal(result.response.status, 502);
+      const parsed = await result.response.json();
+      assert.match(parsed.error.message, /current user level/);
     } finally {
       globalThis.fetch = originalFetch;
     }

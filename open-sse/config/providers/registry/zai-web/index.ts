@@ -5,8 +5,8 @@ export const zai_webProvider: RegistryEntry = {
   alias: "zw",
   format: "openai",
   executor: "zai-web",
-  // Free consumer web chat at chat.z.ai (Zhipu AI) — see
-  // `open-sse/executors/zai-web.ts` for the cookie/session wire format.
+  // Free consumer web chat at chat.z.ai (Zhipu AI). See
+  // `open-sse/executors/zai-web.ts` for the session-token/browser wire format.
   // Distinct from the API-key `zai`/`glm` providers (api.z.ai).
   baseUrl: "https://chat.z.ai",
   authType: "apikey",
@@ -14,6 +14,7 @@ export const zai_webProvider: RegistryEntry = {
   // Z.ai's visible "Tools" switch enables its internal VLM/MCP tools. It does
   // not accept caller-supplied OpenAI `tools`, which remains disabled here.
   models: [
+    // Model-id casing is significant: z.ai returns 500 for the wrong case.
     {
       id: "glm-5.2",
       name: "GLM-5.2",
