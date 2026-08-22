@@ -326,6 +326,55 @@ function scrubBody(value: string | null | undefined, limit: number): string | nu
   return capString(scrubbed, limit);
 }
 
+/**
+ * Query parameters that carry a credential in the URL itself. Headers and bodies are already
+ * scrubbed before anything reaches disk, but the URL was stored verbatim, and some providers
+ * authenticate in the query string (Vertex Express uses `?key=<API key>`), so an enabled
+ * capture wrote live keys into the JSONL.
+ */
+const CAPTURE_URL_SECRET_PARAMS = new Set([
+  "key",
+  "api_key",
+  "apikey",
+  "access_token",
+  "accesstoken",
+  "token",
+  "auth",
+  "authorization",
+  "password",
+  "secret",
+  "client_secret",
+  "refresh_token",
+  "sig",
+  "signature",
+]);
+
+function scrubUrlForCapture(rawUrl: string): string {
+  if (!rawUrl) return rawUrl;
+  try {
+    const parsed = new URL(rawUrl);
+    let touched = false;
+    for (const name of [...parsed.searchParams.keys()]) {
+      if (CAPTURE_URL_SECRET_PARAMS.has(name.toLowerCase())) {
+        parsed.searchParams.set(name, "[REDACTED]");
+        touched = true;
+      }
+    }
+    if (parsed.username || parsed.password) {
+      parsed.username = "";
+      parsed.password = "";
+      touched = true;
+    }
+    return touched ? parsed.toString() : rawUrl;
+  } catch {
+    // Not parseable as a URL; fall back to masking the common `key=` form textually.
+    return rawUrl.replace(
+      /([?&](?:key|api_key|apikey|access_token|token|sig|signature)=)[^&#\s]+/gi,
+      "$1[REDACTED]"
+    );
+  }
+}
+
 function isBinaryMediaUrl(url: string): boolean {
   try {
     return BINARY_MEDIA_PATH_RE.test(new URL(url).pathname);
@@ -421,7 +470,7 @@ function baseEntry(ctx: CaptureContext, input: CaptureFromFetchInput): CaptureEn
     model: ctx.model,
     agentBackend: headerLookup(ctx.clientHeaders, AGENT_BACKEND_HEADER),
     agentModel: headerLookup(ctx.clientHeaders, AGENT_MODEL_HEADER),
-    url: input.url,
+    url: scrubUrlForCapture(input.url),
     requestHeaders: scrubHeadersForCapture(input.requestHeaders),
     requestBody: scrubBody(input.requestBody, limit),
     responseStatus: null,

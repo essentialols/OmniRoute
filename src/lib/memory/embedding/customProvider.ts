@@ -2,7 +2,7 @@ import type { EmbeddingProvider } from "@omniroute/open-sse/config/embeddingRegi
 import {
   parseAndValidateNonMetadataUrl,
   parseAndValidatePublicUrl,
-} from "@/shared/network/outboundUrlGuardPolicy";
+} from "@/shared/network/outboundUrlGuard";
 import { getProviderValidationGuard } from "@/shared/network/outboundUrlGuardPolicy";
 
 type CustomEmbeddingSettings = {

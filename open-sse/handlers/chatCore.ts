@@ -5472,33 +5472,53 @@ export async function handleChatCore({
             // rate limiter as the primary attempt (otherwise it escapes the account's
             // queue budget and can earn a 429) and through a capture scope of its own,
             // so the leg that is hardest to debug is not the one missing from the trace.
+            const recoveryCreds = getExecutionCredentials();
+            // Rate-limit against the connection this attempt will ACTUALLY use, not the one
+            // the request arrived on - an account fallback may have moved it, and limiting
+            // the wrong key both mis-meters that account and skips the real one.
+            const recoveryConnectionId = getExecutionConnectionId(recoveryCreds) || connectionId;
             const rawResult = await withRateLimit(
               provider,
-              connectionId,
+              recoveryConnectionId,
               effectiveModel,
               (jobSignal?: AbortSignal) =>
                 runWithCaptureScope(
                   { attempt: 1, model: effectiveModel, leg: "local-turn-recovery" },
                   () =>
-                    executor.execute({
+                    // Same upstream-start timeout as the primary attempt. withRateLimit only
+                    // bounds the QUEUE wait and clears that timer once execution starts, so
+                    // without this a resample against a silent upstream hangs forever.
+                    executeWithUpstreamStartTimeout({
+                      executor,
+                      provider,
                       model: effectiveModel,
-                      body: reinvokeBody,
-                      stream: false,
-                      credentials: getExecutionCredentials(),
+                      connectionTimeoutMs: resolveConnectionTimeoutMs(
+                        (recoveryCreds as { providerSpecificData?: unknown } | null)
+                          ?.providerSpecificData
+                      ),
                       signal: jobSignal ?? streamController.signal,
                       log,
-                      extendedContext,
-                      upstreamExtraHeaders: {
-                        ...buildUpstreamHeadersForExecute(effectiveModel),
-                        [RECOVERY_ATTEMPT_HEADER]: "1",
-                      },
-                      clientHeaders: buildExecutorClientHeaders(
-                        clientRawRequest?.headers,
-                        userAgent
-                      ),
-                      onCredentialsRefreshed,
-                      skipUpstreamRetry: true,
-                      contextEditing: { enabled: contextEditingEnabled },
+                      execute: (signal: AbortSignal) =>
+                        executor.execute({
+                          model: effectiveModel,
+                          body: reinvokeBody,
+                          stream: false,
+                          credentials: recoveryCreds,
+                          signal,
+                          log,
+                          extendedContext,
+                          upstreamExtraHeaders: {
+                            ...buildUpstreamHeadersForExecute(effectiveModel),
+                            [RECOVERY_ATTEMPT_HEADER]: "1",
+                          },
+                          clientHeaders: buildExecutorClientHeaders(
+                            clientRawRequest?.headers,
+                            userAgent
+                          ),
+                          onCredentialsRefreshed,
+                          skipUpstreamRetry: true,
+                          contextEditing: { enabled: contextEditingEnabled },
+                        }),
                     })
                 ),
               streamController.signal
