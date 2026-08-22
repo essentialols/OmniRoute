@@ -110,7 +110,19 @@ export function synthesizeOpenAiSseFromJson(jsonText: string): string {
       emitDelta({ content: message.content });
     }
     if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-      emitDelta({ tool_calls: message.tool_calls });
+      // Each tool call MUST carry its own `index`. A non-streaming message omits it, but the
+      // openai->claude translator keys accumulation on `tc.index ?? 0` (translator/response/
+      // openai-to-claude.ts), so without it EVERY call collapses onto index 0 and
+      // appendToolCallArgumentDelta concatenates all their argument strings into one buffer.
+      // Claude Code then rejects the result: "Bash(input JSON failed to parse - 363 bytes)" for a
+      // turn that emitted 4 calls of ~85 bytes each. Preserve an index the upstream already set.
+      emitDelta({
+        tool_calls: message.tool_calls.map((tc, i) =>
+          isRecord(tc) && typeof tc.index === "number"
+            ? tc
+            : { ...(isRecord(tc) ? tc : {}), index: i }
+        ),
+      });
     }
 
     const finishReason = normalizeOpenAICompatibleFinishReasonString(choice.finish_reason);

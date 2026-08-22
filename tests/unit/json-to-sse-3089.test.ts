@@ -185,3 +185,80 @@ describe("synthesizeOpenAiSseFromJson (#3089)", () => {
     assert.equal(synthesizeOpenAiSseFromJson("[]"), "");
   });
 });
+
+// Regression 2026-07-29: a non-streaming message omits tool_calls[].index, but the
+// openai->claude translator keys accumulation on `tc.index ?? 0`. Without an index EVERY call
+// collapsed onto index 0 and appendToolCallArgumentDelta concatenated all their argument strings
+// into one buffer, so Claude Code rejected the turn with
+// "Bash(input JSON failed to parse - 363 bytes)" for 4 calls of ~85 bytes each.
+describe("tool_calls carry a per-call index (multi-call collapse guard)", () => {
+  const call = (i: number, cmd: string) => ({
+    id: `call_${i}`,
+    type: "function",
+    function: { name: "Bash", arguments: JSON.stringify({ command: cmd, description: `d${i}` }) },
+  });
+
+  const FOUR = JSON.stringify({
+    id: "chatcmpl-x",
+    object: "chat.completion",
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [0, 1, 2, 3].map((i) => call(i, `cmd${i}`)),
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  });
+
+  test("every synthesized tool call gets a distinct index", () => {
+    const chunks = parseDataChunks(synthesizeOpenAiSseFromJson(FOUR))
+      .filter((c) => c !== "[DONE]")
+      .map((c) => JSON.parse(c));
+    const withTools = chunks.find((c) => c.choices?.[0]?.delta?.tool_calls);
+    assert.ok(withTools, "a delta carrying tool_calls must be emitted");
+    const tcs = withTools.choices[0].delta.tool_calls;
+    assert.equal(tcs.length, 4);
+    assert.deepEqual(
+      tcs.map((t: { index: number }) => t.index),
+      [0, 1, 2, 3],
+      "indices must be distinct, or the translator collapses all calls onto 0"
+    );
+  });
+
+  test("arguments survive byte-identical per call (no concatenation)", () => {
+    const chunks = parseDataChunks(synthesizeOpenAiSseFromJson(FOUR))
+      .filter((c) => c !== "[DONE]")
+      .map((c) => JSON.parse(c));
+    const tcs = chunks.find((c) => c.choices?.[0]?.delta?.tool_calls)!.choices[0].delta.tool_calls;
+    for (let i = 0; i < 4; i++) {
+      const args = tcs[i].function.arguments;
+      assert.equal(args, JSON.stringify({ command: `cmd${i}`, description: `d${i}` }));
+      assert.equal(JSON.parse(args).command, `cmd${i}`, "must still be parseable JSON");
+    }
+  });
+
+  test("an index already set by the upstream is preserved, not renumbered", () => {
+    const preset = JSON.stringify({
+      id: "chatcmpl-y",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            tool_calls: [{ index: 7, ...call(0, "keep") }],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+    });
+    const chunks = parseDataChunks(synthesizeOpenAiSseFromJson(preset))
+      .filter((c) => c !== "[DONE]")
+      .map((c) => JSON.parse(c));
+    const tcs = chunks.find((c) => c.choices?.[0]?.delta?.tool_calls)!.choices[0].delta.tool_calls;
+    assert.equal(tcs[0].index, 7);
+  });
+});
