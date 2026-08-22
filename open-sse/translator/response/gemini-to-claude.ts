@@ -144,8 +144,13 @@ export function geminiToClaudeResponse(chunk, state) {
       const hasThoughtSig = part.thoughtSignature || part.thought_signature;
       const isThought = part.thought === true;
 
-      // Capture thoughtSignature so the next functionCall (or same-part call)
-      // can persist it for Claude→Gemini follow-up turns (#8979 / #2504 parity).
+      // Gemini can emit the thoughtSignature either on the functionCall part itself
+      // or as a standalone part immediately before it. Keep the latest one pending so
+      // the following functionCall can be cached under `<connectionId>:<toolCallId>`
+      // and re-attached on the next turn (#8979 / #2504 parity). The Claude wire
+      // format has nowhere to carry it, so without this cache the follow-up request
+      // sends an unsigned functionCall and Gemini answers 400 "missing a
+      // thought_signature".
       if (typeof hasThoughtSig === "string" && hasThoughtSig.length > 0) {
         state.pendingThoughtSignature = hasThoughtSig;
       }
