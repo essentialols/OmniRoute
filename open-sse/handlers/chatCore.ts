@@ -3,12 +3,11 @@ import {
   toToolNameAliasMap,
 } from "./chatCore/requestToolIdentity.ts";
 import { injectMemoryAndSkills } from "./chatCore/memorySkillsInjection.ts";
+import { resolveChatCoreRequestSetup } from "./chatCore/requestSetup.ts";
 import {
   normalizeOpenAICompatibleTools,
   buildToolNamespaceMap,
-} from "./chatCore/openaiCompatibleTools.ts";
-import { resolveChatCoreRequestSetup } from "./chatCore/requestSetup.ts";
-import { normalizeOpenAICompatibleTools } from "./chatCore/openAICompatibleTools.ts";
+} from "./chatCore/openAICompatibleTools.ts";
 import { buildFailureUsageRecord } from "./chatCore/failureUsage.ts";
 import { estimateFinalInputTokens } from "./chatCore/contextEstimation.ts";
 import {
@@ -136,7 +135,7 @@ import { injectSystemPrompt, injectCustomSystemPrompt } from "../services/system
 import { translateRequest, needsTranslation } from "../translator/index.ts";
 import { FORMATS } from "../translator/formats.ts";
 import { collectCustomToolNamesForSourceFormat } from "../translator/request/openai-responses/additionalTools.ts";
-import { extractResponsesCustomToolNames } from "../translator/request/openai-responses.ts";
+import { collectResponsesCustomToolNames } from "../translator/request/openai-responses/additionalTools.ts";
 import { sanitizeKiroTools } from "../utils/kiroSanitizer.ts";
 import { splitMisplacedToolResults } from "../translator/helpers/claudeHelper.ts";
 import { ensureCacheControlOnLastUserMessage } from "../services/claudeCodeConstraints.ts";
@@ -5937,7 +5936,7 @@ export async function handleChatCore({
   // from the untranslated client body; empty for non-Responses clients (harmless).
   const responsesCustomToolNames =
     clientResponseFormat === FORMATS.OPENAI_RESPONSES
-      ? extractResponsesCustomToolNames(body)
+      ? collectResponsesCustomToolNames(body?.tools, Array.isArray(body?.input) ? body.input : [])
       : null;
 
   // Codex Multi-Agent V2 (and any Responses `{type:"namespace"}` tool group): the request
