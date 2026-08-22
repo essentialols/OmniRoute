@@ -1,5 +1,6 @@
 import {
   CLAUDE_CODE_CLIENT_BUILD_REVISION,
+  CLAUDE_CODE_CLIENT_VERSION,
   CLAUDE_CODE_RUNTIME_VERSION,
   CLAUDE_CODE_SDK_PACKAGE_VERSION,
 } from "@/shared/constants/claudeCodeClient";
@@ -162,12 +163,13 @@ export function normalizeAnthropicHeaderVariants(headers: Record<string, string>
   }
 }
 
-// Deliberate fork pin to the captured claude-cli release (overridable by env).
-export const CLAUDE_CLI_VERSION = process.env.CLAUDE_CLI_VERSION_OVERRIDE || "2.1.207";
+// Derived from the canonical captured claude-cli release (overridable by env).
+export const CLAUDE_CLI_VERSION =
+  process.env.CLAUDE_CLI_VERSION_OVERRIDE || CLAUDE_CODE_CLIENT_VERSION;
 export const CLAUDE_CLI_BUILD_REVISION = CLAUDE_CODE_CLIENT_BUILD_REVISION;
 // Derived from the pinned version so the billing header cannot drift away from
 // the User-Agent version the fork pins.
 export const CLAUDE_CLI_BILLING_VERSION = `${CLAUDE_CLI_VERSION}.${CLAUDE_CLI_BUILD_REVISION}`;
-export const CLAUDE_CLI_USER_AGENT = `claude-cli/${CLAUDE_CLI_VERSION} (external, sdk-cli)`;
+export const CLAUDE_CLI_USER_AGENT = `claude-cli/${CLAUDE_CLI_VERSION} (external, cli)`;
 export const CLAUDE_CLI_STAINLESS_PACKAGE_VERSION = CLAUDE_CODE_SDK_PACKAGE_VERSION;
 export const CLAUDE_CLI_STAINLESS_RUNTIME_VERSION = CLAUDE_CODE_RUNTIME_VERSION;

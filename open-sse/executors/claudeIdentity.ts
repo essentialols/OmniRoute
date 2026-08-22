@@ -10,7 +10,10 @@
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
-import { CLAUDE_CODE_SDK_PACKAGE_VERSION } from "@/shared/constants/claudeCodeClient";
+import {
+  CLAUDE_CODE_CLIENT_VERSION,
+  CLAUDE_CODE_SDK_PACKAGE_VERSION,
+} from "@/shared/constants/claudeCodeClient";
 
 // ---------- Passthrough mode toggle ---------------------------------------
 
@@ -23,8 +26,8 @@ export function isPassthroughMode(): boolean {
 
 // ---------- Versions ------------------------------------------------------
 
-/** Deliberate fork pin to the captured claude-cli release. */
-export const CLAUDE_CODE_VERSION = "2.1.207";
+/** Derived from the canonical captured claude-cli release. */
+export const CLAUDE_CODE_VERSION = CLAUDE_CODE_CLIENT_VERSION;
 /** Bundled @anthropic-ai/sdk version for the pinned CLI release. */
 export const CLAUDE_CODE_STAINLESS_VERSION = CLAUDE_CODE_SDK_PACKAGE_VERSION;
 
