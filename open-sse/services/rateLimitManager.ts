@@ -612,6 +612,14 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
 
   const scheduleJob = () =>
     limiter.schedule({}, () => {
+      // Bottleneck has no API to pull a specific job back out of the queue, so a job
+      // dropped for exceeding its queue-wait budget still reaches this callback once a
+      // slot frees up. Aborting the controller alone does not prevent that - `fn` would
+      // run and could hit upstream after the caller was already handed a timeout error.
+      // Bail here instead, before any work happens.
+      if (jobController.signal.aborted) {
+        throw buildQueueTimeoutError();
+      }
       // The job has a slot. The queue-wait budget has been satisfied, so stop the
       // timer before doing any work: from here on the request may take as long as
       // it legitimately needs.
