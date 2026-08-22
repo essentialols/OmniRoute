@@ -50,6 +50,33 @@ test("leaves the model untouched when it already matches", async () => {
   assert.equal(out.model, "model-a");
 });
 
+test("preserves local llama.cpp sampling fields for OpenAI-compatible upstreams", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "pym-q2-abliterated",
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 1,
+      top_p: 0.95,
+      top_k: 20,
+      min_p: 0,
+      presence_penalty: 1.5,
+      repeat_penalty: 1.1,
+    },
+    modelToCall: "pym-q2-abliterated",
+    provider: "openai-compatible-chat-h1-llamaswap",
+    targetFormat: "openai",
+    credentials: null,
+  });
+
+  assert.equal(out.temperature, 1);
+  assert.equal(out.top_p, 0.95);
+  assert.equal(out.top_k, 20);
+  assert.equal(out.min_p, 0);
+  assert.equal(out.presence_penalty, 1.5);
+  assert.equal(out.repeat_penalty, 1.1);
+});
+
+
 test("defaults OpenAI image inputs to high detail for OpenCode clients without overriding explicit detail", async () => {
   const out = await prepareUpstreamBody({
     translatedBody: {
@@ -359,4 +386,151 @@ test("injects prompt_cache_key for Kimi Code's OpenAI protocol", async () => {
     credentials: { accessToken: "oauth-token" },
   });
   assert.match(String(out.prompt_cache_key), /^omni-[0-9a-f]{32}$/);
+});
+
+
+// Codex CLI (Responses API) always sends a session-scoped prompt_cache_key. Strict
+// OpenAI-compatible upstreams that don't implement it (e.g. Groq) reject the whole
+// request with a 400 "property 'prompt_cache_key' is unsupported". Strip it for any
+// OpenAI-format provider that does not support caching.
+test("strips a client-supplied prompt_cache_key for a non-caching OpenAI provider (groq)", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: "hi" }],
+      prompt_cache_key: "codex-session-abc",
+    },
+    modelToCall: "llama-3.3-70b-versatile",
+    provider: "groq",
+    targetFormat: "openai",
+    credentials: null,
+  });
+  assert.equal(out.prompt_cache_key, undefined);
+});
+
+test("also strips the camelCase promptCacheKey variant for a non-caching OpenAI provider", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "mistral-large",
+      messages: [{ role: "user", content: "hi" }],
+      promptCacheKey: "codex-session-def",
+    },
+    modelToCall: "mistral-large",
+    provider: "mistral",
+    targetFormat: "openai",
+    credentials: null,
+  });
+  assert.equal(out.promptCacheKey, undefined);
+  assert.equal(out.prompt_cache_key, undefined);
+});
+
+// A caching-capable provider must keep a client-supplied key untouched (no strip, no
+// overwrite). This includes codex, which is excluded from injection but still uses the key.
+test("preserves a client-supplied prompt_cache_key for a caching provider (openai)", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "gpt-4o",
+      messages: [{ role: "user", content: "hi" }],
+      prompt_cache_key: "client-key-123",
+    },
+    modelToCall: "gpt-4o",
+    provider: "openai",
+    targetFormat: "openai",
+    credentials: null,
+  });
+  assert.equal(out.prompt_cache_key, "client-key-123");
+});
+
+test("preserves a client-supplied prompt_cache_key for codex passthrough", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "gpt-5-codex",
+      messages: [{ role: "user", content: "hi" }],
+      prompt_cache_key: "codex-session-xyz",
+    },
+    modelToCall: "gpt-5-codex",
+    provider: "codex",
+    targetFormat: "openai",
+    credentials: null,
+  });
+  assert.equal(out.prompt_cache_key, "codex-session-xyz");
+});
+
+// ── Codex OpenAI-compat upstream normalization (system-first / vision / tool fields) ──
+// prepareUpstreamBody applies normalizeOpenAICompatUpstreamBody for targetFormat "openai"
+// only; claude/gemini keep their own dedicated handling.
+
+test("merges adjacent system messages for OpenAI-format upstreams (uncloseai)", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "m",
+      messages: [
+        { role: "system", content: "instructions" },
+        { role: "system", content: [{ type: "text", text: "perm" }] },
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+      ],
+    },
+    modelToCall: "m",
+    provider: "uncloseai",
+    targetFormat: "openai",
+    credentials: null,
+  });
+  const msgs = out.messages as Array<{ role: string; content: unknown }>;
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[0].role, "system");
+  assert.equal(msgs[0].content, "instructions\n\nperm");
+  assert.equal(msgs[1].content, "hi"); // text-only array flattened
+});
+
+test("does NOT touch messages for non-OpenAI targetFormat (claude)", async () => {
+  const messages = [
+    { role: "system", content: "a" },
+    { role: "system", content: [{ type: "text", text: "b" }] },
+    { role: "user", content: [{ type: "text", text: "hi" }] },
+  ];
+  const out = await prepareUpstreamBody({
+    translatedBody: { model: "m", messages },
+    modelToCall: "m",
+    provider: "uncloseai",
+    targetFormat: "claude",
+    credentials: null,
+  });
+  assert.deepEqual(out.messages, messages); // untouched for claude
+});
+
+test("strips parallel_tool_calls for cohere (openai)", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "command-a-03-2025",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ type: "function", function: { name: "shell" } }],
+      tool_choice: "auto",
+      parallel_tool_calls: true,
+    },
+    modelToCall: "command-a-03-2025",
+    provider: "cohere",
+    targetFormat: "openai",
+    credentials: null,
+  });
+  assert.equal(out.parallel_tool_calls, undefined);
+  assert.ok(Array.isArray(out.tools));
+});
+
+test("strips the whole tool trio for publicai (openai)", async () => {
+  const out = await prepareUpstreamBody({
+    translatedBody: {
+      model: "swiss-ai/apertus-8b-instruct",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ type: "function", function: { name: "shell" } }],
+      tool_choice: "auto",
+      parallel_tool_calls: true,
+    },
+    modelToCall: "swiss-ai/apertus-8b-instruct",
+    provider: "publicai",
+    targetFormat: "openai",
+    credentials: null,
+  });
+  assert.equal(out.tools, undefined);
+  assert.equal(out.tool_choice, undefined);
+  assert.equal(out.parallel_tool_calls, undefined);
 });
