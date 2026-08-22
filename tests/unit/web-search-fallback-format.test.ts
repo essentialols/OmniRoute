@@ -269,6 +269,94 @@ test("OpenAI -> Claude (non-passthrough): built-in web_search IS still converted
   assert.ok(toolNames.includes(OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME));
 });
 
+test("Claude -> OpenAI: versioned web_search_20250305 IS converted (local-backend route)", () => {
+  // Claude Code sends the dated server-tool type. On a claude->openai route to a local
+  // backend the bypass is false, so this MUST convert; an exact-name-only check let the
+  // native tool reach a backend that cannot run server tools and CC reported "Did 0 searches"
+  // while handing the model's own prose back as search results.
+  const inputBody = {
+    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }],
+    tool_choice: { type: "auto" },
+  };
+  const { body, fallback } = prepareWebSearchFallbackBody(inputBody, {
+    provider: "openai-compatible-chat",
+    sourceFormat: "claude",
+    targetFormat: "openai",
+    nativeCodexPassthrough: false,
+  });
+
+  assert.equal(fallback.enabled, true);
+  assert.equal(fallback.toolName, OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME);
+  assert.equal(fallback.convertedToolCount, 1);
+  const tools = (body.tools as Array<Record<string, unknown>>) || [];
+  const toolNames = tools.map((t) => {
+    const fn = t.function as { name?: string } | undefined;
+    return fn ? fn.name : (t.name as string | undefined);
+  });
+  assert.ok(toolNames.includes(OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME));
+  assert.ok(!toolNames.includes("web_search"));
+});
+
+test("bypass predicate: false for Claude -> OpenAI (the www local-backend route)", () => {
+  assert.equal(
+    supportsNativeWebSearchFallbackBypass({
+      provider: "openai-compatible-chat",
+      sourceFormat: "claude",
+      targetFormat: "openai",
+      nativeCodexPassthrough: false,
+    }),
+    false
+  );
+});
+
+// ── task #17 no-op contract: the function-form tool bridge is LOCAL-ONLY ──
+
+test("#17 cloud OpenAI: a client's WebSearch function tool is NOT registered for server-side execution", () => {
+  // The bridge executes the tool server-side and replaces it with a text result instead of
+  // returning it to the client. Gating on the native-bypass predicate alone did not hold: it is
+  // false for OpenAI->OpenAI, so ordinary cloud traffic silently got its own tool executed.
+  const { fallback } = prepareWebSearchFallbackBody(
+    { tools: [{ type: "function", function: { name: "WebSearch", parameters: {} } }] },
+    {
+      provider: "openai",
+      sourceFormat: "openai",
+      targetFormat: "openai",
+      nativeCodexPassthrough: false,
+    }
+  );
+
+  assert.deepEqual(fallback.builtinToolNames, []);
+  assert.equal(fallback.enabled, false);
+});
+
+test("#17 cloud Claude->OpenAI: WebFetch function tool is NOT registered either", () => {
+  const { fallback } = prepareWebSearchFallbackBody(
+    { tools: [{ type: "function", function: { name: "WebFetch", parameters: {} } }] },
+    {
+      provider: "groq",
+      sourceFormat: "claude",
+      targetFormat: "openai",
+      nativeCodexPassthrough: false,
+    }
+  );
+
+  assert.deepEqual(fallback.builtinToolNames, []);
+});
+
+test("#17 local provider: WebSearch function tool IS registered for the bridge", () => {
+  const { fallback } = prepareWebSearchFallbackBody(
+    { tools: [{ type: "function", function: { name: "WebSearch", parameters: {} } }] },
+    {
+      provider: "llama-swap",
+      sourceFormat: "claude",
+      targetFormat: "openai",
+      nativeCodexPassthrough: false,
+    }
+  );
+
+  assert.deepEqual(fallback.builtinToolNames, ["WebSearch"]);
+});
+
 // ── #3384: per-model interceptSearch override wins over every native-bypass default ──
 
 test("#3384 interceptSearchOverride=true forces interception even on the Claude->Claude bypass path", () => {

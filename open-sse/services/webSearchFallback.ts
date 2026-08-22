@@ -1,4 +1,5 @@
 import { FORMATS } from "../translator/formats.ts";
+import { BRIDGED_TOOL_NAMES, isLocalBridgeProvider } from "./localTurnRecovery.ts";
 
 export const OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME = "omniroute_web_search";
 // Prefix match — Anthropic sends date-suffixed variants (web_search_20250305, …).
@@ -21,6 +22,11 @@ export interface WebSearchFallbackPlan {
   enabled: boolean;
   toolName: string | null;
   convertedToolCount: number;
+  // All tool names the builtin-tool execution loop should auto-run for this request: the injected
+  // omniroute_web_search fallback (when a native web_search tool was converted) PLUS any
+  // function-form bridged tools (WebSearch/WebFetch/web_search/web_fetch) the client sent directly
+  // (task #17). Empty when nothing is auto-executable.
+  builtinToolNames: string[];
 }
 
 function toRecord(value: unknown): JsonRecord {
@@ -37,6 +43,30 @@ function isBuiltInWebSearchToolChoice(toolChoice: unknown): boolean {
   const choice = toRecord(toolChoice);
   const toolType = typeof choice.type === "string" ? choice.type : "";
   return WEB_SEARCH_TOOL_TYPES.test(toolType);
+}
+
+// Function-form bridged tools (task #17): Claude Code sends WebSearch/WebFetch as ordinary
+// `type:"function"` tools (name in BRIDGED_TOOL_NAMES). Unlike native `type:"web_search"` server
+// tools, these need NO rewrite (the model already calls them by name), only registration so the
+// builtin-tool execution loop runs them. Returns the original (deduped) names present in the body.
+function detectFunctionBridgeToolNames(tools: unknown[]): string[] {
+  const names = new Set<string>();
+  for (const tool of tools) {
+    const toolRecord = toRecord(tool);
+    const functionRecord = toRecord(toolRecord.function);
+    const name =
+      typeof functionRecord.name === "string"
+        ? functionRecord.name
+        : typeof toolRecord.name === "string"
+          ? toolRecord.name
+          : "";
+    // Only function-shaped tools (skip the native web_search server-tool form handled above).
+    const isFunctionShaped = toolRecord.function != null || toolRecord.type === "function";
+    if (isFunctionShaped && name && BRIDGED_TOOL_NAMES.has(name)) {
+      names.add(name);
+    }
+  }
+  return [...names];
 }
 
 function buildFallbackDescription(tool: JsonRecord): string {
@@ -183,6 +213,8 @@ export function prepareWebSearchFallbackBody<T extends WebSearchFallbackBody>(
   body: T,
   options: {
     provider?: string | null;
+    /** Resolved model id; carries the local signal when the provider id is an opaque UUID. */
+    model?: string | null;
     sourceFormat?: string | null;
     targetFormat?: string | null;
     nativeCodexPassthrough: boolean;
@@ -193,22 +225,40 @@ export function prepareWebSearchFallbackBody<T extends WebSearchFallbackBody>(
   if (!tools || tools.length === 0) {
     return {
       body,
-      fallback: { enabled: false, toolName: null, convertedToolCount: 0 },
+      fallback: { enabled: false, toolName: null, convertedToolCount: 0, builtinToolNames: [] },
     };
   }
+
+  const bypass = supportsNativeWebSearchFallbackBypass(options);
+  // Function-form bridged tools (task #17) are registered ONLY on a non-bypass route to an
+  // allowlisted LOCAL provider. `bypass` alone is not sufficient: it is false for ordinary
+  // cloud routes (OpenAI->OpenAI, Claude->OpenAI), so gating on it by itself silently executed
+  // a cloud client's own WebSearch/WebFetch tool server-side instead of returning it. The local
+  // check shares its allowlist with resolveLocalTurnRecoveryPlan so the two paths cannot diverge.
+  const functionBridgeNames =
+    bypass || !isLocalBridgeProvider(options.provider, options.model)
+      ? []
+      : detectFunctionBridgeToolNames(tools);
 
   const builtInSearchTools = tools.filter(isBuiltInWebSearchTool);
   if (builtInSearchTools.length === 0) {
+    // No native web_search server-tool to convert. Still surface any function-form bridged tools
+    // so the builtin-tool execution loop runs them; otherwise there is nothing to do (no rewrite).
     return {
       body,
-      fallback: { enabled: false, toolName: null, convertedToolCount: 0 },
+      fallback: {
+        enabled: false,
+        toolName: null,
+        convertedToolCount: 0,
+        builtinToolNames: functionBridgeNames,
+      },
     };
   }
 
-  if (supportsNativeWebSearchFallbackBypass(options)) {
+  if (bypass) {
     return {
       body,
-      fallback: { enabled: false, toolName: null, convertedToolCount: 0 },
+      fallback: { enabled: false, toolName: null, convertedToolCount: 0, builtinToolNames: [] },
     };
   }
 
@@ -257,6 +307,7 @@ export function prepareWebSearchFallbackBody<T extends WebSearchFallbackBody>(
       enabled: true,
       toolName: OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME,
       convertedToolCount: builtInSearchTools.length,
+      builtinToolNames: [OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME, ...functionBridgeNames],
     },
   };
 }

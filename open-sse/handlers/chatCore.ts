@@ -3,6 +3,10 @@ import {
   toToolNameAliasMap,
 } from "./chatCore/requestToolIdentity.ts";
 import { injectMemoryAndSkills } from "./chatCore/memorySkillsInjection.ts";
+import {
+  normalizeOpenAICompatibleTools,
+  buildToolNamespaceMap,
+} from "./chatCore/openaiCompatibleTools.ts";
 import { resolveChatCoreRequestSetup } from "./chatCore/requestSetup.ts";
 import { normalizeOpenAICompatibleTools } from "./chatCore/openAICompatibleTools.ts";
 import { buildFailureUsageRecord } from "./chatCore/failureUsage.ts";
@@ -132,6 +136,7 @@ import { injectSystemPrompt, injectCustomSystemPrompt } from "../services/system
 import { translateRequest, needsTranslation } from "../translator/index.ts";
 import { FORMATS } from "../translator/formats.ts";
 import { collectCustomToolNamesForSourceFormat } from "../translator/request/openai-responses/additionalTools.ts";
+import { extractResponsesCustomToolNames } from "../translator/request/openai-responses.ts";
 import { sanitizeKiroTools } from "../utils/kiroSanitizer.ts";
 import { splitMisplacedToolResults } from "../translator/helpers/claudeHelper.ts";
 import { ensureCacheControlOnLastUserMessage } from "../services/claudeCodeConstraints.ts";
@@ -163,6 +168,7 @@ import {
 } from "../services/tokenRefresh.ts";
 import { createRequestLogger } from "../utils/requestLogger.ts";
 import { createPreparedRequestLogger, runWithCapture } from "../utils/providerRequestLogging.ts";
+import { runWithCaptureContext, captureClientIn } from "../services/durableCapture.ts";
 import { summarizeToolSources } from "../utils/toolSources.ts";
 import { applyResponsesPreviousResponseIdPolicy } from "../utils/responsesStatePolicy.ts";
 import { applyClaudeEffortVariant } from "./chatCore/claudeEffortVariant.ts";
@@ -429,6 +435,16 @@ import { generateSessionId } from "../services/sessionManager.ts";
 import { prepareWebSearchFallbackBody } from "../services/webSearchFallback.ts";
 import { prepareWebFetchFallbackBody } from "../services/webFetchInterception.ts";
 import { resolveInterceptSearch, resolveInterceptFetch } from "@/lib/db/interceptionRules";
+import {
+  resolveLocalTurnRecoveryPlan,
+  runLocalTurnRecovery,
+  hasRecoveryAttemptHeader,
+  RECOVERY_ATTEMPT_HEADER,
+  RECOVERY_SAMPLING,
+  requestDeclaresBridgeableTool,
+} from "../services/localTurnRecovery.ts";
+import { synthesizeOpenAiSseFromJson } from "../utils/jsonToSse.ts";
+import { builtinSkills } from "@/lib/skills/builtins";
 import {
   resolveExplicitStreamAlias,
   resolveStreamFlag,
@@ -905,6 +921,7 @@ export async function handleChatCore({
   const { body: bodyWithWebSearchFallback, fallback: webSearchFallbackPlan } =
     prepareWebSearchFallbackBody(body as Record<string, unknown>, {
       provider,
+      model: effectiveModel,
       sourceFormat,
       targetFormat,
       nativeCodexPassthrough: nativeResponsesPassthrough,
@@ -1127,6 +1144,23 @@ export async function handleChatCore({
           streamDefaultMode: apiKeyInfo?.streamDefaultMode,
         });
 
+  // Local-turn recovery gate (task #17): dead-turn recovery + WebSearch/WebFetch bridge for local
+  // chat models. Only fires for allowlisted local providers on the streaming Claude path; a strict
+  // no-op for cloud/passthrough/Responses/Codex traffic. When active the upstream call is forced
+  // non-streaming (see `upstreamStream` below) so the completion can be inspected + bridged tools
+  // executed + the turn resampled, then re-emitted as an SSE stream through the normal
+  // OpenAI->Claude translation. `stream` (the client-facing flag) is intentionally left unchanged.
+  const localTurnRecoveryPlan = resolveLocalTurnRecoveryPlan({
+    provider,
+    model,
+    isClaudeSource: sourceFormat === FORMATS.CLAUDE,
+    clientWantsStream: stream,
+    nativeCodexPassthrough,
+    isResponsesEndpoint,
+    recoveryHeaderPresent: hasRecoveryAttemptHeader(clientRawRequest?.headers),
+    requestDeclaresBridgeableTool: requestDeclaresBridgeableTool(body),
+  });
+
   // `settings` is already consolidated once near the top of handleChatCore
   // (the "fetch once, reuse" const). A second `const settings` here was a
   // duplicate same-scope declaration that broke the esbuild/tsx transform
@@ -1150,6 +1184,26 @@ export async function handleChatCore({
   });
   const pendingScope = { id: pendingRequestId, model, provider, connectionId: pendingConnId };
   const providerRequestCapture = createPreparedRequestLogger(reqLogger, pendingScope);
+  // Traffic-capture correlation scope (steps 2/3): thread correlationId + attempt +
+  // provider/model onto every upstream fetch this request triggers, so combo /
+  // fusion / pipeline / retry+rotate fan-outs are disambiguated on each capture
+  // line. Wraps the existing provider-request logging scope; a zero-overhead
+  // pass-through when capture is off (default; see durableCapture.isCaptureEnabled).
+  const runWithCaptureScope = <T>(
+    meta: { attempt: number; model: string; leg: string },
+    fn: () => Promise<T>
+  ): Promise<T> =>
+    runWithCaptureContext(
+      {
+        correlationId,
+        attempt: meta.attempt,
+        provider,
+        model: meta.model,
+        leg: meta.leg,
+        clientHeaders: buildExecutorClientHeaders(clientRawRequest?.headers, userAgent),
+      },
+      () => runWithCapture(providerRequestCapture, fn)
+    );
   // 0. Log client raw request (before format conversion)
   if (clientRawRequest) {
     reqLogger.logClientRawRequest(
@@ -1157,6 +1211,21 @@ export async function handleChatCore({
       clientRawRequest.body,
       clientRawRequest.headers
     );
+    // Traffic-capture leg (1) client_in: the raw client request as received,
+    // BEFORE any translate/compress step below (sanitizeChatRequestBody /
+    // translateRequest run later). Correlated by the SAME correlationId as the
+    // upstream legs (2)(3), so a consumer sees all legs of one request. Combo /
+    // fusion fan-out re-enters handleChatCore per target, so client_in repeats
+    // per target under the shared correlationId (same raw body each time).
+    // Fire-and-forget + gated: a strict no-op when capture is off (default).
+    captureClientIn({
+      correlationId,
+      provider,
+      model,
+      endpoint: clientRawRequest.endpoint || "/v1/chat/completions",
+      clientHeaders: clientRawRequest.headers ?? null,
+      clientBody: clientRawRequest.body ?? body,
+    });
   }
   const reasoningRouteDecision =
     body && typeof body === "object"
@@ -2131,7 +2200,12 @@ export async function handleChatCore({
   // wants JSON; the non-streaming branch below accumulates the SSE and converts
   // it back to JSON (same mechanism already used for Claude-Code-compatible
   // providers via isClaudeCodeCompatible).
-  const upstreamStream = stream || isClaudeCodeCompatible || providerRequiresStreaming;
+  // Local-turn recovery (task #17) needs the complete upstream JSON to inspect/execute tools/resample,
+  // so force the upstream call non-streaming for those gated local turns (the JSON is re-synthesized
+  // into an SSE stream for the client below). All other requests keep the existing behavior.
+  const upstreamStream = localTurnRecoveryPlan.active
+    ? false
+    : stream || isClaudeCodeCompatible || providerRequiresStreaming;
   let ccSessionId: string | null = null;
   const stripTypes = getStripTypesForProviderModel(provider || "", model || "");
 
@@ -2770,6 +2844,32 @@ export async function handleChatCore({
     log
   );
 
+  // Local-turn recovery (task #17) needs the COMPLETE upstream response as JSON so it can inspect
+  // the turn, execute bridged tools and resample. `upstreamStream` is threaded to
+  // executor.execute() as an option, but the executor never writes it onto the request body, and
+  // actual upstream streaming is decided by `body.stream` (see the "SSE decoding is gated on
+  // body.stream" note in executors/base.ts). So the option alone left the body saying
+  // stream:true, the upstream streamed, and recovery aborted with
+  // "skipped (non-JSON upstream or error): Unexpected token 'd', \"data: {...\"" -- i.e. the whole
+  // feature silently no-opped on exactly the streaming Claude path it was written for.
+  //
+  // Done HERE on purpose: this is after the last `translatedBody = ...` reassignment (the
+  // translateRequest/normalize chain above rebuilds the body from the client's, restoring
+  // stream:true) and before the first executor.execute() call, so it cannot be clobbered.
+  // Forcing the body non-streaming is what finally made
+  // the tool bridge run ("executed 4 bridged tool call(s); resampling"). But it thereby activated
+  // synthesizeOpenAiSseFromJson for the first time, and that path DUPLICATES tool_calls.arguments
+  // when re-split by the openai->claude translator, so Claude Code rejected every tool call with
+  // "Bash(input JSON failed to parse - 363 bytes)" (~4x the real 85-byte payload). That same
+  // duplication hazard is documented in jsonToSse.ts for reasoning_content (#3089 follow-up).
+  //
+  // That corruption is fixed in jsonToSse.ts: each synthesized tool call now carries its own
+  // `index`, so the translator stops collapsing them onto index 0 and concatenating arguments.
+  if (localTurnRecoveryPlan.active) {
+    translatedBody.stream = false;
+    delete translatedBody.stream_options;
+  }
+
   // Rename max_tokens to max_completion_tokens if not supported (#1961)
   if (!supportsMaxTokens({ provider, model })) {
     if (translatedBody.max_tokens !== undefined) {
@@ -3064,7 +3164,7 @@ export async function handleChatCore({
                 provider,
                 attemptConnectionId,
                 modelToCall,
-                async () => {
+                async (jobSignal?: AbortSignal) => {
                   trace("inside_rate_limit", { connectionId: attemptConnectionId });
                   updatePendingScope(pendingScope, {
                     stage: "rate_limit_slot_acquired",
@@ -3077,28 +3177,34 @@ export async function handleChatCore({
                     connectionTimeoutMs: resolveConnectionTimeoutMs(
                       execCreds?.providerSpecificData
                     ),
-                    signal: streamController.signal,
+                    // Job signal from withRateLimit: a child of streamController's
+                    // signal that also fires when the rate-limit queue budget
+                    // expires, so a dropped job aborts the upstream request
+                    // instead of leaving it running orphaned.
+                    signal: jobSignal ?? streamController.signal,
                     log,
                     execute: (signal) =>
-                      runWithCapture(providerRequestCapture, () =>
-                        executor.execute({
-                          model: modelToCall,
-                          body: bodyToSend,
-                          stream: upstreamStream,
-                          credentials: execCreds,
-                          signal,
-                          log,
-                          extendedContext,
-                          upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
-                          clientHeaders: buildExecutorClientHeaders(
-                            clientRawRequest?.headers,
-                            userAgent
-                          ),
-                          clientResponseFormat,
-                          onCredentialsRefreshed,
-                          skipUpstreamRetry,
-                          contextEditing: { enabled: contextEditingEnabled },
-                        })
+                      runWithCaptureScope(
+                        { attempt: attempts, model: modelToCall, leg: "primary" },
+                        () =>
+                          executor.execute({
+                            model: modelToCall,
+                            body: bodyToSend,
+                            stream: upstreamStream,
+                            credentials: execCreds,
+                            signal,
+                            log,
+                            extendedContext,
+                            upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
+                            clientHeaders: buildExecutorClientHeaders(
+                              clientRawRequest?.headers,
+                              userAgent
+                            ),
+                            clientResponseFormat,
+                            onCredentialsRefreshed,
+                            skipUpstreamRetry,
+                            contextEditing: { enabled: contextEditingEnabled },
+                          })
                       ),
                   });
                 },
@@ -3386,25 +3492,27 @@ export async function handleChatCore({
                         signal: streamController.signal,
                         log,
                         execute: (signal) =>
-                          runWithCapture(providerRequestCapture, () =>
-                            executor.execute({
-                              model: modelToCall,
-                              body,
-                              stream: upstreamStream,
-                              credentials: execCreds,
-                              signal,
-                              log,
-                              extendedContext,
-                              upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
-                              clientHeaders: buildExecutorClientHeaders(
-                                clientRawRequest?.headers,
-                                userAgent
-                              ),
-                              clientResponseFormat,
-                              onCredentialsRefreshed,
-                              skipUpstreamRetry,
-                              contextEditing: { enabled: contextEditingEnabled },
-                            })
+                          runWithCaptureScope(
+                            { attempt: attempts, model: modelToCall, leg: "stream-recovery" },
+                            () =>
+                              executor.execute({
+                                model: modelToCall,
+                                body,
+                                stream: upstreamStream,
+                                credentials: execCreds,
+                                signal,
+                                log,
+                                extendedContext,
+                                upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
+                                clientHeaders: buildExecutorClientHeaders(
+                                  clientRawRequest?.headers,
+                                  userAgent
+                                ),
+                                clientResponseFormat,
+                                onCredentialsRefreshed,
+                                skipUpstreamRetry,
+                                contextEditing: { enabled: contextEditingEnabled },
+                              })
                           ),
                       });
                       const retryRes = normalizeExecutorResult(retryRaw);
@@ -3921,22 +4029,24 @@ export async function handleChatCore({
         const retryModelId = String(translatedBody.model || effectiveModel);
         assertManagedLeaseFence(getExecutionConnectionId(getExecutionCredentials()));
         const retryResult = normalizeExecutorResult(
-          await runWithCapture(providerRequestCapture, () =>
-            executor.execute({
-              model: retryModelId,
-              body: translatedBody,
-              stream: upstreamStream,
-              credentials: getExecutionCredentials(),
-              signal: streamController.signal,
-              log,
-              extendedContext,
-              upstreamExtraHeaders: buildUpstreamHeadersForExecute(retryModelId),
-              clientHeaders: buildExecutorClientHeaders(clientRawRequest?.headers, userAgent),
-              clientResponseFormat,
-              onCredentialsRefreshed,
-              skipUpstreamRetry: isCombo,
-              contextEditing: { enabled: contextEditingEnabled },
-            })
+          await runWithCaptureScope(
+            { attempt: 0, model: retryModelId, leg: "refresh-retry" },
+            () =>
+              executor.execute({
+                model: retryModelId,
+                body: translatedBody,
+                stream: upstreamStream,
+                credentials: getExecutionCredentials(),
+                signal: streamController.signal,
+                log,
+                extendedContext,
+                upstreamExtraHeaders: buildUpstreamHeadersForExecute(retryModelId),
+                clientHeaders: buildExecutorClientHeaders(clientRawRequest?.headers, userAgent),
+                clientResponseFormat,
+                onCredentialsRefreshed,
+                skipUpstreamRetry: isCombo,
+                contextEditing: { enabled: contextEditingEnabled },
+              })
           )
         );
 
@@ -4903,7 +5013,17 @@ export async function handleChatCore({
           responseBody,
           responsePayloadFormat,
           clientResponseFormat,
-          responseToolNameMap
+          responseToolNameMap,
+          // Same namespace the request side threads into translateRequest
+          // (`signatureNamespace: connectionId`) and the streaming response side
+          // passes to createSSETransformStreamWithLogger. Without it the Gemini
+          // thought-signature cache is written under the bare tool-call id and the
+          // next turn's `<connectionId>:<toolCallId>` lookup always misses.
+          // Must mirror the request-side value verbatim: deriving it differently
+          // here (e.g. via getCurrentConnectionId(), which prefers
+          // credentials.connectionId) re-introduces the mismatch when the two
+          // disagree.
+          { signatureNamespace: connectionId ?? null }
         )
       : responseBody;
     const memoryExtractionResponse = translatedResponse;
@@ -5005,8 +5125,11 @@ export async function handleChatCore({
 
     const customSkillExecutionEnabled =
       Boolean(memoryOwnerId) && memorySettings?.skillsEnabled === true;
+    // webSearchFallbackPlan.builtinToolNames carries the injected omniroute_web_search fallback
+    // AND any function-form WebSearch/WebFetch tools the client sent directly (task #17); the
+    // web_fetch fallback and the memory builtins are auto-executed alongside them.
     const builtinToolNames = [
-      webSearchFallbackPlan.toolName,
+      ...webSearchFallbackPlan.builtinToolNames,
       webFetchFallbackPlan.toolName,
       ...(memoryOwnerId && memorySettings?.enabled ? MEMORY_BUILTIN_TOOL_NAMES : []),
     ].filter((name): name is string => Boolean(name));
@@ -5303,6 +5426,121 @@ export async function handleChatCore({
       success: true,
       response: buildNonStreamingJsonResponse(translatedResponse, responseHeaders),
     };
+  }
+
+  // ── Local-turn recovery + tool bridge (task #17) ──────────────────────────────────────────
+  // The upstream was forced non-streaming above for gated local providers, so providerResponse
+  // carries a complete OpenAI chat-completion JSON. Inspect it: execute any bridged
+  // WebSearch/WebFetch/omniroute_web_search calls and resample so the model uses the results
+  // (CHANGE 1), then recover dead-turns with one directive resample (CHANGE 2). The final OpenAI
+  // JSON is re-synthesized into an OpenAI SSE stream that flows through the normal OpenAI->Claude
+  // translation below, preserving the client's Anthropic SSE contract. Double execution is
+  // impossible here: the non-streaming branch above (which runs handleToolCallExecution) is skipped
+  // because the client `stream` flag is still true. On any parse/HTTP problem we leave
+  // providerResponse untouched, a safe fallback to the existing streaming path.
+  if (localTurnRecoveryPlan.active && providerResponse.status === 200) {
+    try {
+      const firstJsonText = await providerResponse.clone().text();
+      const firstJson = JSON.parse(firstJsonText) as Record<string, unknown>;
+      if (Array.isArray((firstJson as { choices?: unknown }).choices)) {
+        const baseMessages = Array.isArray((translatedBody as { messages?: unknown }).messages)
+          ? [...((translatedBody as { messages?: Record<string, unknown>[] }).messages ?? [])]
+          : [];
+        // Resample the model non-streaming with an updated message array (direct executor call,
+        // marked with the recovery header so a bridged upstream never re-enters recovery).
+        const reinvoke = async (
+          messages: Record<string, unknown>[]
+        ): Promise<Record<string, unknown> | null> => {
+          try {
+            const reinvokeBody = await prepareUpstreamBody({
+              translatedBody: {
+                ...(translatedBody as Record<string, unknown>),
+                messages,
+                stream: false,
+                ...(RECOVERY_SAMPLING ?? {}),
+              },
+              modelToCall: effectiveModel,
+              provider,
+              targetFormat,
+              credentials,
+              log,
+              bypassDefaultToolLimit: isOpencodeClient,
+            });
+            const rawResult = await executor.execute({
+              model: effectiveModel,
+              body: reinvokeBody,
+              stream: false,
+              credentials: getExecutionCredentials(),
+              signal: streamController.signal,
+              log,
+              extendedContext,
+              upstreamExtraHeaders: {
+                ...buildUpstreamHeadersForExecute(effectiveModel),
+                [RECOVERY_ATTEMPT_HEADER]: "1",
+              },
+              clientHeaders: buildExecutorClientHeaders(clientRawRequest?.headers, userAgent),
+              onCredentialsRefreshed,
+              skipUpstreamRetry: true,
+              contextEditing: { enabled: contextEditingEnabled },
+            });
+            const norm = normalizeExecutorResult(rawResult);
+            if (!norm?.response || norm.response.status !== 200) return null;
+            const text = await norm.response.clone().text();
+            return JSON.parse(text) as Record<string, unknown>;
+          } catch (err) {
+            log?.warn?.(
+              "LOCAL_RECOVERY",
+              `resample failed: ${err instanceof Error ? err.message : String(err)}`
+            );
+            return null;
+          }
+        };
+        const executeBridgedTool = async (
+          canonical: string,
+          args: Record<string, unknown>
+        ): Promise<unknown> => {
+          const handlers = builtinSkills as Record<
+            string,
+            | ((
+                input: Record<string, unknown>,
+                context: { apiKeyId: string; sessionId: string }
+              ) => Promise<Record<string, unknown>>)
+            | undefined
+          >;
+          const handler = handlers[canonical];
+          if (!handler) return { error: `Unknown bridged tool: ${canonical}` };
+          return handler(args, {
+            apiKeyId: apiKeyInfo?.id || "local",
+            sessionId: pipelineSessionId,
+          });
+        };
+        const finalJson = await runLocalTurnRecovery(firstJson, {
+          reinvoke,
+          baseMessages,
+          executeBridgedTool,
+          // A bridged search/fetch tool was offered on this request, so a turn that announces a
+          // search and emits no tool call is a failure, not a normal answer.
+          bridgedToolAvailable: webSearchFallbackPlan.builtinToolNames.length > 0,
+          log,
+        });
+        const synthesized = synthesizeOpenAiSseFromJson(JSON.stringify(finalJson));
+        if (synthesized) {
+          const sseHeaders = new Headers(providerResponse.headers);
+          sseHeaders.delete("content-length");
+          sseHeaders.set("content-type", "text/event-stream");
+          providerResponse = new Response(synthesized, {
+            status: 200,
+            statusText: providerResponse.statusText,
+            headers: sseHeaders,
+          });
+        }
+      }
+    } catch (err) {
+      log?.warn?.(
+        "LOCAL_RECOVERY",
+        `skipped (non-JSON upstream or error): ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
   }
 
   // Streaming response
@@ -5690,6 +5928,30 @@ export async function handleChatCore({
     !isDroidCLI;
   const streamStateBody = finalBody || body;
 
+  // Codex declares its composer/exec tools (exec, apply_patch) with Responses
+  // `type:"custom"`. The request translation converts them to `{ input:string }`
+  // function tools, so the returned tool_calls arrive as ordinary function calls.
+  // Thread the original custom-tool names into the response translator so it re-emits
+  // those tool_calls as Responses `custom_tool_call` items (Codex rejects a
+  // `function_call` for a custom tool: "invoked with incompatible payload"). Extracted
+  // from the untranslated client body; empty for non-Responses clients (harmless).
+  const responsesCustomToolNames =
+    clientResponseFormat === FORMATS.OPENAI_RESPONSES
+      ? extractResponsesCustomToolNames(body)
+      : null;
+
+  // Codex Multi-Agent V2 (and any Responses `{type:"namespace"}` tool group): the request
+  // flatten collapses a namespace group into BARE sub-tools so the chat-only model can call
+  // them, which strips the namespace. Build a `bareName -> namespace` map from the ORIGINAL
+  // (untranslated) client body so the response translator can re-attach the `namespace` field
+  // to returned bare tool_calls; Codex then resolves the namespaced executor
+  // (`agents/spawn_agent`) instead of failing with "unsupported call: spawn_agent". Only
+  // namespace-flattened tools are mapped, so plain/MCP function tools are never re-tagged.
+  const responsesToolNamespaceByName =
+    clientResponseFormat === FORMATS.OPENAI_RESPONSES
+      ? buildToolNamespaceMap((body as { tools?: unknown } | null)?.tools)
+      : null;
+
   if (needsResponsesTranslation) {
     // Provider returns openai-responses, translate to openai (Chat Completions) that clients expect
     log?.debug?.("STREAM", `Responses translation mode: openai-responses → openai`);
@@ -5769,6 +6031,7 @@ export async function handleChatCore({
     clientResponseFormat,
     echoModel,
     responseHeaders,
+    provider,
   });
 
   // ── Gamification event (fire-and-forget) ──

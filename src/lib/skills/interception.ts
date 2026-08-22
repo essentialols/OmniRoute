@@ -5,6 +5,7 @@ import { memoryBuiltinHandlers, MEMORY_BUILTIN_TOOL_NAMES } from "./memoryBuilti
 import { detectProvider, decodeSkillToolName } from "./injection";
 import { OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME } from "@omniroute/open-sse/services/webSearchFallback.ts";
 import { OMNIROUTE_WEB_FETCH_FALLBACK_TOOL_NAME } from "@omniroute/open-sse/services/webFetchInterception.ts";
+import { BRIDGED_TOOL_ALIASES } from "@omniroute/open-sse/services/localTurnRecovery.ts";
 import { logger } from "../../../open-sse/utils/logger.ts";
 
 const log = logger("SKILLS_INTERCEPTION");
@@ -31,6 +32,9 @@ interface ExecutionContext {
 const BUILTIN_TOOL_ALIASES: Record<string, string> = {
   [OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME]: "web_search",
   [OMNIROUTE_WEB_FETCH_FALLBACK_TOOL_NAME]: "web_fetch",
+  // Function-form WebSearch/WebFetch tools (task #17) resolve to the same builtin handlers as the
+  // native web_search fallback, so a client that sends them directly gets server-side execution.
+  ...BRIDGED_TOOL_ALIASES,
 };
 
 const MEMORY_TOOL_NAMES = new Set<string>(MEMORY_BUILTIN_TOOL_NAMES);
@@ -343,9 +347,7 @@ export async function handleToolCallExecution(
       );
       const resultTextBlocks = results.map((r) => ({
         type: "text",
-        text: `[Skill result: ${toolNamesById.get(r.id) || r.id}]\n${JSON.stringify(
-          r.result
-        )}`,
+        text: `[Skill result: ${toolNamesById.get(r.id) || r.id}]\n${JSON.stringify(r.result)}`,
       }));
       const firstRemainingToolUseIndex = remainingContent.findIndex(
         (block: any) => block?.type === "tool_use"

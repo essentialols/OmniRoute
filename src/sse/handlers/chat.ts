@@ -9,6 +9,7 @@ import { resolvePreviousResponseState } from "@/lib/db/responsesContinuationStor
 import { normalizeResponsesPreviousResponseIdMode } from "@omniroute/open-sse/utils/responsesStatePolicy.ts";
 import { FORMATS } from "@omniroute/open-sse/translator/formats.ts";
 import { resolveRoutingModel, RoutingModelOps } from "./resolveRoutingModel";
+import { normalizeSamplingRequest } from "@/shared/sampling/requestMarker";
 import {
   getProviderCredentialsWithQuotaPreflight,
   markAccountUnavailable,
@@ -49,6 +50,7 @@ import {
   HTTP_STATUS,
   ANTIGRAVITY_PRE_RESPONSE_TIMEOUT_CODE,
 } from "@omniroute/open-sse/config/constants.ts";
+import { parseModel } from "@omniroute/open-sse/services/model.ts";
 import {
   getTargetFormat,
   detectFormatFromEndpoint,
@@ -386,6 +388,7 @@ async function handleChatImplementation(
   // downstream mapper (Anthropic / Gemini / xAI / Responses). An explicit client
   // reasoning_effort / reasoning / object-shaped thinking always wins (backward compatible).
   body = normalizeReasoningRequest(body);
+  body = normalizeSamplingRequest(body);
 
   const sourceFormat = detectFormatFromUrl(body, request.url);
 
@@ -706,6 +709,10 @@ async function handleChatImplementation(
     method: request.method,
     model: modelStr,
     signal: request.signal,
+    // Destination provider (when the model string carries a concrete provider
+    // prefix) so PII masking can apply the per-provider trust tier. Combos /
+    // bare aliases resolve to null here and are masked per-target downstream.
+    provider: parseModel(modelStr).provider,
     stream: body?.stream === true,
   });
   if (preCallGuardrails.blocked) {
