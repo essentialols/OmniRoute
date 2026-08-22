@@ -417,51 +417,112 @@ function getMappedOverride(model, agentId = "antigravity") {
   });
 }
 
-async function passthrough(req, res, bodyBuffer) {
-  const targetHost = getTargetHost(req);
-  const targetIP = await resolveTargetIP(targetHost);
+async function passthrough(req, res, bodyBuffer, capture = true) {
+  // D4 (Bug 2): passthrough (non-intercepted) traffic must ALSO be recorded in
+  // the Traffic Inspector. Previously only intercept() captured, so every host
+  // that is not an antigravity :generateContent chat request (chatgpt.com,
+  // api.anthropic.com, copilot, cursor, non-chat antigravity, unmapped models)
+  // went through here and was never visible in /requests. We tee the upstream
+  // response (capped copy) while streaming it to the client untouched, then
+  // fire a fire-and-forget capture. `capture=false` skips the OmniRoute
+  // self-loop passthrough (internal traffic, not client traffic).
+  const reqHost = String(req.headers.host || "").split(":")[0].toLowerCase();
+  const agentId = TARGET_HOST_AGENT.get(reqHost) || "unknown";
+  const startedAt = Date.now();
+  let upstreamStartedAt = startedAt;
+  let captureStatus = "error";
+  let respHeaders = {};
+  let respBody = "";
+  let respSize = 0;
+  let captureError;
+  let captured = false;
 
-  // Defense-in-depth loop guard (Gap 14). The x-omniroute-source header is the
-  // primary guard; this is a structural backstop for when it is stripped: if
-  // the upstream resolves to ourselves (loopback on our own listen port),
-  // forwarding would re-enter this server forever. Refuse instead of looping.
-  if (bypassShim.isSelfLoopDestination(targetIP, 443, LOCAL_PORT)) {
-    console.error(
-      `❌ Loop guard: ${targetHost} resolves to self (${targetIP}:${LOCAL_PORT}) — refusing to forward`
-    );
-    if (!res.headersSent) res.writeHead(508);
-    res.end("Loop Detected");
-    return;
-  }
+  const fire = () => {
+    if (!capture || captured) return;
+    captured = true;
+    captureToInspector({
+      req,
+      bodyBuffer,
+      agentId,
+      sourceModel: undefined,
+      mappedModel: null,
+      status: captureStatus,
+      respHeaders,
+      respBody,
+      respSize,
+      error: captureError,
+      proxyLatencyMs: Math.max(0, upstreamStartedAt - startedAt),
+      upstreamLatencyMs: Math.max(0, Date.now() - upstreamStartedAt),
+    });
+  };
 
-  // TLS validation is enabled by default. Set MITM_DISABLE_TLS_VERIFY=1 only
-  // in controlled local environments where the target uses a self-signed cert.
-  const rejectUnauthorized = process.env.MITM_DISABLE_TLS_VERIFY !== "1";
+  try {
+    const targetHost = getTargetHost(req);
+    const targetIP = await resolveTargetIP(targetHost);
 
-  const forwardReq = https.request(
-    {
-      hostname: targetIP,
-      port: 443,
-      path: req.url,
-      method: req.method,
-      headers: { ...req.headers, host: targetHost },
-      servername: targetHost,
-      rejectUnauthorized,
-    },
-    (forwardRes) => {
-      res.writeHead(forwardRes.statusCode, forwardRes.headers);
-      forwardRes.pipe(res);
+    // Defense-in-depth loop guard (Gap 14). The x-omniroute-source header is the
+    // primary guard; this is a structural backstop for when it is stripped: if
+    // the upstream resolves to ourselves (loopback on our own listen port),
+    // forwarding would re-enter this server forever. Refuse instead of looping.
+    if (bypassShim.isSelfLoopDestination(targetIP, 443, LOCAL_PORT)) {
+      console.error(
+        `❌ Loop guard: ${targetHost} resolves to self (${targetIP}:${LOCAL_PORT}), refusing to forward`
+      );
+      captureStatus = 508;
+      captureError = "Loop Detected";
+      if (!res.headersSent) res.writeHead(508);
+      res.end("Loop Detected");
+      fire();
+      return;
     }
-  );
 
-  forwardReq.on("error", (err) => {
-    console.error(`❌ Passthrough error: ${err.message}`);
+    // TLS validation is enabled by default. Set MITM_DISABLE_TLS_VERIFY=1 only
+    // in controlled local environments where the target uses a self-signed cert.
+    const rejectUnauthorized = process.env.MITM_DISABLE_TLS_VERIFY !== "1";
+
+    upstreamStartedAt = Date.now();
+    const forwardReq = https.request(
+      {
+        hostname: targetIP,
+        port: 443,
+        path: req.url,
+        method: req.method,
+        headers: { ...req.headers, host: targetHost },
+        servername: targetHost,
+        rejectUnauthorized,
+      },
+      (forwardRes) => {
+        captureStatus = forwardRes.statusCode;
+        respHeaders = headersToObject(forwardRes.headers);
+        forwardRes.on("data", (chunk) => {
+          if (respBody.length < INGEST_MAX_BODY) respBody += chunk.toString("utf8");
+          respSize += chunk.length;
+        });
+        forwardRes.on("end", fire);
+        res.writeHead(forwardRes.statusCode, forwardRes.headers);
+        forwardRes.pipe(res);
+      }
+    );
+
+    forwardReq.on("error", (err) => {
+      captureError = sanitizeErrorMessage(err && err.message);
+      console.error(`❌ Passthrough error: ${err.message}`);
+      if (!res.headersSent) res.writeHead(502);
+      res.end("Bad Gateway");
+      fire();
+    });
+
+    if (bodyBuffer.length > 0) forwardReq.write(bodyBuffer);
+    forwardReq.end();
+  } catch (err) {
+    // resolveTargetIP() / DNS failures land here so the client always gets a
+    // response and the capture still fires (with the error recorded).
+    captureError = sanitizeErrorMessage(err && err.message);
+    console.error(`❌ Passthrough error: ${err && err.message}`);
     if (!res.headersSent) res.writeHead(502);
     res.end("Bad Gateway");
-  });
-
-  if (bodyBuffer.length > 0) forwardReq.write(bodyBuffer);
-  forwardReq.end();
+    fire();
+  }
 }
 
 // Build + fire-and-forget the inspector capture entry. NEVER throws — capture
@@ -650,7 +711,8 @@ async function startMitmServer() {
 
     if (req.headers["x-omniroute-source"] === "omniroute") {
       vlog(1, `[MITM] → PASSTHROUGH (OmniRoute source loop)`);
-      return passthrough(req, res, bodyBuffer);
+      // Internal OmniRoute self-loop (not client traffic): skip inspector capture.
+      return passthrough(req, res, bodyBuffer, false);
     }
 
     if (!TARGET_HOSTS.has(host)) {

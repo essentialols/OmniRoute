@@ -11,6 +11,7 @@ import {
   isFalImageEditModel,
 } from "@omniroute/open-sse/handlers/imageGeneration/providers/fal.ts";
 import { createInjectionGuard } from "@/middleware/promptInjectionGuard";
+import { withNonChatCapture } from "@/app/api/v1/_shared/captureNonChat";
 import {
   getProviderCredentialsWithQuotaPreflight,
   clearRecoveredProviderState,
@@ -700,4 +701,10 @@ async function postHandler(request: Request, _context?: unknown) {
   );
 }
 
-export const POST = postHandler;
+// Upstream moved the prompt-injection check INSIDE postHandler
+// (createInjectionGuard()({ prompt })), so the old outer withInjectionGuard
+// wrapper is gone. The capture wrapper stays OUTERMOST.
+export const POST = withNonChatCapture(postHandler, {
+  endpoint: "/v1/images/edits",
+  providerFallback: "images",
+});
