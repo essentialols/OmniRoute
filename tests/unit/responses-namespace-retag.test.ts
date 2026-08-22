@@ -83,7 +83,9 @@ async function runToolCall(
     },
   });
 
-  const transform = createResponsesApiTransformStream(null, undefined, { toolNamespaceByName: namespaceMap });
+  const transform = createResponsesApiTransformStream(null, undefined, {
+    toolNamespaceByName: namespaceMap,
+  });
   const out = source.pipeThrough(transform);
   const decoder = new TextDecoder();
   let text = "";
@@ -141,9 +143,12 @@ function freshTranslatorState(toolNamespaceByName: Record<string, string> | null
     responseId: "resp_test",
     created: 0,
     funcArgsBuf: {},
+    funcArgsEscapeState: {},
     funcNames: {},
     funcCallIds: {},
     funcArgsDone: {},
+    // Mirrors the canonical state built in translator/index.ts; emitToolCall reads it.
+    funcItemAdded: {},
     funcItemDone: {},
     msgItemAdded: {},
     completedOutputItems: [],

@@ -262,6 +262,9 @@ export function __clearForTests() {
   getState().cache.clear();
 }
 
+/** A model-scoped window counts as spent only when effectively 100% used (see callers). */
+const MODEL_WINDOW_SPENT_PERCENT = 99.999;
+
 function resolveAntigravityQuotaWindowsForModel(
   quotaNames: string[],
   requestedModel: string
@@ -279,20 +282,23 @@ function resolveAntigravityQuotaWindowsForModel(
     });
   }
 
-  const familyAggregates =
-    requestedFamily === "gemini"
-      ? ["gemini_weekly"]
-      : requestedFamily === "claude"
-        ? ["claude_gpt_weekly"]
-        : [];
-
   const exactWindows = quotaNames.filter((windowName) => {
     const bare = windowName.replace(/^(antigravity|agy)\//, "");
     return bare === bareModel;
   });
-  const aggregateWindows = familyAggregates.filter((key) => quotaNames.includes(key));
-  const scoped = [...exactWindows, ...aggregateWindows];
-  if (scoped.length > 0) return scoped;
+  if (exactWindows.length > 0) return exactWindows;
+
+  // No window for this exact model. What that means depends on the family, because the two
+  // families are metered differently upstream:
+  //
+  //  - claude: all Claude models draw down ONE shared bucket (`claude_gpt_weekly`), so a
+  //    burned sibling really is evidence that this model is burned too. Fall back to the
+  //    family's windows.
+  //  - gemini: each model has its OWN window. An uncached gemini model is MISSING EVIDENCE,
+  //    not evidence of exhaustion, so return nothing and let the caller fail open. Falling
+  //    back to the family here is what made one burned `gemini-3.x` sibling refuse a
+  //    `gemini-2.5-*` model that had never been measured.
+  if (requestedFamily !== "claude") return [];
 
   return quotaNames.filter(
     (windowName) => getAntigravityQuotaFamily(windowName) === requestedFamily
@@ -330,10 +336,11 @@ function isAntigravityQuotaExhausted(
     matchingWindows.length > 0 &&
     matchingWindows.every(
       (windowName) =>
-        // 100, not DEFAULT_QUOTA_THRESHOLD_PERCENT (99): a model-scoped window is only
-        // exhausted when it is genuinely spent. Treating 99% as exhausted throws away the
-        // last 1% of every window.
-        getQuotaWindowStatus(connectionId, windowName, 100)?.reachedThreshold
+        // MODEL_WINDOW_SPENT_PERCENT, not DEFAULT_QUOTA_THRESHOLD_PERCENT (99): a
+        // model-scoped window is only exhausted when it is genuinely spent. 99 throws away
+        // the last 1% of every window; a flat 100 never fires because upstream reports
+        // near-zero remainders as floats (e.g. 0.00000167% left = 99.99999833% used).
+        getQuotaWindowStatus(connectionId, windowName, MODEL_WINDOW_SPENT_PERCENT)?.reachedThreshold
     )
   );
 }
@@ -434,10 +441,11 @@ function isCodexQuotaExhausted(
     scopedWindowNames.length > 0 &&
     scopedWindowNames.every(
       (windowName) =>
-        // 100, not DEFAULT_QUOTA_THRESHOLD_PERCENT (99): a model-scoped window is only
-        // exhausted when it is genuinely spent. Treating 99% as exhausted throws away the
-        // last 1% of every window.
-        getQuotaWindowStatus(connectionId, windowName, 100)?.reachedThreshold
+        // MODEL_WINDOW_SPENT_PERCENT, not DEFAULT_QUOTA_THRESHOLD_PERCENT (99): a
+        // model-scoped window is only exhausted when it is genuinely spent. 99 throws away
+        // the last 1% of every window; a flat 100 never fires because upstream reports
+        // near-zero remainders as floats (e.g. 0.00000167% left = 99.99999833% used).
+        getQuotaWindowStatus(connectionId, windowName, MODEL_WINDOW_SPENT_PERCENT)?.reachedThreshold
     )
   );
 }
