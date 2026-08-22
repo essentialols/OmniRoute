@@ -187,7 +187,9 @@ test("CodexExecutor.buildHeaders binds workspace ids and disables SSE accept for
   assert.equal(standardHeaders.Version, "0.146.0");
   assert.equal(standardHeaders["Openai-Beta"], "responses=experimental");
   assert.equal(standardHeaders["X-Codex-Beta-Features"], "responses_websockets");
-  assert.equal(standardHeaders["User-Agent"], "codex-cli/0.146.0 (Windows 10.0.26200; x64)");
+  // INTENTIONAL FORK DIVERGENCE: upstream asserts the captured Windows UA;
+  // this fork deliberately presents macOS. Version stays in sync with upstream.
+  assert.equal(standardHeaders["User-Agent"], "codex-cli/0.146.0 (MacOS 24.0.0; arm64)");
   assert.equal(compactHeaders.Accept, "application/json");
 });
 
@@ -196,13 +198,13 @@ test("CodexExecutor.buildHeaders honors safe env overrides for Version and User-
 
   await withEnv(
     {
-      CODEX_CLIENT_VERSION: "0.144.0",
+      CODEX_CLIENT_VERSION: "0.142.5",
       CODEX_USER_AGENT: undefined,
     },
     () => {
       const headers = executor.buildHeaders({ accessToken: "codex-token" }, true);
-      assert.equal(headers.Version, "0.144.0");
-      assert.equal(headers["User-Agent"], "codex-cli/0.144.0 (Windows 10.0.26200; x64)");
+      assert.equal(headers.Version, "0.142.5");
+      assert.equal(headers["User-Agent"], "codex-cli/0.142.5 (MacOS 24.0.0; arm64)");
     }
   );
 
