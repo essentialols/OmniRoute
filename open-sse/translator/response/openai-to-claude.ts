@@ -46,10 +46,22 @@ function extractXmlInvokeBlocks(
     const toolCallTextMatch = remaining.match(/TOOL_CALL\s+([A-Za-z0-9_]+):\s*/);
 
     const matches = [
-      invokeMatch ? { type: "invoke" as const, index: invokeMatch.index!, data: invokeMatch } : null,
-      toolCallTagMatch ? { type: "tool_call_tag" as const, index: toolCallTagMatch.index!, data: toolCallTagMatch } : null,
-      toolCallTextMatch ? { type: "tool_call_text" as const, index: toolCallTextMatch.index!, data: toolCallTextMatch } : null,
-    ].filter(Boolean).sort((a, b) => a!.index - b!.index);
+      invokeMatch
+        ? { type: "invoke" as const, index: invokeMatch.index!, data: invokeMatch }
+        : null,
+      toolCallTagMatch
+        ? { type: "tool_call_tag" as const, index: toolCallTagMatch.index!, data: toolCallTagMatch }
+        : null,
+      toolCallTextMatch
+        ? {
+            type: "tool_call_text" as const,
+            index: toolCallTextMatch.index!,
+            data: toolCallTextMatch,
+          }
+        : null,
+    ]
+      .filter(Boolean)
+      .sort((a, b) => a!.index - b!.index);
 
     if (matches.length === 0) {
       cleaned += remaining;
@@ -94,9 +106,7 @@ function extractXmlInvokeBlocks(
         const name = (parsed.name || parsed.tool_name || "") as string;
         const rawArgs = parsed.arguments || parsed.args || parsed.parameters || {};
         const args: Record<string, string> =
-          typeof rawArgs === "string"
-            ? JSON.parse(rawArgs)
-            : (rawArgs as Record<string, string>);
+          typeof rawArgs === "string" ? JSON.parse(rawArgs) : (rawArgs as Record<string, string>);
         if (name) {
           toolCalls.push({ id: `toolu_txt_${Date.now()}_${toolCalls.length}`, name, args });
         }
@@ -114,12 +124,27 @@ function extractXmlInvokeBlocks(
       let jsonEndIndex = -1;
       for (let i = 0; i < afterPrefix.length; i++) {
         const c = afterPrefix[i];
-        if (escape) { escape = false; continue; }
-        if (c === "\\" && inString) { escape = true; continue; }
-        if (c === '"') { inString = !inString; continue; }
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (c === "\\" && inString) {
+          escape = true;
+          continue;
+        }
+        if (c === '"') {
+          inString = !inString;
+          continue;
+        }
         if (!inString) {
           if (c === "{") depth++;
-          else if (c === "}") { depth--; if (depth === 0) { jsonEndIndex = i + 1; break; } }
+          else if (c === "}") {
+            depth--;
+            if (depth === 0) {
+              jsonEndIndex = i + 1;
+              break;
+            }
+          }
         }
       }
       if (jsonEndIndex === -1) {
@@ -274,16 +299,23 @@ export function openaiToClaudeResponse(chunk, state) {
   // the model echoed it through ordinary content (#8081). Only the content
   // block emission is skipped when nothing meaningful remains; the chunk
   // may still carry tool_calls / finish_reason below, which must still run.
-  if (delta?.content) {
+  //
+  // Fork addition: guard against empty / whitespace-only leading deltas so a
+  // tool-only turn never emits a visible empty text block ("(empty response)").
+  // Some OpenAI-compatible upstreams send a truthy-but-blank delta (e.g. "\n" /
+  // " ") before their tool_calls, which opened an empty text block. Mirror +
+  // harden the gemini-to-claude non-empty-text guard: defer opening the FIRST
+  // text block until real (non-whitespace) content arrives, buffering leading
+  // whitespace so a normal text turn still streams byte-identical text.
+  if (typeof delta?.content === "string" && delta.content.length > 0) {
     const strippedContent = stripInternalReasoningPlaceholder(delta.content);
     if (strippedContent) {
-      stopThinkingBlock(state, results);
-
       // Check for XML <invoke> blocks that some models emit instead of JSON tool_calls
       const { cleaned, toolCalls: xmlToolCalls } = extractXmlInvokeBlocks(strippedContent, state);
 
       // Accumulate extracted tool calls for emission at finish
       if (xmlToolCalls.length > 0) {
+        stopThinkingBlock(state, results);
         // Close any ongoing text block before tool calls
         stopTextBlock(state, results);
         state._pendingXmlToolCalls.push(...xmlToolCalls);
@@ -293,25 +325,15 @@ export function openaiToClaudeResponse(chunk, state) {
       if (!cleaned) {
         // All content was XML invoke blocks — skip text block entirely
         // (tool calls will be emitted at finish)
-      } else if (xmlToolCalls.length > 0) {
-        // Text before/between/after XML blocks — (re)start a text block
-        if (!state.textBlockStarted) {
-          state.textBlockIndex = state.nextBlockIndex++;
-          state.textBlockStarted = true;
-          state.textBlockClosed = false;
-          results.push({
-            type: "content_block_start",
-            index: state.textBlockIndex,
-            content_block: { type: "text", text: "" },
-          });
-        }
-        results.push({
-          type: "content_block_delta",
-          index: state.textBlockIndex,
-          delta: { type: "text_delta", text: cleaned },
-        });
+      } else if (!state.textBlockStarted && cleaned.trim().length === 0) {
+        // Leading whitespace before any real text (or on a tool-only turn): buffer,
+        // do not open. Flushed with the first real text; dropped if the turn is
+        // tool-only.
+        state.pendingLeadingWhitespace = (state.pendingLeadingWhitespace || "") + cleaned;
       } else {
-        // No XML — emit as regular text (original behaviour)
+        stopThinkingBlock(state, results);
+
+        // Text before/between/after XML blocks, or plain text — (re)start a text block
         if (!state.textBlockStarted) {
           state.textBlockIndex = state.nextBlockIndex++;
           state.textBlockStarted = true;
@@ -322,10 +344,13 @@ export function openaiToClaudeResponse(chunk, state) {
             content_block: { type: "text", text: "" },
           });
         }
+
+        const buffered = state.pendingLeadingWhitespace || "";
+        state.pendingLeadingWhitespace = "";
         results.push({
           type: "content_block_delta",
           index: state.textBlockIndex,
-          delta: { type: "text_delta", text: cleaned },
+          delta: { type: "text_delta", text: buffered + cleaned },
         });
       }
     }
@@ -501,6 +526,38 @@ export function openaiToClaudeResponse(chunk, state) {
 
     // Override finish_reason to tool_use if XML tool calls were found
     const overrideFinishReason = xmlToolCalls.length > 0 ? "tool_calls" : choice.finish_reason;
+
+    // Reasoning-only / content-less finish guard. If the whole turn produced a
+    // thinking block (or nothing) but NO visible text block and NO tool_use, a
+    // Claude client renders it as "(empty response)". This happens with terse
+    // local models (e.g. Ornith) that put everything into reasoning_content and
+    // then finish (stop or length-truncated mid-reasoning) without emitting any
+    // content or tool call. Emit a minimal, non-empty text block so the turn
+    // always carries something renderable. `textBlockIndex` is assigned only when
+    // a real (non-whitespace) text block is opened, so this fires iff no visible
+    // content was ever produced this turn. XML-extracted tool calls (emitted just
+    // above) count as visible content too.
+    if (
+      state.textBlockIndex === undefined &&
+      state.toolCalls.size === 0 &&
+      xmlToolCalls.length === 0
+    ) {
+      const placeholderIndex = state.nextBlockIndex++;
+      results.push({
+        type: "content_block_start",
+        index: placeholderIndex,
+        content_block: { type: "text", text: "" },
+      });
+      results.push({
+        type: "content_block_delta",
+        index: placeholderIndex,
+        delta: { type: "text_delta", text: "…" },
+      });
+      results.push({
+        type: "content_block_stop",
+        index: placeholderIndex,
+      });
+    }
 
     // Mark finish for later usage injection in stream.js
     state.finishReason = overrideFinishReason;
