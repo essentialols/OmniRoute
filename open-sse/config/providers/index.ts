@@ -23,6 +23,7 @@ import { llamagateProvider } from "./registry/llamagate/index.ts";
 import { glmProvider } from "./registry/glm/index.ts";
 import { glmtProvider } from "./registry/glm/t/index.ts";
 import { glm_cnProvider } from "./registry/glm/cn/index.ts";
+import { glm_webProvider } from "./registry/glm/web/index.ts";
 import { traeProvider } from "./registry/trae/index.ts";
 import { raycastProvider } from "./registry/raycast/index.ts";
 import { muse_spark_webProvider } from "./registry/muse-spark-web/index.ts";
@@ -119,6 +120,7 @@ import { haiperProvider } from "./registry/haiper/index.ts";
 import { bytezProvider } from "./registry/bytez/index.ts";
 import { blackboxProvider } from "./registry/blackbox/index.ts";
 import { blackbox_webProvider } from "./registry/blackbox/web/index.ts";
+import { braveProvider } from "./registry/brave/index.ts";
 import { uncloseaiProvider } from "./registry/uncloseai/index.ts";
 import { nscaleProvider } from "./registry/nscale/index.ts";
 import { chatgpt_webProvider } from "./registry/chatgpt-web/index.ts";
@@ -288,6 +290,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   glm: glmProvider,
   glmt: glmtProvider,
   "glm-cn": glm_cnProvider,
+  "glm-web": glm_webProvider,
   trae: traeProvider,
   raycast: raycastProvider,
   "muse-spark-web": muse_spark_webProvider,
@@ -384,6 +387,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   bytez: bytezProvider,
   blackbox: blackboxProvider,
   "blackbox-web": blackbox_webProvider,
+  brave: braveProvider,
   uncloseai: uncloseaiProvider,
   nscale: nscaleProvider,
   "chatgpt-web": chatgpt_webProvider,
