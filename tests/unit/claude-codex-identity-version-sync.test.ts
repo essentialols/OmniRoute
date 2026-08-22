@@ -59,7 +59,11 @@ test("Claude CLI wire versions match the captured 2.1.220 binary", () => {
 
 test("Codex client is pinned to the captured 0.146.0 release", () => {
   assert.equal(codexCfg.getCodexClientVersion(), "0.146.0");
-  assert.equal(codexCfg.getCodexUserAgent(), "codex-cli/0.146.0 (Windows 10.0.26200; x64)");
+  // INTENTIONAL FORK DIVERGENCE: upstream pins the captured Windows binary's
+  // user agent (`codex-cli/<v> (Windows 10.0.26200; x64)`). This fork
+  // deliberately presents macOS so the wire image matches the host it actually
+  // runs on. Keep the version in sync with upstream; keep the platform on macOS.
+  assert.equal(codexCfg.getCodexUserAgent(), "codex-cli/0.146.0 (MacOS 24.0.0; arm64)");
   assert.equal(codexCfg.getCodexDefaultHeaders().Version, "0.146.0");
   assert.equal(codexCfg.getCodexCliRsHeaders()["User-Agent"], "codex_cli_rs/0.146.0");
 });

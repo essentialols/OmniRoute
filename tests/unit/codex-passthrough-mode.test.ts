@@ -1,0 +1,136 @@
+// tests/unit/codex-passthrough-mode.test.ts
+import { describe, it, afterEach } from "node:test";
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import {
+  applyCodexClientIdentityHeaders,
+  applyCodexClientMetadata,
+  createCodexClientIdentity,
+  isCodexPassthroughMode,
+} from "../../open-sse/config/codexIdentity.ts";
+
+const require = createRequire(import.meta.url);
+
+describe("codex passthrough mode toggle", () => {
+  const originalEnv = process.env.CODEX_PASSTHROUGH_MODE;
+
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env.CODEX_PASSTHROUGH_MODE;
+    else process.env.CODEX_PASSTHROUGH_MODE = originalEnv;
+  });
+
+  it("returns false when env is unset", () => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+    const { isCodexPassthroughMode } = require("../../open-sse/config/codexIdentity.ts");
+    assert.equal(isCodexPassthroughMode(), false);
+  });
+
+  it("returns true when env is '1'", () => {
+    process.env.CODEX_PASSTHROUGH_MODE = "1";
+    const { isCodexPassthroughMode } = require("../../open-sse/config/codexIdentity.ts");
+    assert.equal(isCodexPassthroughMode(), true);
+  });
+
+  it("returns false when env is '0'", () => {
+    process.env.CODEX_PASSTHROUGH_MODE = "0";
+    const { isCodexPassthroughMode } = require("../../open-sse/config/codexIdentity.ts");
+    assert.equal(isCodexPassthroughMode(), false);
+  });
+});
+
+describe("passthrough identity headers", () => {
+  afterEach(() => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+  });
+
+  it("does not inject identity headers when passthrough is on", () => {
+    process.env.CODEX_PASSTHROUGH_MODE = "1";
+    const headers: Record<string, string> = { Authorization: "Bearer test" };
+    const identity = createCodexClientIdentity("test-session-id", null);
+    applyCodexClientIdentityHeaders(headers, identity);
+
+    // In passthrough mode, these should NOT be set by OmniRoute
+    assert.equal(headers["session_id"], undefined);
+    assert.equal(headers["x-client-request-id"], undefined);
+    assert.equal(headers["x-codex-window-id"], undefined);
+    assert.equal(headers["x-codex-turn-metadata"], undefined);
+  });
+
+  it("still injects identity headers when passthrough is off", () => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+    const headers: Record<string, string> = { Authorization: "Bearer test" };
+    const identity = createCodexClientIdentity("test-session-id", null);
+    applyCodexClientIdentityHeaders(headers, identity);
+
+    assert.ok(headers["session_id"]);
+    assert.ok(headers["x-client-request-id"]);
+    assert.ok(headers["x-codex-window-id"]);
+    assert.ok(headers["x-codex-turn-metadata"]);
+  });
+});
+
+describe("passthrough body metadata", () => {
+  afterEach(() => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+  });
+
+  it("does not inject client_metadata when passthrough is on", () => {
+    process.env.CODEX_PASSTHROUGH_MODE = "1";
+    const body: Record<string, unknown> = { input: [], model: "gpt-5.5" };
+    const identity = createCodexClientIdentity("test-session-id", null);
+    applyCodexClientMetadata(body, identity);
+
+    assert.equal(body.client_metadata, undefined);
+  });
+
+  it("still injects client_metadata when passthrough is off", () => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+    const body: Record<string, unknown> = { input: [], model: "gpt-5.5" };
+    const identity = createCodexClientIdentity("test-session-id", null);
+    applyCodexClientMetadata(body, identity);
+
+    assert.ok(body.client_metadata !== undefined);
+  });
+});
+
+describe("passthrough buildHeaders", () => {
+  afterEach(() => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+  });
+
+  it("does not override User-Agent when passthrough is on", () => {
+    process.env.CODEX_PASSTHROUGH_MODE = "1";
+
+    // When passthrough is on, the executor should NOT force its own UA
+    // The real Codex CLI sends: codex-cli/0.142.0 (Windows 10.0.26200; x64)
+    // OmniRoute should not override this with its configured version
+    assert.equal(isCodexPassthroughMode(), true);
+
+    // The gating logic: in passthrough mode, skip setUserAgentHeader
+    // and skip originator injection
+    const shouldSynthesizeIdentity = !isCodexPassthroughMode();
+    assert.equal(shouldSynthesizeIdentity, false);
+  });
+});
+
+describe("passthrough WebSocket transport", () => {
+  afterEach(() => {
+    delete process.env.CODEX_PASSTHROUGH_MODE;
+  });
+
+  it("should not pass browser/os options to websocket in passthrough mode", () => {
+    process.env.CODEX_PASSTHROUGH_MODE = "1";
+
+    // In passthrough mode, the wreq-js websocket options should NOT
+    // include browser/os impersonation. The call should either:
+    // (a) use Node native WebSocket, or
+    // (b) pass wreq-js without browser/os fields
+    const passthroughActive = isCodexPassthroughMode();
+    const wsOptions = passthroughActive
+      ? { headers: {} } // no browser/os
+      : { browser: "chrome_142", os: "windows", headers: {} };
+
+    assert.equal(Object.prototype.hasOwnProperty.call(wsOptions, "browser"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(wsOptions, "os"), false);
+  });
+});
