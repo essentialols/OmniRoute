@@ -4,6 +4,7 @@ import {
   clearRecoveredProviderState,
 } from "@/sse/services/auth";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
+import { withNonChatCapture } from "@/app/api/v1/_shared/captureNonChat";
 import { parseModerationModel } from "@omniroute/open-sse/config/moderationRegistry.ts";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
@@ -73,4 +74,7 @@ async function postHandler(request, context) {
   return response;
 }
 
-export const POST = withInjectionGuard(postHandler);
+export const POST = withNonChatCapture(withInjectionGuard(postHandler), {
+  endpoint: "/v1/moderations",
+  providerFallback: "moderations",
+});

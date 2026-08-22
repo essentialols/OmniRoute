@@ -174,7 +174,7 @@ This is a substantial subsystem with its own dedicated operator guide — see **
 | Control          | Action                                                                |
 | ---------------- | --------------------------------------------------------------------- |
 | ⎉ Pause          | Stops rendering new requests; "X new" badge accumulates               |
-| 🗑 Clear         | Clears the UI list (server buffer is not affected)                    |
+| 🗑 Clear          | Clears the UI list (server buffer is not affected)                    |
 | ⬇ Export .har    | Downloads current filtered list as HAR file                           |
 | ● Record session | Starts a named recording session                                      |
 | Profile selector | LLM only / Custom hosts / All                                         |
@@ -489,3 +489,124 @@ Base path: `/api/tools/traffic-inspector/`
 | POST   | `/internal/ingest` | Accepts intercepted request from `server.cjs` passthrough path; requires `INSPECTOR_INTERNAL_INGEST_TOKEN` header |
 
 Full OpenAPI schemas: `docs/openapi.yaml` → tag `Traffic Inspector`.
+
+---
+
+## §11 Durable raw traffic capture (API pipeline, default OFF)
+
+The Traffic Inspector (above) only sees traffic that flows through the MITM
+proxy. Traffic that enters via the API pipeline (`/v1/chat/completions`,
+`/v1/messages`, …) never reaches that hook. **Durable raw traffic capture** is a
+separate, opt-in sink that records **all four legs** of that pipeline traffic as
+line-delimited JSONL, giving a true before/after view of one request:
+
+| Leg | `leg` tag                                       | What it is                                                           |
+| --- | ----------------------------------------------- | -------------------------------------------------------------------- |
+| ①   | `client_in`                                     | the RAW client request as received, BEFORE OmniRoute translates it   |
+| ②③  | `primary` / `stream-recovery` / `refresh-retry` | the TRANSFORMED upstream request + RAW upstream response (one line)  |
+| ④   | `client_out`                                    | the FINAL response returned to the client, AFTER all post-processing |
+
+The upstream leg (②③) writes the transformed request (`requestBody`) and the raw
+response (`responseBody`) on a **single** fetch-layer line, tagged by execution
+phase, and repeats per `attempt` on combo / fusion / retry+rotate fan-out. The
+client legs (①④) write once per client request.
+
+**Seams:**
+
+- **②③ (upstream)** hook the single universal fetch choke point
+  (`globalThis.fetch` → `open-sse/utils/proxyFetch.ts`), wired through the
+  existing `open-sse/utils/providerRequestLogging.ts` fetch wrapper. Because they
+  capture at the fetch layer (not `BaseExecutor.execute()`), they also record the
+  ~9 web executors that override `execute()` and bypass a `base.ts` hook.
+- **① `client_in`** is emitted at request ingress in
+  `open-sse/handlers/chatCore.ts` (from `clientRawRequest.body`, before
+  `sanitizeChatRequestBody` / `translateRequest`), and (for the `/v1/responses`
+  adapter path) in `open-sse/handlers/responsesHandler.ts` from the raw
+  Responses-API body before conversion.
+- **④ `client_out`** is teed at the single unified client egress
+  `withCorrelationId()` (`src/sse/handlers/chatHelpers.ts`), which both
+  `/v1/chat/completions` and `/v1/responses` pass through, so the body is already
+  fully post-processed (decompressed, translated back, SSE-reframed). The
+  Responses-API `TransformStream` egress in `responsesHandler.ts` is teed too
+  (worker adapter path).
+- **①④ for non-chat endpoints** are added by a shared route-level egress
+  wrapper, `withNonChatCapture()`
+  (`src/app/api/v1/_shared/captureNonChat.ts`), composed OUTERMOST around each
+  standalone route's POST handler (outside `withInjectionGuard`). It generates
+  one `correlationId`, fires `client_in` from the raw request and `client_out`
+  from the final response, and reuses the SAME `captureClientIn` /
+  `captureClientOut` sink, gate, and redaction. The endpoints wrapped are:
+  `/v1/embeddings`, `/v1/rerank`, `/v1/moderations`, `/v1/images/generations`,
+  `/v1/images/edits`, `/v1/audio/speech`, `/v1/audio/transcriptions`,
+  `/v1/audio/translations`. Provider/model are parsed best-effort from the
+  request body's `model` field (`provider/model`), falling back to an
+  endpoint-derived label for multipart uploads.
+
+All of it lives in `open-sse/services/durableCapture.ts` (sink) and
+`src/app/api/v1/_shared/captureNonChat.ts` (non-chat route wrapper).
+
+**Correlation:** every line records `correlationId` + `attempt` + `leg` +
+provider + model. All legs of one client request share the same `correlationId`,
+so a consumer reading the JSONL sees the full before/after: a `client_in` line, a
+`client_out` line, and one or more upstream lines (tagged `primary` /
+`stream-recovery` / `refresh-retry`, each carrying the transformed request +
+raw response) that repeat per `attempt` on combo / fusion / pipeline /
+retry+rotate fan-out.
+
+**Output:** `<DATA_DIR|~/.omniroute>/captures/<provider>/<YYYY-MM-DD>.jsonl`
+(daily file rotation; retention is left to the operator, e.g. a
+`find … -mtime +N -delete` cron).
+
+**Safety:**
+
+- **Default OFF.** Enable with `OMNIROUTE_RAWCAP=1`. `OMNIROUTE_CAPTURE_DISABLED=1`
+  is a hard kill-switch that always wins.
+- Auth headers scrubbed (`authorization` / `x-api-key` masked; `cookie` /
+  `set-cookie` hard-redacted; hop-by-hop / denylist headers dropped).
+- **In-body media redaction (request AND response).** Non-text media embedded
+  inside a normal JSON/chat body as base64 (vision `image_url` data URIs,
+  `input_audio.data`, image/audio outputs `b64_json`) is replaced with a compact
+  size-annotated placeholder (`[binary image/png ~<KB>KB omitted]` /
+  `[binary data ~<KB>KB omitted]`) by `redactMediaBlobs()`, which runs FIRST in
+  `scrubBody` (before mask/PII/cap), at the serialized-string level (regex, no
+  parse, idempotent). It matches `data:(image|audio|video)/…;base64,…` and any
+  quoted pure-base64 run ≥ 256 chars, leaving all surrounding prompt / role /
+  tool text intact. This catches media in JSON bodies that the endpoint /
+  content-type binary check below misses.
+- Bodies are then secret-masked **and** PII-redacted (`redactPIIForCapture`,
+  reusing the same detectors as `src/lib/piiSanitizer.ts`) before touching disk.
+  **Text is NOT truncated by default:** `OMNIROUTE_CAPTURE_MAX_BODY_KB=0` (or
+  unset) means unlimited, and unlimited is the default ("save it all"; bodies
+  are text-only after media redaction). Operators may still set a positive KB
+  value to re-enable a hard cap.
+- Binary media endpoints (audio / image / video / speech) and binary
+  content-types are ALSO captured as metadata only (body omitted): belt and
+  suspenders with the in-body redaction above. For the client REQUEST leg
+  (`client_in`), binary-ness is decided by the request **content-type** (a
+  `multipart/form-data` file upload is metadata-only; a JSON request on a media
+  endpoint, e.g. an image-generation prompt or TTS input text, is captured).
+- **Provider label is the canonical provider id on every leg.** `client_out`
+  normalizes the response `provider` header (a public alias, e.g. `cx`) through
+  `resolveProviderId()` so all four legs of one request share one id (e.g.
+  `codex`) and group under the same `captures/<provider>/` directory.
+- Capture is fire-and-forget and never blocks, throws into, or mutates the
+  live request/response. The `client_out` tee uses `response.clone()`, so the
+  real client stream is never blocked or reordered.
+
+**Known gaps (by design):**
+
+- Browser-backed executors `gemini-web` and `claude-web` drive a real browser
+  page and make no HTTP `fetch`, so no fetch-layer tap can see them (affects ②③).
+- Cert-pinned / bypassing CLIs are out of scope (handled by a base-URL override).
+- `client_in` / `client_out` cover the chat and Responses API paths (via
+  `handleChatCore` / `withCorrelationId`) AND the non-chat endpoints
+  (embeddings, rerank, moderations, image generation/edits, audio
+  speech/transcription/translation) via the `withNonChatCapture()` route
+  wrapper. The non-chat endpoints emit the two CLIENT legs (①④) only: the
+  upstream legs (②③) fire solely inside an `executor.execute()` correlation
+  scope (`runWithCaptureContext` + `runWithCapture`), which the standalone
+  handlers do not enter, so their upstream traffic is not currently tapped.
+  Wiring ②③ into the non-chat handlers is a documented follow-up.
+- Early client-side rejections (Zod validation, auth, prompt-injection guard)
+  that return before `handleChatCore` / `withCorrelationId` are not captured as
+  `client_out`.

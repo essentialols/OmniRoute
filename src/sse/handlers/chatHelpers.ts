@@ -7,6 +7,9 @@ import { updateProviderCredentials } from "../services/tokenRefresh";
 import { detectFormatFromEndpoint } from "@omniroute/open-sse/services/provider.ts";
 import { resolveChatCoreTargetFormat } from "@omniroute/open-sse/handlers/chatCore/targetFormat.ts";
 import { handleChatCore } from "@omniroute/open-sse/handlers/chatCore.ts";
+import { captureClientOut } from "@omniroute/open-sse/services/durableCapture.ts";
+import { OMNIROUTE_RESPONSE_HEADERS } from "@/shared/constants/headers";
+import { resolveProviderId } from "@/shared/constants/providers";
 import {
   checkResourcePressureGuard,
   type ResourcePressureGuardResult,
@@ -940,6 +943,30 @@ export function withSessionHeader(response: Response, sessionId: string | null):
 
 export function withCorrelationId(response: Response, correlationId: string | null): Response {
   if (!response || !correlationId) return response;
+
+  // Traffic-capture leg (4) client_out: the FINAL response OmniRoute returns to
+  // the client. This is the single unified client egress for BOTH /v1/chat/
+  // completions and /v1/responses (the latter delegates to handleChat), so the
+  // body here is already fully post-processed (decompressed, translated back,
+  // SSE-reframed incl. the Responses-API format). Correlated by the same
+  // correlationId as the upstream legs. Fire-and-forget + gated: a strict no-op
+  // when capture is off (default); tees with clone() so the client stream is
+  // never blocked or reordered.
+  try {
+    // The response `provider` header carries the public ALIAS (e.g. "cx"), while
+    // the client_in + upstream legs are labeled with the canonical provider ID
+    // (e.g. "codex"). Normalize to the ID here so all four legs of one request
+    // share the same provider label (resolveProviderId is idempotent on IDs).
+    const providerHeader = response.headers.get(OMNIROUTE_RESPONSE_HEADERS.provider);
+    captureClientOut({
+      correlationId,
+      provider: providerHeader ? resolveProviderId(providerHeader) : "client",
+      model: response.headers.get(OMNIROUTE_RESPONSE_HEADERS.model) || "",
+      response,
+    });
+  } catch {
+    // best-effort: capture must never break the client response path
+  }
 
   try {
     response.headers.set("X-Correlation-Id", correlationId);

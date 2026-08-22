@@ -24,6 +24,7 @@ import {
 } from "@/app/api/v1/_shared/rateLimit";
 import { attachOmniRouteMetaToResponse } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
+import { withNonChatCapture } from "@/app/api/v1/_shared/captureNonChat";
 import { getComboByName, getCombos, getDatabaseSettings } from "@/lib/localDb";
 import { handleComboChat } from "@omniroute/open-sse/services/combo.ts";
 import { log } from "@omniroute/open-sse/utils/logger.ts";
@@ -156,7 +157,7 @@ async function transcribeWithModel(
  * POST /v1/audio/transcriptions — transcribe audio files
  * OpenAI Whisper API compatible (multipart/form-data)
  */
-export async function POST(request) {
+async function postHandler(request) {
   let formData;
   try {
     formData = await request.formData();
@@ -212,3 +213,8 @@ export async function POST(request) {
 
   return transcribeWithModel(formData, modelStr, startTime);
 }
+
+export const POST = withNonChatCapture(postHandler, {
+  endpoint: "/v1/audio/transcriptions",
+  providerFallback: "audio",
+});

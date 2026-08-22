@@ -1,5 +1,6 @@
 import { handleImageGeneration } from "@omniroute/open-sse/handlers/imageGeneration.ts";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
+import { withNonChatCapture } from "@/app/api/v1/_shared/captureNonChat";
 import {
   getProviderCredentialsWithQuotaPreflight,
   clearRecoveredProviderState,
@@ -343,4 +344,7 @@ async function postHandler(request, context) {
   return errorResponse((result as any).status, message);
 }
 
-export const POST = withInjectionGuard(postHandler);
+export const POST = withNonChatCapture(withInjectionGuard(postHandler), {
+  endpoint: "/v1/images/generations",
+  providerFallback: "images",
+});
