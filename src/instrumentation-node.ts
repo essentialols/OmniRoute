@@ -434,6 +434,21 @@ export async function registerNodejs(): Promise<void> {
       console.log("[STARTUP] Task-Aware Routing config restored from settings");
     }
 
+    // Boot-preload the config-driven message-rewrite rules into the globalThis
+    // frozen snapshot (D3) and start the out-of-band file watcher, so the
+    // synchronous translator hot path always reads a hydrated, hot-reloadable
+    // snapshot. File-first (`~/.omniroute/messageRewriteRules.json`); the DB
+    // override is a later Settings-UI follow-up (D6). Non-fatal.
+    try {
+      const { preloadMessageRewriteRules } =
+        await import("@omniroute/open-sse/services/messageRewriteRules.ts");
+      await preloadMessageRewriteRules((settings as Record<string, unknown>).messageRewriteRules);
+      console.log("[STARTUP] Message-rewrite rules preloaded");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[STARTUP] Could not preload message-rewrite rules (non-fatal):", msg);
+    }
+
     const seededModelAliases = await seedDefaultModelAliases();
     console.log(
       `[STARTUP] Model alias seed: applied=${seededModelAliases.applied.length}, skipped=${seededModelAliases.skipped.length}, removed=${seededModelAliases.removed.length}, failed=${seededModelAliases.failed.length}`
@@ -559,12 +574,14 @@ export async function registerNodejs(): Promise<void> {
 
       // Conductor bridge (PRD Conductor RF1): mirrors OmniConductor hub tasks into the
       // A2A TaskManager via the hub SSE. Opt-in — self-gated on CONDUCTOR_HUB_URL.
-      import("@/lib/conductor/boot").then((m) => {
-        if (m.initConductorBridge()) console.log("[STARTUP] Conductor bridge started");
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn("[STARTUP] Conductor bridge failed to start (non-fatal):", msg);
-      }),
+      import("@/lib/conductor/boot")
+        .then((m) => {
+          if (m.initConductorBridge()) console.log("[STARTUP] Conductor bridge started");
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn("[STARTUP] Conductor bridge failed to start (non-fatal):", msg);
+        }),
 
       // Proactive connection-cooldown recovery (#8): re-validate connections whose
       // transient `rate_limited_until` window has elapsed OUTSIDE the request hot path,
