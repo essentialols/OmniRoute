@@ -243,12 +243,20 @@ export function buildGeminiTools(
 
   const result: GeminiTool[] = [];
 
-  if (googleSearchTool) {
-    return [googleSearchTool];
-  }
-
+  // Gemini rejects the googleSearch built-in mixed with functionDeclarations in the same
+  // request ("Function calling config is set without function_declarations" / a 400 on
+  // mixed tools). When a client sends BOTH — e.g. the Codex CLI, which always injects a
+  // `web_search` built-in alongside its real function tools — the function declarations
+  // must win: dropping them would strip the client's actual tools AND still leave
+  // functionCallingConfig set with zero declarations, which Gemini rejects outright.
+  // Only fall back to a googleSearch-only request when there are no function declarations.
   if (functionDeclarations.length > 0) {
     result.push({ functionDeclarations });
+    return result;
+  }
+
+  if (googleSearchTool) {
+    return [googleSearchTool];
   }
 
   return result.length > 0 ? result : undefined;

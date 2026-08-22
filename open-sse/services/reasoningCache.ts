@@ -45,6 +45,21 @@ const REASONING_REPLAY_PROVIDERS = new Set([
   // 400s with "Param Incorrect: The reasoning_content in the thinking mode
   // must be passed back to the API."
   "xiaomi-mimo",
+  // Locally served models keep a KV cache keyed on an exact prompt prefix, so
+  // stripping reasoning is the opposite of an optimisation here. The strip exists to
+  // avoid O(n^2) context growth, but on a prefix-cached model it CAUSES O(n^2)
+  // prefill: the client faithfully echoes the thinking block back, the strip removes
+  // it, and every turn then diverges from cache exactly where its own reasoning
+  // began. Measured on pym: uncached prefill climbed 108, 165 and upward per turn
+  // with the strip, and is flat at 25 to 28 (the new tool response and nothing else)
+  // with replay.
+  //
+  // BOTH local providers, not just the one measured. The LAN box serves via
+  // llama-swap and the laptop via an MLX router, and they are separate ids; fixing
+  // only the measured one would have left the lane carrying the majority of real
+  // traffic still stripping reasoning.
+  "openai-compatible-chat-h1-llamaswap",
+  "openai-compatible-chat-m2-mlx-router",
 ]);
 
 const REASONING_REPLAY_MODEL_PATTERNS = [

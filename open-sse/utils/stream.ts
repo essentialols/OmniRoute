@@ -158,7 +158,6 @@ type StreamOptions = {
    * `RESPONSES_PASSTHROUGH_DROP_COMMENTARY` feature flag (default on).
    */
   dropResponsesCommentary?: boolean;
-  customToolNames?: ReadonlySet<string>;
   provider?: string | null;
   reqLogger?: StreamLogger | null;
   toolNameMap?: unknown;
@@ -166,6 +165,15 @@ type StreamOptions = {
   connectionId?: string | null;
   apiKeyInfo?: unknown;
   body?: unknown;
+  /** Tool names the Responses client declared as `type:"custom"` (Codex exec/apply_patch).
+   *  Threaded into the response-translation state so returned tool_calls with these names
+   *  are emitted as `custom_tool_call` items instead of `function_call`. */
+  customToolNames?: Iterable<string> | null;
+  /** Map of bare sub-tool name -> namespace, built from the Responses request's
+   *  `{type:"namespace"}` tool groups. Threaded into the response-translation state so a
+   *  returned bare tool_call (e.g. Codex Multi-Agent V2 `spawn_agent`) is re-emitted with its
+   *  `namespace` field, letting Codex resolve the namespaced executor (`agents/spawn_agent`). */
+  toolNamespaceByName?: Record<string, string> | null;
   onComplete?: ((payload: StreamCompletePayload) => void) | null;
   onFailure?: ((payload: StreamFailurePayload) => boolean | void | Promise<void>) | null;
   /**
@@ -194,7 +202,12 @@ type TranslateState = ReturnType<typeof initState> & {
   accumulatedReasoning?: string;
   /** #6951 — per-tool JSON Schema (from request `tools[]`), keyed by tool name. */
   toolSchemas?: Map<string, Record<string, unknown>> | null;
-  customToolNames?: ReadonlySet<string>;
+  /** Tool names declared as Responses `type:"custom"` (Codex exec/apply_patch), threaded
+   *  from the request so returned tool_calls are emitted as `custom_tool_call` items. */
+  customToolNames?: Set<string> | null;
+  /** Map of bare sub-tool name -> namespace (Responses `{type:"namespace"}` groups), threaded
+   *  from the request so returned bare tool_calls are re-emitted with their `namespace` field. */
+  toolNamespaceByName?: Record<string, string> | null;
   requestToolIdentityMap?: Map<string, { namespace: string; name: string }> | null;
   upstreamError?: {
     status: number;
@@ -649,10 +662,11 @@ export function createSSEStream(options: StreamOptions = {}) {
     connectionId = null,
     apiKeyInfo = null,
     body = null,
+    customToolNames = null,
+    toolNamespaceByName = null,
     onComplete = null,
     onFailure = null,
     dropResponsesCommentary,
-    customToolNames = new Set<string>(),
     requestToolIdentityMap = null,
   } = options;
   const signatureNamespace = connectionId;
@@ -746,10 +760,11 @@ export function createSSEStream(options: StreamOptions = {}) {
           signatureNamespace,
           copilotCompatibleReasoning,
           suppressThinkClose,
+          customToolNames: customToolNames ? new Set(customToolNames) : null,
+          toolNamespaceByName: toolNamespaceByName ?? null,
           accumulatedContent: "",
           accumulatedReasoning: "",
           toolSchemas: extractToolSchemaMap(body),
-          customToolNames,
           requestToolIdentityMap,
         }
       : null;
@@ -2936,8 +2951,9 @@ export function createSSETransformStreamWithLogger(
   onFailure: ((payload: StreamFailurePayload) => boolean | void | Promise<void>) | null = null,
   copilotCompatibleReasoning = false,
   suppressThinkClose = false,
-  customToolNames: ReadonlySet<string> = new Set(),
-  requestToolIdentityMap: Map<string, { namespace: string; name: string }> | null = null
+  customToolNames: Iterable<string> | null = null,
+  requestToolIdentityMap: Map<string, { namespace: string; name: string }> | null = null,
+  toolNamespaceByName: Record<string, string> | null = null
 ) {
   return createSSEStream({
     mode: STREAM_MODE.TRANSLATE,
@@ -2950,11 +2966,12 @@ export function createSSETransformStreamWithLogger(
     connectionId,
     apiKeyInfo,
     body,
+    customToolNames,
+    toolNamespaceByName,
     onComplete,
     onFailure,
     copilotCompatibleReasoning,
     suppressThinkClose,
-    customToolNames,
     requestToolIdentityMap,
   });
 }

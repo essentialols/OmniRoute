@@ -299,6 +299,24 @@ function resolveAntigravityQuotaWindowsForModel(
   );
 }
 
+/**
+ * Per-request quota verdict for antigravity/agy, scoped to the model that was actually
+ * asked for. The governing windows are AUTHORITATIVE IN BOTH DIRECTIONS:
+ *   - not all governing windows exhausted -> available, even if the aggregate says exhausted
+ *   - all governing windows exhausted     -> exhausted, even if the aggregate says available
+ *
+ * The tightening direction exists because the account-wide aggregate is an AND across every
+ * window, so a single healthy window makes the whole connection look available and a model
+ * whose OWN window is at 0% got dispatched and ate a 429. Observed 2026-08-10 on `agy`:
+ * `gemini-3.5-flash-medium` at `remaining_percentage` 0 / `is_exhausted` 1 was reported
+ * available because the `gemini-2.5-*` windows were at 100%.
+ *
+ * This is NOT the #5923/#4438 failure mode. Those were caused by OR-ing per-window flags into
+ * the ACCOUNT-WIDE value (`entry.exhausted` and its snapshot-hydration mirror), so one dead
+ * window blocked EVERY model on the connection. Nothing here writes to or widens that
+ * aggregate; the verdict is recomputed per request from ONLY the windows that govern the
+ * requested model, so a dead window blocks just the model(s) it actually keys.
+ */
 function isAntigravityQuotaExhausted(
   connectionId: string,
   entry: QuotaCacheEntry,
@@ -546,12 +564,12 @@ function hydrateQuotaCacheFromSnapshots(connectionId: string): QuotaCacheEntry |
   let provider = "";
   let fetchedAt = 0;
   let windowDurationMs: number | null = null;
+  const now = Date.now();
 
   for (const snapshot of snapshots) {
     const camelSnapshot = snapshot as unknown as {
       windowKey?: string;
       remainingPercentage?: number | null;
-      isExhausted?: number;
       nextResetAt?: string | null;
       windowDurationMs?: number | null;
       createdAt?: string;
@@ -559,23 +577,44 @@ function hydrateQuotaCacheFromSnapshots(connectionId: string): QuotaCacheEntry |
     const windowKey = camelSnapshot.windowKey ?? snapshot.window_key;
     if (!windowKey) continue;
     provider = provider || snapshot.provider || "";
-    quotas[windowKey] = {
-      remainingPercentage: clampPercent(
-        Number(camelSnapshot.remainingPercentage ?? snapshot.remaining_percentage ?? 0)
-      ),
-      resetAt: camelSnapshot.nextResetAt ?? snapshot.next_reset_at ?? null,
-    };
+    const remainingPercentage = clampPercent(
+      Number(camelSnapshot.remainingPercentage ?? snapshot.remaining_percentage ?? 0)
+    );
+    const resetAt = camelSnapshot.nextResetAt ?? snapshot.next_reset_at ?? null;
+    const createdAtVal = camelSnapshot.createdAt ?? snapshot.created_at;
+    const createdAtMs = createdAtVal ? parseDate(createdAtVal) : null;
+
+    // Drop stale, unverifiable exhaustion claims.
+    // `isAccountQuotaExhausted` only trusts an exhausted entry with no reset time for
+    // EXHAUSTED_TTL_MS; apply the same rule per window here. `saveQuotaSnapshot` only
+    // writes on change (#4438), so a window the provider STOPPED reporting (a retired
+    // model id) keeps its last row forever and would otherwise be resurrected as
+    // current quota state on every restart.
+    const staleExhaustionClaim =
+      remainingPercentage <= 0 &&
+      !resetAt &&
+      createdAtMs !== null &&
+      now - createdAtMs > EXHAUSTED_TTL_MS;
+    if (staleExhaustionClaim) continue;
+
+    quotas[windowKey] = { remainingPercentage, resetAt };
     const snapshotWindowDurationMs =
       camelSnapshot.windowDurationMs ?? snapshot.window_duration_ms ?? null;
     if (snapshotWindowDurationMs && snapshotWindowDurationMs > 0) {
       windowDurationMs = snapshotWindowDurationMs;
     }
-    const createdAtVal = camelSnapshot.createdAt ?? snapshot.created_at;
-    const createdAtMs = createdAtVal ? parseDate(createdAtVal) : null;
     if (createdAtMs !== null) fetchedAt = Math.max(fetchedAt, createdAtMs);
   }
 
   if (Object.keys(quotas).length === 0) return null;
+
+  // Connection-level exhaustion must mean the same thing whether the state
+  // came from a live fetch (`setQuotaCache` -> `isExhausted`: EVERY window at 0%) or
+  // from persisted snapshots. Reducing the per-window `is_exhausted` flags (#5923)
+  // with OR made ONE exhausted window block every model on the connection, and the
+  // borrowed `nextResetAt` below (earliest reset across ALL windows, including
+  // healthy ones) then kept both escape hatches in `isAccountQuotaExhausted` — the
+  // TTL expiry and the auto-advance — from ever clearing it.
   const exhausted = isExhausted(quotas);
 
   const entry: QuotaCacheEntry = {

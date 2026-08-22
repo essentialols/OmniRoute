@@ -39,6 +39,8 @@ import {
   normalizeResponsesReasoningEffort,
   RESPONSES_STORE_MARKER,
 } from "./request/openai-responses/helpers.ts";
+import { applyPostTargetRewrites, applyPreSourceRewrites } from "../services/messageRewriter.ts";
+import { getMessageRewriteRulesSnapshot } from "../services/messageRewriteRules.ts";
 
 bootstrapTranslatorRegistry();
 export { register } from "./registry.ts";
@@ -334,6 +336,27 @@ export function translateRequest(
   const isKimiCoding =
     normalizedProvider === "kimi-coding" || normalizedProvider === "kimi-coding-apikey";
 
+  // Hook A — PRE-SOURCE message rewrites (config-driven). Operates on the
+  // SOURCE Claude-shaped body (intact role:"system" messages + `system` field)
+  // BEFORE any translation, because convertClaudeMessage collapses non-user/tool
+  // messages to role:"assistant" (claude-to-openai.ts:403-404) — after which the
+  // roster message can no longer be role-targeted. Owns the roster strip +
+  // billing-header strip. Gated to Claude-source; fail-open (never throws).
+  if (sourceFormat === FORMATS.CLAUDE) {
+    try {
+      const rewriteRules = getMessageRewriteRulesSnapshot().rules;
+      if (rewriteRules.length > 0) {
+        result = applyPreSourceRewrites(
+          { model, provider, sourceFormat, targetFormat },
+          result,
+          rewriteRules
+        );
+      }
+    } catch {
+      // fail-open: never block translation on a rewrite-engine error
+    }
+  }
+
   // Phase 2: Apply thinking budget control before normalization
   result = applyThinkingBudget(result);
   // Explicit reasoning-routing policies are final. The marker is internal and is
@@ -429,8 +452,12 @@ export function translateRequest(
     if (directTranslator && sourceFormat !== FORMATS.OPENAI && targetFormat !== FORMATS.OPENAI) {
       // Thread the routed provider id so target translators can apply provider-specific
       // quirks (e.g. Vertex rejects function_call.id — #3440).
-      // Also thread signatureNamespace so Claude→Gemini can re-attach cached
-      // thoughtSignature on tool-use history (#8979 / #2504 parity with the hub path).
+      // Also thread the signature namespace: the direct Claude -> Gemini path needs the
+      // same `<connectionId>:<toolCallId>` cache key the hub path uses to re-attach a
+      // thinking model's thoughtSignature on follow-up turns (#8979 / #2504). Without it
+      // a native Claude client (Claude Code) hitting a Gemini target sent unsigned
+      // historical functionCall parts and Gemini returned 400 "missing a
+      // thought_signature ... position N".
       const hasNs = options?.signatureNamespace != null;
       const hasProvider = provider != null;
       const directCredentials =
@@ -558,6 +585,25 @@ export function translateRequest(
     result = prepareClaudeRequest(result, provider, preserveCache, model, {
       fallbackToHeuristicWhenNoMarkers: true,
     });
+
+    // Hook B — POST-TARGET message rewrites (config-driven). Operates on the
+    // fully-built target Claude `result.system` (the system-field term
+    // sanitizer). Runs for ALL Claude-target traffic, so unlike the inline
+    // sanitizer in openaiToClaudeRequest it ALSO covers claude→claude
+    // passthrough (a documented, tested coverage broadening — plan-v2 §2 Hook B).
+    // Fail-open (never throws).
+    try {
+      const rewriteRules = getMessageRewriteRulesSnapshot().rules;
+      if (rewriteRules.length > 0) {
+        result = applyPostTargetRewrites(
+          { model, provider, sourceFormat, targetFormat },
+          result,
+          rewriteRules
+        );
+      }
+    } catch {
+      // fail-open: never block translation on a rewrite-engine error
+    }
   }
 
   // Normalize openai-responses input shape for providers that require list input.
@@ -892,6 +938,15 @@ export function initState(sourceFormat) {
       funcItemDone: {},
       completedOutputItems: [],
       completedSent: false,
+      // Names the client declared as Responses `type:"custom"` (Codex exec/apply_patch).
+      // Threaded from the request translation so returned tool_calls with these names are
+      // emitted as `custom_tool_call` items instead of `function_call`. Populated by the
+      // stream setup (createSSEStream); null when no custom tools were declared.
+      customToolNames: null as Set<string> | null,
+      // Map of bare sub-tool name -> namespace (Responses `{type:"namespace"}` groups), threaded
+      // from the request so returned bare tool_calls (e.g. Multi-Agent V2 `spawn_agent`) are
+      // re-emitted with their `namespace` field. Populated by createSSEStream; null otherwise.
+      toolNamespaceByName: null as Record<string, string> | null,
     };
   }
 

@@ -387,6 +387,9 @@ export const builtinSkills: Record<string, SkillHandler> = {
     };
   },
 
+  // Web fetch builtin (task #17): powers the bridged WebFetch/web_fetch tool. Provider selection
+  // and credential resolution (mirroring the /v1/web/fetch route) live in executeWebFetch.
+  // Claude Code sends { url, prompt }; we fetch by url (the model uses prompt).
   web_fetch: async (input, context) => {
     const { url, format, depth, wait_for_selector, include_metadata, provider } = input as {
       url: string;
@@ -395,6 +398,7 @@ export const builtinSkills: Record<string, SkillHandler> = {
       wait_for_selector?: string;
       include_metadata?: boolean;
       provider?: string;
+      prompt?: string;
     };
     if (!url || typeof url !== "string") {
       throw new Error("Missing required field: url");

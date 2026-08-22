@@ -372,7 +372,7 @@ export class ZaiWebExecutor extends BaseExecutor {
         method: "POST",
         headers: reqHeaders,
         body: JSON.stringify(reqBody),
-        signal,
+        signal: signal ?? undefined,
       });
     } catch (error) {
       const message = sanitizeErrorMessage(

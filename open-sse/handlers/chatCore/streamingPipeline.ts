@@ -21,6 +21,7 @@ import {
 } from "../../utils/progressTracker.ts";
 import { createPiiSseTransform as defaultPiiSse } from "@/lib/streamingPiiTransform";
 import { isFeatureFlagEnabled as defaultFeatureFlag } from "@/shared/utils/featureFlags";
+import { shouldRedactPiiForProvider as defaultShouldRedactPii } from "@/lib/guardrails/piiTrust";
 import { OMNIROUTE_RESPONSE_HEADERS } from "@/shared/constants/headers";
 import { SSE_HEARTBEAT_INTERVAL_MS } from "../../config/constants.ts";
 /**
@@ -41,6 +42,7 @@ export interface StreamingPipelineDeps {
   wantsProgress: typeof defaultWantsProgress;
   pipeWithDisconnect: typeof defaultPipeWithDisconnect;
   isFeatureFlagEnabled: typeof defaultFeatureFlag;
+  shouldRedactPiiForProvider: typeof defaultShouldRedactPii;
   createPiiSseTransform: typeof defaultPiiSse;
   createProgressTransform: typeof defaultProgress;
   createSseHeartbeatTransform: typeof defaultHeartbeat;
@@ -52,6 +54,7 @@ const DEFAULT_DEPS: StreamingPipelineDeps = {
   wantsProgress: defaultWantsProgress,
   pipeWithDisconnect: defaultPipeWithDisconnect,
   isFeatureFlagEnabled: defaultFeatureFlag,
+  shouldRedactPiiForProvider: defaultShouldRedactPii,
   createPiiSseTransform: defaultPiiSse,
   createProgressTransform: defaultProgress,
   createSseHeartbeatTransform: defaultHeartbeat,
@@ -69,6 +72,7 @@ export function assembleStreamingPipeline(
     clientResponseFormat: Parameters<typeof defaultShape>[0];
     echoModel: string | null | undefined;
     responseHeaders: Record<string, string>;
+    provider?: string | null;
   },
   deps: StreamingPipelineDeps = DEFAULT_DEPS
 ) {
@@ -87,8 +91,11 @@ export function assembleStreamingPipeline(
   );
   if (typeof args.createPiiTransform === "function") {
     piiStream = piiStream.pipeThrough((args.createPiiTransform as () => TransformStream)());
-  } else if (deps.isFeatureFlagEnabled("PII_RESPONSE_SANITIZATION")) {
-    piiStream = piiStream.pipeThrough(deps.createPiiSseTransform());
+  } else if (deps.shouldRedactPiiForProvider(args.provider ?? null, "PII_RESPONSE_SANITIZATION")) {
+    // Trust-tiered (per-provider) PII sanitization: redact for untrusted
+    // destinations even when the global flag is off; skip for trusted/local.
+    // An explicit global PII_RESPONSE_SANITIZATION override still wins uniformly.
+    piiStream = piiStream.pipeThrough(deps.createPiiSseTransform({ forceEnabled: true }));
   }
 
   if (progressEnabled) {

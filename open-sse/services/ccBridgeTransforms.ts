@@ -21,10 +21,7 @@
  */
 import { createHash } from "node:crypto";
 
-import {
-  CLAUDE_CODE_CLIENT_BUILD_REVISION,
-  CLAUDE_CODE_CLIENT_VERSION,
-} from "@/shared/constants/claudeCodeClient";
+import { CLAUDE_CODE_CLIENT_BUILD_REVISION } from "@/shared/constants/claudeCodeClient";
 
 // ────────────────────────────────────────────────────────────────────────────
 // DSL types
@@ -101,7 +98,7 @@ export interface InjectBillingHeaderOp {
    *   - static-zero: emit "00000" (relay endpoints don't validate)
    */
   cchAlgo: "sha256-first-user" | "xxhash64-body" | "static-zero";
-  /** Override the embedded `cc_version=` value. Defaults to CLAUDE_CODE_CLIENT_VERSION. */
+  /** Override the embedded `cc_version=` value. Defaults to `2.1.207`. */
   version?: string;
   /** Override its captured build revision. Defaults to a computed compatibility suffix. */
   buildRevision?: string;
@@ -121,7 +118,7 @@ export const CCH_SALT = "59cf53e54c78";
 /** Character positions sampled from the first user message text. */
 export const CCH_POSITIONS = [4, 7, 20] as const;
 /** Default `cc_version=` value embedded in the billing header. */
-export const DEFAULT_CLAUDE_CODE_VERSION = CLAUDE_CODE_CLIENT_VERSION;
+export const DEFAULT_CLAUDE_CODE_VERSION = "2.1.207";
 /** Identity sentinel prepended for Claude Agent SDK callers. */
 export const CLAUDE_AGENT_SDK_IDENTITY =
   "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
@@ -326,7 +323,7 @@ interface RequestBody {
   [key: string]: unknown;
 }
 
-function normalizeSystemToBlocks(system: unknown): SystemBlock[] {
+export function normalizeSystemToBlocks(system: unknown): SystemBlock[] {
   if (system === null || system === undefined) return [];
   if (typeof system === "string") {
     return system.length > 0 ? [{ type: "text", text: system }] : [];
@@ -343,7 +340,7 @@ function normalizeSystemToBlocks(system: unknown): SystemBlock[] {
   return [];
 }
 
-function isTextBlock(block: SystemBlock): block is SystemBlock & { text: string } {
+export function isTextBlock(block: SystemBlock): block is SystemBlock & { text: string } {
   return block.type === "text" && typeof block.text === "string";
 }
 

@@ -26,6 +26,13 @@ export const CODEX_FINGERPRINT_MODE_KEY = "codexFingerprintMode";
  */
 export const CODEX_FINGERPRINT_SEED_KEY = "codexFingerprintSeed";
 
+const PASSTHROUGH_TRUTHY = new Set(["1", "true", "yes", "on"]);
+
+export function isCodexPassthroughMode(): boolean {
+  const val = (process.env.CODEX_PASSTHROUGH_MODE ?? "").trim().toLowerCase();
+  return PASSTHROUGH_TRUTHY.has(val);
+}
+
 export type CodexClientIdentity = {
   mode: CodexFingerprintMode;
   installationId: string;
@@ -454,7 +461,7 @@ export function applyCodexClientIdentityHeaders(
   headers: Record<string, string>,
   identity?: CodexClientIdentity | null
 ): void {
-  if (!identity) return;
+  if (!identity || isCodexPassthroughMode()) return;
 
   headers["x-codex-installation-id"] = identity.installationId;
   if (identity.mode === "device") {
@@ -484,7 +491,7 @@ export function applyCodexClientMetadata(
   body: Record<string, unknown>,
   identity?: CodexClientIdentity | null
 ): void {
-  if (!identity) return;
+  if (!identity || isCodexPassthroughMode()) return;
 
   const existing =
     body.client_metadata &&

@@ -13,12 +13,14 @@ import {
   stripInternalReasoningPlaceholder,
 } from "../../utils/reasoningPlaceholder.ts";
 import { extractReplayableResponsesReasoningText } from "../../services/reasoningInputPolicy.ts";
+import { shouldDropResponsesCommentaryEvent } from "../../utils/responsesCommentaryDrop.ts";
 import {
   normalizeToolName,
   stripEmptyOptionalToolArgs,
   normalizeOutputIndex,
   normalizeUpstreamFailure,
   getVisibleResponsesReasoningSummaryText,
+  extractResponsesMessageText,
 } from "./openai-responses/pureHelpers.ts";
 import { createEventEmitter } from "./openai-responses/eventEmitter.ts";
 import { buildResponsesToolCallItem } from "./responsesToolItem.ts";
@@ -317,6 +319,36 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
   return events;
 }
 
+// Codex custom/composer tools (exec, apply_patch, …) are declared by the client with
+// Responses `type:"custom"`. The request translator records that set and threads it onto
+// `state.customToolNames`, so the response side knows which returned tool_calls must be
+// surfaced as `custom_tool_call` items (streamed via custom_tool_call_input.* events)
+// rather than `function_call`. `apply_patch` is always treated as custom even when the
+// set was not threaded, preserving the #1007 default. (#4862 exec composer follow-up.)
+function isCustomToolCall(state, name): boolean {
+  if (!name) return false;
+  if (name === "apply_patch") return true;
+  const set = state.customToolNames;
+  if (set instanceof Set) return set.has(name);
+  if (Array.isArray(set)) return set.includes(name);
+  return false;
+}
+
+// Re-attach the namespace to a function_call item whose bare name was flattened out of a
+// Responses `{type:"namespace"}` group on the request. Codex resolves collaboration executors
+// by an EXACT ToolName{namespace, name} and rejects a bare call ("unsupported call: spawn_agent");
+// it reconstructs the namespace from a SEPARATE `namespace` field on the wire function_call item
+// (protocol FunctionCall + router build_tool_call -> ToolName::new(namespace, name)), not by
+// splitting the name. `state.toolNamespaceByName` maps `bareName -> namespace` for the tools that
+// were namespace-flattened, so plain/MCP function tools are never touched.
+function applyToolNamespace(state, item): void {
+  const map = state.toolNamespaceByName;
+  if (!map) return;
+  const name = typeof item.name === "string" ? item.name : "";
+  const ns = name ? map[name] : undefined;
+  if (ns) item.namespace = ns;
+}
+
 // Normalize output_index to a non-negative integer (replaces fragile parseInt calls)
 // Record a finalized item keyed by output_index so buildDenseOutput can sort later
 function recordCompletedItem(state, outputIndex, item) {
@@ -555,15 +587,19 @@ function emitToolCall(state, emit, tc) {
     // leaf on the Chat wire was flattened from a Responses namespace sub-tool.
     // Codex dispatches from `namespace` independently of `name` (no `__` split).
     const identity = resolveRequestToolIdentity(state.requestToolIdentityMap, toolName);
+    const addedItem = buildResponsesToolCallItem({
+      callId,
+      toolName: identity ? identity.name : toolName,
+      custom: isCustomTool,
+      namespace: identity ? identity.namespace : null,
+    });
+    // Re-attach a namespace flattened out of a Responses `{type:"namespace"}` group when
+    // the identity ledger carries no entry for this bare leaf.
+    if (!isCustomTool && !identity) applyToolNamespace(state, addedItem);
     emit("response.output_item.added", {
       type: "response.output_item.added",
       output_index: outputIndex,
-      item: buildResponsesToolCallItem({
-        callId,
-        toolName: identity ? identity.name : toolName,
-        custom: isCustomTool,
-        namespace: identity ? identity.namespace : null,
-      }),
+      item: addedItem,
     });
     state.funcItemAdded[tcIdx] = true;
 
@@ -623,7 +659,7 @@ function closeToolCall(state, emit, idx, recordAsCompleted = true) {
     let funcItem;
     if (isCustomTool) {
       // The model produced JSON {"input":"..."} against the normalized custom-tool schema.
-      // Unwrap it back to the raw patch string the Codex runtime expects. (#1007)
+      // Unwrap it back to the raw input string the Codex runtime expects. (#1007 / #4862)
       let rawInput = args;
       try {
         const parsed = JSON.parse(args);
@@ -687,6 +723,7 @@ function closeToolCall(state, emit, idx, recordAsCompleted = true) {
         name: state.funcNames[idx] || "",
         status: "completed",
       };
+      applyToolNamespace(state, funcItem);
 
       // #7936 identity closure: rewrite the function_call item's `name` back to
       // its bare leaf and stamp the original `namespace` alongside it, matching
@@ -833,6 +870,53 @@ function buildResponsesReasoningSummaryDelta(state, data, reasoningDelta) {
   return deltaText;
 }
 
+// #6570: remember that a visible-text delta was streamed for a given message item, so
+// the terminal `response.output_text.done` / message `response.output_item.done` snapshot
+// for that item is NOT re-emitted (which would duplicate the visible answer). Mirrors
+// markResponsesReasoningDeltaEmitted (#5786): keyed by item_id when present, with a global
+// fallback for streams whose deltas carry no item_id.
+function markResponsesTextDeltaEmitted(state, itemId) {
+  state.textDeltaEmitted = true;
+  const id = itemId != null ? String(itemId) : "";
+  if (!id) return;
+  if (!(state.textItemsWithDelta instanceof Set)) {
+    state.textItemsWithDelta = new Set();
+  }
+  state.textItemsWithDelta.add(id);
+}
+
+// #6570: has a visible-text delta already been streamed for this message item? Used to
+// decide whether a terminal text snapshot must be synthesized. Same emitted-for-item vs
+// emitted-without-item_id logic as the #5786 reasoning done-snapshot guard.
+function responsesTextAlreadyEmitted(state, itemId) {
+  const id = itemId != null ? String(itemId) : "";
+  const emittedForItem =
+    state.textItemsWithDelta instanceof Set && id && state.textItemsWithDelta.has(id);
+  const emittedWithoutItemId =
+    state.textDeltaEmitted &&
+    !(state.textItemsWithDelta instanceof Set && state.textItemsWithDelta.size > 0);
+  return emittedForItem || emittedWithoutItemId;
+}
+
+// #6570: build a Chat-format visible-text chunk (`delta.content`) from a terminal
+// Responses text snapshot. Mirrors the `response.output_text.delta` branch so the
+// downstream openai->claude step opens a normal text content block.
+function buildResponsesTextChunk(state, text) {
+  return {
+    id: state.chatId,
+    object: "chat.completion.chunk",
+    created: state.created,
+    model: state.model || "gpt-4",
+    choices: [
+      {
+        index: 0,
+        delta: { content: text },
+        finish_reason: null,
+      },
+    ],
+  };
+}
+
 // #5786 — build a Chat-format reasoning delta chunk in the shape the client renders in
 // its thinking panel (`reasoning_content`, or `reasoning_text` for Copilot-compatible
 // clients). Mirrors the `response.reasoning_summary_text.delta` branch.
@@ -955,10 +1039,40 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
     state.currentToolCallId = null;
   }
 
+  // #6199/#6561: GPT-5.5/Codex tags internal reasoning-preamble assistant messages
+  // with phase "commentary" (e.g. "Need inspect sections. Use Read text."). Those must
+  // never surface as the visible answer. The Responses passthrough path already drops
+  // them via shouldDropResponsesCommentaryEvent; this translation path (Responses to
+  // Chat to Claude, used by Claude Code subagents) never wired that in, so commentary
+  // leaked into the visible text content block. Reuse the same stateful drop here: the
+  // output_item.added event announces the phase, and follow-up output_text.delta,
+  // output_text.done, and output_item.done events for that item are keyed off item_id /
+  // output_index and dropped too.
+  if (!(state.commentaryItemIds instanceof Set)) state.commentaryItemIds = new Set();
+  if (!(state.commentaryIndexes instanceof Set)) state.commentaryIndexes = new Set();
+  if (
+    shouldDropResponsesCommentaryEvent(
+      {
+        type: eventType,
+        item: data.item,
+        item_id: data.item_id,
+        output_index: data.output_index,
+      },
+      state.commentaryItemIds,
+      state.commentaryIndexes
+    )
+  ) {
+    return null;
+  }
+
   // Text content delta
   if (eventType === "response.output_text.delta") {
     const delta = data.delta || "";
     if (!delta) return null;
+
+    // #6570: record that visible text was streamed for this message item so the
+    // terminal snapshot handlers below do NOT re-emit it (would duplicate the answer).
+    markResponsesTextDeltaEmitted(state, data.item_id);
 
     return {
       id: state.chatId,
@@ -975,9 +1089,18 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
     };
   }
 
-  // Text content done (ignore, we handle via delta)
+  // #6570: visible text exposed ONLY as a terminal snapshot on
+  // `response.output_text.done` (no preceding output_text.delta events). Codex GPT-5.x
+  // reasoning models sometimes surface the assistant message once at close; without a
+  // fallback the whole visible answer was dropped (only its reasoning survived), and the
+  // reasoning-only-finish guard in openai-to-claude then rendered the turn as the "…"
+  // placeholder (empty deliverable). Symmetric with the #5786 reasoning done-snapshot
+  // fallback below. Only synthesize when NO text delta was already streamed for this item.
   if (eventType === "response.output_text.done") {
-    return null;
+    const fullText = typeof data.text === "string" ? data.text : "";
+    if (!fullText || responsesTextAlreadyEmitted(state, data.item_id)) return null;
+    markResponsesTextDeltaEmitted(state, data.item_id);
+    return buildResponsesTextChunk(state, fullText);
   }
 
   // Function call started
@@ -1348,6 +1471,21 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
     markResponsesReasoningDeltaEmitted(state, data.item_id);
     const deltaText = buildResponsesReasoningSummaryDelta(state, data, reasoningDelta);
     return buildResponsesReasoningDeltaChunk(state, deltaText);
+  }
+
+  // #6570: visible assistant message exposed ONLY as a terminal snapshot on
+  // `response.output_item.done` (type "message") with no preceding output_text.delta and
+  // no output_text.done carrying the text. Same drop class as the reasoning snapshot below
+  // but for the visible-text channel. Only synthesize when NO text was already streamed or
+  // emitted via the output_text.done fallback for this item, so text is never duplicated.
+  if (eventType === "response.output_item.done" && data.item?.type === "message") {
+    const item = data.item;
+    const itemId = item.id != null ? String(item.id) : "";
+    if (responsesTextAlreadyEmitted(state, itemId)) return null;
+    const messageText = extractResponsesMessageText(item);
+    if (!messageText) return null;
+    markResponsesTextDeltaEmitted(state, itemId);
+    return buildResponsesTextChunk(state, messageText);
   }
 
   // Some providers expose completed reasoning only on `response.output_item.done`.

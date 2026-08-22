@@ -12,6 +12,50 @@ export function getFieldCategory(key: string): FieldCategory {
   return CATEGORY_MAP[key] || "content";
 }
 
+// OpenAI Responses API events whose `delta` field carries tool-argument / apply_patch
+// JSON, NOT prose. Only `response.output_text.delta` should be sanitized as text; the
+// tool-argument delta variants must pass through untouched (routing them into the PII
+// rolling-content buffer scrambles them exactly like the item_id/status class did).
+const TOOL_ARG_DELTA_EVENT_TYPES = new Set([
+  "response.function_call_arguments.delta",
+  "response.custom_tool_call_input.delta",
+]);
+
+// OpenAI Responses API events whose `delta`/`text` field carries the model's
+// chain-of-thought (reasoning), NOT the visible answer. Their text MUST be routed
+// through the reasoning buffer, never the shared visible-content buffer. Otherwise
+// reasoning surfaces inside `response.output_text.*` and gets duplicated by the
+// snapshot re-emit (#responses-stream reasoning leak).
+const REASONING_TEXT_EVENT_TYPES = new Set([
+  "response.reasoning_text.delta",
+  "response.reasoning_text.done",
+  "response.reasoning_summary_text.delta",
+  "response.reasoning_summary_text.done",
+]);
+
+// Resolve a string field's category with awareness of the enclosing SSE event type.
+// The `delta` key is prose only for response.output_text.delta; for the tool-argument
+// delta events it is structured JSON and is treated as toolArgs (passthrough); for the
+// reasoning delta/done events the `delta`/`text` payload is reasoning, kept in its own
+// buffer so it never bleeds into the visible answer.
+export function resolveFieldCategory(key: string, eventType?: unknown): FieldCategory {
+  if (
+    key === "delta" &&
+    typeof eventType === "string" &&
+    TOOL_ARG_DELTA_EVENT_TYPES.has(eventType)
+  ) {
+    return "toolArgs";
+  }
+  if (
+    (key === "delta" || key === "text") &&
+    typeof eventType === "string" &&
+    REASONING_TEXT_EVENT_TYPES.has(eventType)
+  ) {
+    return "reasoning";
+  }
+  return getFieldCategory(key);
+}
+
 const STOP_EVENT_TYPES = new Set([
   "response.done",
   "response.completed",
@@ -56,7 +100,13 @@ export function createSseTextTransform(
     isSnapshot?: boolean
   ) => string,
   onFlush?: (lastJson: any, isJsonStream?: boolean, lastContentJson?: any) => any,
-  onCancel?: () => void
+  onCancel?: () => void,
+  // Invoked when a final-snapshot event (`*.done` / `*.completed`) is encountered,
+  // BEFORE that event is emitted. Returns properly-framed SSE events (e.g. a
+  // response.output_text.delta carrying the window-held tail) to enqueue first, so the
+  // streamed deltas sum to the full text exactly once and no held-back text is bolted
+  // onto the snapshot payload with a mismatched `event:` line.
+  onSnapshotDrain?: (json: any) => Array<{ type: string; payload: any }>
 ): TransformStream {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder("utf-8");
@@ -125,9 +175,25 @@ export function createSseTextTransform(
 
           const METADATA_KEYS = [
             "id",
+            // OpenAI Responses API structural identifier repeated on every event
+            // (response.output_text.delta / .content_part.* / .output_item.*).
+            // It is not model output, so it must never be buffered/sanitized: doing
+            // so funneled it into the shared rolling-content buffer and cross-
+            // contaminated the sibling `delta` text (fields scrambled, #responses-stream).
+            "item_id",
+            // function_call / custom_tool_call correlation id (bare non-snapshot string
+            // on response.output_item.added, openai-responses.ts ~L393/400). Same
+            // scrambling class as item_id; codex relies on it to correlate tool calls.
+            "call_id",
+            // custom_tool_call / custom_tool_call_input.done raw apply_patch payload
+            // (openai-responses.ts ~L392/452/458). Structured patch, must not be PII-split.
+            "input",
             "model",
             "object",
             "created",
+            // Responses API lifecycle enum ("in_progress"/"completed"/...). Structural,
+            // never PII; buffering it leaked "in_progress" into visible deltas.
+            "status",
             "finish_reason",
             "finishReason",
             "role",
@@ -174,7 +240,7 @@ export function createSseTextTransform(
               }
               if (typeof obj[key] === "string") {
                 const val = obj[key];
-                const field: FieldCategory = getFieldCategory(key);
+                const field: FieldCategory = resolveFieldCategory(key, json.type);
                 if (field === "toolArgs" || field === "partialJson") {
                   obj[key] = val;
                   matched = true;
@@ -199,7 +265,17 @@ export function createSseTextTransform(
             lastContentJson = json;
           }
 
-          if (isStopSignal && onFlush && !flushed) {
+          // Fire onFlush on EVERY stop signal, not once per stream. A single response
+          // can carry multiple content blocks each closed by its own stop signal (e.g.
+          // a Claude reasoning->text stream: the thinking block's content_block_stop then
+          // the text block's). A once-only guard here drained the first block's buffer and
+          // then blocked every later block's stop, silently dropping the held-back
+          // rolling-window tail of the answer. onFlush drains at most one buffer per call
+          // and returns a falsy value once its buffers are empty, so re-firing on each stop
+          // (and again at [DONE]/stream-close below) cannot double-emit already-flushed
+          // content. The terminal [DONE] and flush() sites keep the `flushed` guard so a
+          // trailing [DONE] does not double-invoke onFlush after the stream-close flush.
+          if (isStopSignal && onFlush) {
             const flushedValue = onFlush(
               lastJson || json,
               isJsonStream,
@@ -215,7 +291,6 @@ export function createSseTextTransform(
               }
               controller.enqueue(encoder.encode(prefix + payload + "\n\n"));
             }
-            flushed = true;
           }
 
           if (!isStopSignal && !isSnapshot) {
@@ -223,6 +298,21 @@ export function createSseTextTransform(
           }
 
           lastJson = json;
+
+          // Emit any window-held tail as a PROPERLY-FRAMED delta event before the
+          // snapshot itself, so streamed deltas add up to the full text once and the
+          // tail is never re-emitted onto the snapshot payload (avoids the visible-text
+          // and reasoning duplication / event-line mismatch).
+          if (isSnapshot && onSnapshotDrain) {
+            for (const drain of onSnapshotDrain(json)) {
+              controller.enqueue(
+                encoder.encode(
+                  `event: ${drain.type}\n${prefix}${JSON.stringify(drain.payload)}\n\n`
+                )
+              );
+            }
+          }
+
           if (pendingEventLine) {
             controller.enqueue(encoder.encode(pendingEventLine + "\n"));
             pendingEventLine = "";

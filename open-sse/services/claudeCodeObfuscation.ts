@@ -6,6 +6,8 @@
  * pattern matching while preserving readability.
  */
 
+import { isPassthroughMode } from "../executors/claudeIdentity.ts";
+
 // Unicode zero-width joiner inserted between characters
 const ZWJ = "\u200d";
 
@@ -55,7 +57,7 @@ function getObfuscationRegex(word: string): RegExp {
 }
 
 export function obfuscateSensitiveWords(text: string): string {
-  if (!text || sensitiveWords.length === 0) return text;
+  if (!text || sensitiveWords.length === 0 || isPassthroughMode()) return text;
 
   let result = text;
   for (const word of sensitiveWords) {
@@ -68,6 +70,7 @@ export function obfuscateSensitiveWords(text: string): string {
 }
 
 export function obfuscateInBody(body: Record<string, unknown>): void {
+  if (isPassthroughMode()) return;
   // System prompt (Claude format: string or array of blocks)
   if (typeof body.system === "string") {
     body.system = obfuscateSensitiveWords(body.system);

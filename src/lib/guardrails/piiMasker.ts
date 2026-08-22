@@ -1,6 +1,7 @@
 import { BaseGuardrail, type GuardrailContext, type GuardrailResult } from "./base";
 import { processPII } from "@/shared/utils/inputSanitizer";
 import { sanitizePII, sanitizePIIResponse } from "@/lib/piiSanitizer";
+import { hasExplicitPiiOverride, shouldRedactPiiForProvider } from "./piiTrust";
 
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 
@@ -11,14 +12,21 @@ type PiiDetection = {
 
 type JsonRecord = Record<string, unknown>;
 
-function isRequestPiiMaskingEnabled() {
-  // Request PII redaction is controlled by PII_REDACTION_ENABLED feature flag (DB > env > default).
-  // INPUT_SANITIZER_MODE only governs prompt-injection policy (warn/block/log).
-  return isFeatureFlagEnabled("PII_REDACTION_ENABLED");
+/**
+ * Request-side masking decision for a destination provider.
+ * - An explicit global override on PII_REDACTION_ENABLED (DB > env) wins uniformly.
+ *   INPUT_SANITIZER_MODE only governs prompt-injection policy (warn/block/log).
+ * - Otherwise the trust-tiered default applies: redact untrusted providers.
+ */
+function isRequestPiiMaskingEnabled(provider?: string | null): boolean {
+  if (hasExplicitPiiOverride("PII_REDACTION_ENABLED")) {
+    return isFeatureFlagEnabled("PII_REDACTION_ENABLED");
+  }
+  return shouldRedactPiiForProvider(provider ?? null, "PII_REDACTION_ENABLED");
 }
 
-function sanitizeStringValue(text: string) {
-  const result = processPII(text, isRequestPiiMaskingEnabled());
+function sanitizeStringValue(text: string, enabled: boolean) {
+  const result = processPII(text, enabled);
   return {
     detections: result.detections,
     modified: result.text !== text,
@@ -28,10 +36,11 @@ function sanitizeStringValue(text: string) {
 
 function applyToContentValue(
   value: unknown,
-  detections: PiiDetection[]
+  detections: PiiDetection[],
+  enabled: boolean
 ): { modified: boolean; value: unknown } {
   if (typeof value === "string") {
-    const result = sanitizeStringValue(value);
+    const result = sanitizeStringValue(value, enabled);
     detections.push(...result.detections);
     return {
       modified: result.modified,
@@ -43,7 +52,7 @@ function applyToContentValue(
     let modified = false;
     const nextValue = value.map((entry) => {
       if (typeof entry === "string") {
-        const result = sanitizeStringValue(entry);
+        const result = sanitizeStringValue(entry, enabled);
         detections.push(...result.detections);
         modified ||= result.modified;
         return result.text;
@@ -52,13 +61,13 @@ function applyToContentValue(
       if (entry && typeof entry === "object") {
         const record = { ...(entry as JsonRecord) };
         if (typeof record.text === "string") {
-          const result = sanitizeStringValue(record.text);
+          const result = sanitizeStringValue(record.text, enabled);
           detections.push(...result.detections);
           modified ||= result.modified;
           record.text = result.text;
         }
         if (typeof record.content === "string") {
-          const result = sanitizeStringValue(record.content);
+          const result = sanitizeStringValue(record.content, enabled);
           detections.push(...result.detections);
           modified ||= result.modified;
           record.content = result.text;
@@ -74,7 +83,7 @@ function applyToContentValue(
   return { modified: false, value };
 }
 
-function cloneAndMaskRequestPayload(payload: unknown) {
+function cloneAndMaskRequestPayload(payload: unknown, enabled: boolean) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return { detections: [] as PiiDetection[], modified: false, payload };
   }
@@ -88,7 +97,7 @@ function cloneAndMaskRequestPayload(payload: unknown) {
     return list.map((entry) => {
       // Responses API can pass plain strings in input[]
       if (typeof entry === "string") {
-        const result = sanitizeStringValue(entry);
+        const result = sanitizeStringValue(entry, enabled);
         detections.push(...result.detections);
         modified ||= result.modified;
         return result.text;
@@ -96,12 +105,12 @@ function cloneAndMaskRequestPayload(payload: unknown) {
       if (!entry || typeof entry !== "object") return entry;
       const record = { ...(entry as JsonRecord) };
       if ("content" in record) {
-        const result = applyToContentValue(record.content, detections);
+        const result = applyToContentValue(record.content, detections, enabled);
         modified ||= result.modified;
         record.content = result.value;
       }
       if (typeof record.text === "string") {
-        const result = sanitizeStringValue(record.text);
+        const result = sanitizeStringValue(record.text, enabled);
         detections.push(...result.detections);
         modified ||= result.modified;
         record.text = result.text;
@@ -111,7 +120,7 @@ function cloneAndMaskRequestPayload(payload: unknown) {
   };
 
   if (typeof clonedPayload.system === "string") {
-    const result = sanitizeStringValue(clonedPayload.system);
+    const result = sanitizeStringValue(clonedPayload.system, enabled);
     detections.push(...result.detections);
     modified ||= result.modified;
     clonedPayload.system = result.text;
@@ -126,14 +135,14 @@ function cloneAndMaskRequestPayload(payload: unknown) {
   if (Array.isArray(clonedPayload.input)) {
     clonedPayload.input = sanitizeMessageLikeList(clonedPayload.input);
   } else if (typeof clonedPayload.input === "string") {
-    const result = sanitizeStringValue(clonedPayload.input);
+    const result = sanitizeStringValue(clonedPayload.input, enabled);
     detections.push(...result.detections);
     modified ||= result.modified;
     clonedPayload.input = result.text;
   }
 
   if (typeof clonedPayload.prompt === "string") {
-    const result = sanitizeStringValue(clonedPayload.prompt);
+    const result = sanitizeStringValue(clonedPayload.prompt, enabled);
     detections.push(...result.detections);
     modified ||= result.modified;
     clonedPayload.prompt = result.text;
@@ -148,11 +157,11 @@ function cloneAndMaskRequestPayload(payload: unknown) {
   };
 }
 
-function maskResponsesOutput(response: JsonRecord) {
+function maskResponsesOutput(response: JsonRecord, forceEnabled?: boolean) {
   let modified = false;
 
   if (typeof response.output_text === "string") {
-    const result = sanitizePII(response.output_text);
+    const result = sanitizePII(response.output_text, false, forceEnabled);
     if (result.redacted) {
       response.output_text = result.text;
       modified = true;
@@ -168,7 +177,7 @@ function maskResponsesOutput(response: JsonRecord) {
           if (!part || typeof part !== "object") return part;
           const nextPart = { ...(part as JsonRecord) };
           if (typeof nextPart.text === "string") {
-            const result = sanitizePII(nextPart.text);
+            const result = sanitizePII(nextPart.text, false, forceEnabled);
             if (result.redacted) {
               nextPart.text = result.text;
               modified = true;
@@ -192,8 +201,9 @@ export class PIIMaskerGuardrail extends BaseGuardrail {
     });
   }
 
-  async preCall(payload: unknown, _context: GuardrailContext): Promise<GuardrailResult<unknown>> {
-    const result = cloneAndMaskRequestPayload(payload);
+  async preCall(payload: unknown, context?: GuardrailContext): Promise<GuardrailResult<unknown>> {
+    const enabled = isRequestPiiMaskingEnabled(context?.provider ?? null);
+    const result = cloneAndMaskRequestPayload(payload, enabled);
     if (!result.modified) {
       return {
         block: false,
@@ -208,15 +218,19 @@ export class PIIMaskerGuardrail extends BaseGuardrail {
     };
   }
 
-  async postCall(response: unknown, _context: GuardrailContext): Promise<GuardrailResult<unknown>> {
+  async postCall(response: unknown, context?: GuardrailContext): Promise<GuardrailResult<unknown>> {
     if (!response || typeof response !== "object" || Array.isArray(response)) {
       return { block: false };
     }
 
+    const responseEnabled = shouldRedactPiiForProvider(
+      context?.provider ?? null,
+      "PII_RESPONSE_SANITIZATION"
+    );
     const clonedResponse = JSON.parse(JSON.stringify(response)) as JsonRecord;
     const before = JSON.stringify(clonedResponse);
-    const sanitized = sanitizePIIResponse(clonedResponse) as JsonRecord;
-    const modifiedResponsesShape = maskResponsesOutput(sanitized);
+    const sanitized = sanitizePIIResponse(clonedResponse, responseEnabled) as JsonRecord;
+    const modifiedResponsesShape = maskResponsesOutput(sanitized, responseEnabled);
     const after = JSON.stringify(sanitized);
     const modified = before !== after || modifiedResponsesShape;
 

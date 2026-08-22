@@ -134,6 +134,10 @@ function findBestMessageText(output: unknown[]): {
  * Handles different provider response formats (Gemini, Claude, etc.)
  *
  * @param toolNameMap - Optional Map<prefixedName, originalName> for Claude OAuth tool name stripping
+ * @param options.signatureNamespace - Connection id used to namespace the Gemini
+ *   thought-signature cache. MUST be the same namespace the request side passes as
+ *   `signatureNamespace` (chatCore -> translateRequest), otherwise a signature stored
+ *   here is written under a key no request-side lookup can ever produce.
  */
 export function translateNonStreamingResponse(
   responseBody: JsonRecord,
@@ -151,8 +155,10 @@ export function translateNonStreamingResponse(
   responseBody: unknown,
   targetFormat: string,
   sourceFormat: string,
-  toolNameMap?: Map<string, string> | null
+  toolNameMap?: Map<string, string> | null,
+  options?: { signatureNamespace?: string | null }
 ): unknown {
+  const signatureNamespace = options?.signatureNamespace ?? null;
   // If already in source format, return as-is
   if (targetFormat === sourceFormat) {
     if (targetFormat === FORMATS.OPENAI) {
@@ -427,9 +433,15 @@ export function translateNonStreamingResponse(
                     // resolve it on the next turn. Use the part-level field
                     // (part.thoughtSignature) and fall back to any signature
                     // captured from an earlier thinking-only part.
+                    // The key MUST carry the same connection namespace the request
+                    // side uses (`<connectionId>:<toolCallId>`). This previously
+                    // hardcoded `null`, which stored the bare tool-call id, a key no
+                    // namespaced request-side lookup can ever produce, so every
+                    // non-streaming Gemini tool call was cached and then missed on
+                    // the next turn.
                     const sig = partThoughtSig || pendingThoughtSignature;
                     if (sig) {
-                      const sigKey = buildGeminiThoughtSignatureKey(null, toolCallId);
+                      const sigKey = buildGeminiThoughtSignatureKey(signatureNamespace, toolCallId);
                       storeGeminiThoughtSignature(sigKey, sig);
                     }
 

@@ -193,6 +193,8 @@ export function buildClaudeCodeCompatibleHeaders(
     "X-Stainless-Runtime": "node",
     "X-Stainless-Runtime-Version": CLAUDE_CODE_COMPATIBLE_STAINLESS_RUNTIME_VERSION,
     "accept-encoding": "gzip, deflate, br, zstd",
+    connection: "keep-alive",
+    "x-client-request-id": randomUUID(),
     ...(sessionId ? { "X-Claude-Code-Session-Id": sessionId } : {}),
   };
 }
