@@ -218,8 +218,11 @@ function toNativeResponse(
 }
 
 /**
- * TLS Client — Chrome 124 TLS fingerprint spoofing via wreq-js.
+ * TLS Client — Chrome 142 TLS fingerprint spoofing via wreq-js.
  * Sessions, cookie jars, and circuit state are isolated by account scope and exact proxy.
+ *
+ * wreq-js natively supports proxy — TLS fingerprinting works through proxy.
+ * Proxy URL is read from environment variables (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY).
  */
 export class TlsClient {
   private readonly createSessionFn: CreateSessionFn | null;
@@ -517,7 +520,7 @@ export class TlsClient {
     this.reserveSessionCapacity(key);
 
     const sessionOpts: Record<string, unknown> = {
-      browser: "chrome_124",
+      browser: "chrome_142",
       os: "macos",
     };
     if (resolvedProxy) sessionOpts.proxy = resolvedProxy;
@@ -548,7 +551,7 @@ export class TlsClient {
         this.sessions.set(key, session);
         this.sessionLastUsed.set(key, ++this.accessSequence);
         this.evictSessionsIfNeeded(key);
-        console.log("[TlsClient] Session created (Chrome 124 TLS fingerprint)");
+        console.log("[TlsClient] Session created (Chrome 142 TLS fingerprint)");
         return session;
       })
       .finally(() => {
@@ -561,7 +564,7 @@ export class TlsClient {
     return creating;
   }
 
-  /** Fetch with Chrome 124 TLS fingerprint and an account-scoped persistent cookie jar. */
+  /** Fetch with Chrome 142 TLS fingerprint and an account-scoped persistent cookie jar. */
   async fetch(url: string, options: TlsFetchOptions = {}): Promise<Response> {
     const resolvedProxy = this.resolveProxy(options.proxy);
     const key = this.getSessionKey(resolvedProxy, options.sessionScope);
