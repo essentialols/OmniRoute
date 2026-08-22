@@ -42,6 +42,7 @@ function makeDeps(over: Record<string, unknown> = {}) {
     wantsProgress: () => false,
     pipeWithDisconnect: (..._a: unknown[]) => fakeStream("pii-base", log),
     isFeatureFlagEnabled: () => false,
+    shouldRedactPiiForProvider: () => false,
     createPiiSseTransform: () => ({ __tag: "pii-flag" }),
     createProgressTransform: () => ({ __tag: "progress" }),
     createSseHeartbeatTransform: () => ({ __tag: "heartbeat" }),
@@ -96,14 +97,14 @@ test("baseline (no pii, no progress, no echo) → only heartbeat in the chain", 
   assert.deepEqual(log, ["heartbeat"]);
 });
 
-test("feature-flag PII → pii-flag transform applied before heartbeat", () => {
-  const { deps, log } = makeDeps({ isFeatureFlagEnabled: () => true });
+test("trust-tiered PII (untrusted provider) → pii-flag transform applied before heartbeat", () => {
+  const { deps, log } = makeDeps({ shouldRedactPiiForProvider: () => true });
   assembleStreamingPipeline(baseArgs(), deps);
   assert.deepEqual(log, ["pii-flag", "heartbeat"]);
 });
 
-test("explicit createPiiTransform wins over the feature flag", () => {
-  const { deps, log } = makeDeps({ isFeatureFlagEnabled: () => true });
+test("explicit createPiiTransform wins over the trust-tiered PII gate", () => {
+  const { deps, log } = makeDeps({ shouldRedactPiiForProvider: () => true });
   const explicit = () => ({ __tag: "pii-explicit" });
   assembleStreamingPipeline(baseArgs({ createPiiTransform: explicit }), deps);
   assert.deepEqual(log, ["pii-explicit", "heartbeat"]);
@@ -132,7 +133,7 @@ test("echoModel set → echo transform applied last", () => {
 
 test("full chain order: pii → progress → heartbeat → echo", () => {
   const { deps, log } = makeDeps({
-    isFeatureFlagEnabled: () => true,
+    shouldRedactPiiForProvider: () => true,
     wantsProgress: () => true,
   });
   assembleStreamingPipeline(baseArgs({ echoModel: "alias-x" }), deps);
