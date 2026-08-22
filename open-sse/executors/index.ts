@@ -12,6 +12,7 @@ import { TraeExecutor } from "./trae.ts";
 import { DefaultExecutor } from "./default.ts";
 import { BedrockExecutor } from "./bedrock.ts";
 import { GlmExecutor } from "./glm.ts";
+import { GlmWebExecutor } from "./glm-web.ts";
 import { PollinationsExecutor } from "./pollinations.ts";
 import { CloudflareAIExecutor } from "./cloudflare-ai.ts";
 import { FreebuffExecutor } from "./freebuff.ts";
@@ -62,10 +63,10 @@ import { V0VercelWebExecutor } from "./v0-vercel-web.ts";
 import { CheaperInferenceExecutor } from "./cheaperinference.ts";
 import { KimiWebExecutor } from "./kimi-web.ts";
 import { DoubaoWebExecutor } from "./doubao-web.ts";
-import { QwenWebExecutor } from "./qwen-web.ts";
 import { RaycastExecutor } from "./raycast.ts";
 import { HailuoWebExecutor } from "./hailuo-web.ts";
 import { ZaiWebExecutor } from "./zai-web.ts";
+import { QwenWebExecutor } from "./qwen-web.ts";
 import { KimiExecutor } from "./kimi.ts";
 import { MoonshotExecutor } from "./moonshot.ts";
 import { TheOldLlmExecutor } from "./theoldllm.ts";
@@ -80,6 +81,7 @@ import { HyperAgentExecutor } from "./hyperagent.ts";
 import { XaiExecutor } from "./xai.ts";
 import { PromptQlExecutor } from "./promptql.ts";
 import { ConolWebExecutor } from "./conol-web.ts";
+import { BraveLeoExecutor } from "./brave-leo.ts";
 
 // R0.3 — declarative built-in table. The object literal stays as the single
 // place built-ins are declared (compile-time duplicate-key safety; the
@@ -104,6 +106,7 @@ const executors = {
   glm: new GlmExecutor("glm"),
   "glm-cn": new GlmExecutor("glm-cn"),
   glmt: new GlmExecutor("glmt"),
+  "glm-web": new GlmWebExecutor(),
   cu: new CursorExecutor(), // Alias for cursor
   "cursor-api": new CursorExecutor("cursor-api"),
   cua: new CursorExecutor("cursor-api"),
@@ -232,6 +235,7 @@ const executors = {
   qw: new QwenWebExecutor(), // Alias
   "conol-web": new ConolWebExecutor(),
   cnl: new ConolWebExecutor(), // Alias
+  brave: new BraveLeoExecutor(),
 };
 
 // Bootstrap: register every built-in in the ExecutorRegistry. registerExecutor
@@ -303,6 +307,7 @@ export { TraeExecutor } from "./trae.ts";
 export { DefaultExecutor } from "./default.ts";
 export { BedrockExecutor } from "./bedrock.ts";
 export { GlmExecutor } from "./glm.ts";
+export { GlmWebExecutor } from "./glm-web.ts";
 export { PollinationsExecutor } from "./pollinations.ts";
 export { CloudflareAIExecutor } from "./cloudflare-ai.ts";
 export { OpencodeExecutor } from "./opencode.ts";
@@ -343,6 +348,7 @@ export { T3ChatWebExecutor } from "./t3-chat-web.ts";
 export { InnerAiExecutor } from "./inner-ai.ts";
 export { QwenWebExecutor } from "./qwen-web.ts";
 export { HailuoWebExecutor } from "./hailuo-web.ts";
+export { ZaiWebExecutor } from "./zai-web.ts";
 export { TheOldLlmExecutor } from "./theoldllm.ts";
 export { ChipotleExecutor } from "./chipotle.ts";
 export { LMArenaExecutor } from "./lmarena.ts";
@@ -357,3 +363,4 @@ export { MoonshotExecutor } from "./moonshot.ts";
 export { CheaperInferenceExecutor } from "./cheaperinference.ts";
 export { PromptQlExecutor } from "./promptql.ts";
 export { ConolWebExecutor } from "./conol-web.ts";
+export { BraveLeoExecutor } from "./brave-leo.ts";
