@@ -292,3 +292,8 @@ docker-compose.yml.bak
 # Ad-hoc test sandboxes (never tracked — may contain local DBs)
 /.sandbox/
 .aider*
+
+# Runtime stub written by tests/unit/authz/client-api-policy-fallback.test.ts.
+# Its test.after() cleanup does not run if the suite is interrupted, so an aborted
+# run must not be able to leak it into a commit.
+tests/unit/authz/__stub_apiKeys.mjs
