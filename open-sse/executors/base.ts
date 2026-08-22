@@ -1187,7 +1187,11 @@ export class BaseExecutor {
           // sensitive words). It deliberately does NOT include
           // `inject_billing_header` — billing + sentinel are already
           // prepended above. Users can extend the pipeline via Settings UI.
-          {
+          // Gated: when we are forwarding a genuine Claude Code request verbatim, the
+          // system prompt must not be rewritten. These ops mutate it (paragraph anchors,
+          // identity-prefix drop, ZWJ obfuscation), and ZWJ insertion in particular is
+          // exactly the tell that passthrough exists to avoid.
+          if (!passthroughForwardsRealCc) {
             const transformResult = applySystemTransformPipeline(PROVIDER_CLAUDE, tb);
             if (transformResult.appliedOpKinds.length > 0) {
               console.log(

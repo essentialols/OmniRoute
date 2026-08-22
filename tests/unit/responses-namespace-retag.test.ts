@@ -83,7 +83,7 @@ async function runToolCall(
     },
   });
 
-  const transform = createResponsesApiTransformStream(null, undefined, namespaceMap);
+  const transform = createResponsesApiTransformStream(null, undefined, { toolNamespaceByName: namespaceMap });
   const out = source.pipeThrough(transform);
   const decoder = new TextDecoder();
   let text = "";

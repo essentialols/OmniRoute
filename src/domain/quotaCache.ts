@@ -330,8 +330,10 @@ function isAntigravityQuotaExhausted(
     matchingWindows.length > 0 &&
     matchingWindows.every(
       (windowName) =>
-        getQuotaWindowStatus(connectionId, windowName, DEFAULT_QUOTA_THRESHOLD_PERCENT)
-          ?.reachedThreshold
+        // 100, not DEFAULT_QUOTA_THRESHOLD_PERCENT (99): a model-scoped window is only
+        // exhausted when it is genuinely spent. Treating 99% as exhausted throws away the
+        // last 1% of every window.
+        getQuotaWindowStatus(connectionId, windowName, 100)?.reachedThreshold
     )
   );
 }
@@ -432,8 +434,10 @@ function isCodexQuotaExhausted(
     scopedWindowNames.length > 0 &&
     scopedWindowNames.every(
       (windowName) =>
-        getQuotaWindowStatus(connectionId, windowName, DEFAULT_QUOTA_THRESHOLD_PERCENT)
-          ?.reachedThreshold
+        // 100, not DEFAULT_QUOTA_THRESHOLD_PERCENT (99): a model-scoped window is only
+        // exhausted when it is genuinely spent. Treating 99% as exhausted throws away the
+        // last 1% of every window.
+        getQuotaWindowStatus(connectionId, windowName, 100)?.reachedThreshold
     )
   );
 }
