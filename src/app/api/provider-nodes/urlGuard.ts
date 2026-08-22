@@ -4,7 +4,7 @@ import {
   parseAndValidateNonMetadataUrl,
   parseAndValidatePublicUrl,
   parseOutboundUrl,
-} from "@/shared/network/outboundUrlGuard";
+} from "@/shared/network/outboundUrlGuardPolicy";
 import { getProviderValidationGuard } from "@/shared/network/outboundUrlGuardPolicy";
 
 function guardProviderNodeBaseUrl(baseUrl: string): void {

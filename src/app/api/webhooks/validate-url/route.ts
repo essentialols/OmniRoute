@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
-import { OutboundUrlGuardError } from "@/shared/network/outboundUrlGuard";
+import { OutboundUrlGuardError } from "@/shared/network/outboundUrlGuardPolicy";
 import { parseAndValidateWebhookUrl } from "@/shared/network/outboundUrlGuardPolicy";
 import { validateBody, isValidationFailure } from "@/shared/validation/helpers";
 

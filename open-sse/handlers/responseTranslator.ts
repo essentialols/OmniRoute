@@ -143,13 +143,15 @@ export function translateNonStreamingResponse(
   responseBody: JsonRecord,
   targetFormat: string,
   sourceFormat: string,
-  toolNameMap?: Map<string, string> | null
+  toolNameMap?: Map<string, string> | null,
+  options?: { signatureNamespace?: string | null }
 ): JsonRecord;
 export function translateNonStreamingResponse(
   responseBody: unknown,
   targetFormat: string,
   sourceFormat: string,
-  toolNameMap?: Map<string, string> | null
+  toolNameMap?: Map<string, string> | null,
+  options?: { signatureNamespace?: string | null }
 ): unknown;
 export function translateNonStreamingResponse(
   responseBody: unknown,

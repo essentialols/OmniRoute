@@ -6,7 +6,7 @@ import {
   getSafeOutboundFetchErrorStatus,
   safeOutboundFetch,
 } from "@/shared/network/safeOutboundFetch";
-import { getProviderOutboundGuard } from "@/shared/network/outboundUrlGuard";
+import { getProviderOutboundGuard } from "@/shared/network/outboundUrlGuardPolicy";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 import { getProviderConnectionById } from "@/lib/db/providers";
 import { resolveProxyForProvider } from "@/lib/db/proxies";

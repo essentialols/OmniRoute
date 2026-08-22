@@ -7,7 +7,7 @@ import {
   getSafeOutboundFetchErrorStatus,
   safeOutboundFetch,
 } from "@/shared/network/safeOutboundFetch";
-import { isPrivateHost } from "@/shared/network/outboundUrlGuard";
+import { isPrivateHost } from "@/shared/network/outboundUrlGuardPolicy";
 import { getProviderValidationGuard } from "@/shared/network/outboundUrlGuardPolicy";
 import { selectProxyForValidation } from "@omniroute/open-sse/services/proxyAutoSelector.ts";
 

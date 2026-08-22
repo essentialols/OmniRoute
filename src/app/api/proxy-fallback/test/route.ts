@@ -11,7 +11,7 @@ import { z } from "zod";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { validateBody, isValidationFailure } from "@/shared/validation/helpers";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
-import { isPrivateHost } from "@/shared/network/outboundUrlGuard";
+import { isPrivateHost } from "@/shared/network/outboundUrlGuardPolicy";
 import { arePrivateProviderUrlsAllowed } from "@/shared/network/outboundUrlGuardPolicy";
 import {
   testProxiesAgainstTarget,

@@ -8,7 +8,7 @@ import { handleChatCore } from "./chatCore.ts";
 import { convertResponsesApiFormat } from "../translator/helpers/responsesApiHelper.ts";
 import { collectResponsesCustomToolNames } from "../translator/request/openai-responses/additionalTools.ts";
 import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.ts";
-import { buildToolNamespaceMap } from "./chatCore/openaiCompatibleTools.ts";
+import { buildToolNamespaceMap } from "./chatCore/openAICompatibleTools.ts";
 import { createSseHeartbeatTransform, HEARTBEAT_SHAPES } from "../utils/sseHeartbeat.ts";
 import { SSE_HEARTBEAT_INTERVAL_MS } from "../config/constants.ts";
 import { isCaptureEnabled, captureClientIn, captureClientOut } from "../services/durableCapture.ts";

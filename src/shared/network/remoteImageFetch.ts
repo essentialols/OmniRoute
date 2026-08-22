@@ -6,7 +6,7 @@ import {
   isPrivateHost,
   parseAndValidatePublicUrl,
   parseOutboundUrl,
-} from "@/shared/network/outboundUrlGuard";
+} from "@/shared/network/outboundUrlGuardPolicy";
 import { getProviderOutboundGuard } from "@/shared/network/outboundUrlGuardPolicy";
 
 const DEFAULT_MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024;
