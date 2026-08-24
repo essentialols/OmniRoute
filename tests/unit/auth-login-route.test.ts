@@ -15,8 +15,6 @@ const settingsDb = await import("../../src/lib/db/settings.ts");
 const loginRoute = await import("../../src/app/api/auth/login/route.ts");
 const managementPassword = await import("../../src/lib/auth/managementPassword.ts");
 
-const originalGetCookieStore = loginRoute.authRouteInternals.getCookieStore;
-
 async function resetStorage() {
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
@@ -26,13 +24,6 @@ async function resetStorage() {
 
 test.beforeEach(async () => {
   await resetStorage();
-  loginRoute.authRouteInternals.getCookieStore = async () => ({
-    set() {},
-  });
-});
-
-test.afterEach(() => {
-  loginRoute.authRouteInternals.getCookieStore = originalGetCookieStore;
 });
 
 test.after(() => {
@@ -81,10 +72,6 @@ test("auth login route returns needsSetup when no management password is configu
 
 test("auth login route lazily migrates INITIAL_PASSWORD to a persisted hash before validating", async () => {
   process.env.INITIAL_PASSWORD = "bootstrap-secret";
-  const setCalls: unknown[][] = [];
-  loginRoute.authRouteInternals.getCookieStore = async () => ({
-    set: (...args: unknown[]) => setCalls.push(args),
-  });
 
   const response = await loginRoute.POST(
     new Request("http://localhost/api/auth/login", {
@@ -97,7 +84,9 @@ test("auth login route lazily migrates INITIAL_PASSWORD to a persisted hash befo
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { success: true });
-  assert.equal(setCalls.length, 1);
+  // The auth cookie is set on the response object (no next/headers request scope).
+  assert.equal(typeof response.cookies.get("auth_token")?.value, "string");
+  assert.ok((response.cookies.get("auth_token")?.value ?? "").length > 0);
   assert.equal(managementPassword.isBcryptHash(settings.password), true);
   assert.equal(
     await managementPassword.verifyManagementPassword(
@@ -110,10 +99,6 @@ test("auth login route lazily migrates INITIAL_PASSWORD to a persisted hash befo
 
 test("auth login route sets a bounded maxAge on the auth_token cookie (Seg3)", async () => {
   process.env.INITIAL_PASSWORD = "bootstrap-secret";
-  const setCalls: unknown[][] = [];
-  loginRoute.authRouteInternals.getCookieStore = async () => ({
-    set: (...args: unknown[]) => setCalls.push(args),
-  });
 
   const response = await loginRoute.POST(
     new Request("http://localhost/api/auth/login", {
@@ -124,12 +109,12 @@ test("auth login route sets a bounded maxAge on the auth_token cookie (Seg3)", a
   );
 
   assert.equal(response.status, 200);
-  assert.equal(setCalls.length, 1);
-  const [cookieName, , options] = setCalls[0] as [string, string, Record<string, unknown>];
-  assert.equal(cookieName, "auth_token");
+  const cookie = response.cookies.get("auth_token");
+  assert.ok(cookie, "auth_token cookie must be set on the response");
+  assert.equal(cookie?.name, "auth_token");
   // 30 days in seconds — must match the JWT 30d expiry so the cookie is not an open-ended
   // session cookie outliving its token.
-  assert.equal(options.maxAge, 60 * 60 * 24 * 30);
-  assert.equal(options.httpOnly, true);
-  assert.equal(options.path, "/");
+  assert.equal(cookie?.maxAge, 60 * 60 * 24 * 30);
+  assert.equal(cookie?.httpOnly, true);
+  assert.equal(cookie?.path, "/");
 });

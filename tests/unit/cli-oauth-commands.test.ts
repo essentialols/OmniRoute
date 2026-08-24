@@ -1,19 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+// Provider ids match the server registry (src/shared/constants/providers/oauth.ts):
+// `claude` (not "claude-code") and `github` (not "copilot").
 const CONNECTIONS = [
   {
     id: "conn1",
-    provider: "gemini",
-    name: "My Gemini",
+    provider: "claude",
+    name: "My Claude Code",
     authType: "oauth",
     isActive: true,
     testStatus: "ok",
   },
   {
     id: "conn2",
-    provider: "copilot",
-    name: "Copilot",
+    provider: "github",
+    name: "GitHub Copilot",
     authType: "oauth2",
     isActive: true,
     testStatus: "ok",
@@ -61,6 +63,9 @@ function makeCmd(output = "json") {
   return { optsWithGlobals: () => ({ output, quiet: output !== "table" }) };
 }
 
+type OAuthProviderDef = { id: string; name: string; flow: string };
+type FetchInit = { method?: string; body?: unknown };
+
 test("runOAuthStatus filtra apenas conexões oauth/oauth2", async () => {
   const origFetch = globalThis.fetch;
   globalThis.fetch = ((url: string) => {
@@ -84,35 +89,45 @@ test("runOAuthStatus filtra por provider", async () => {
   globalThis.fetch = ((url: string) => {
     capturedUrl = url;
     return Promise.resolve(
-      makeResp({ providers: CONNECTIONS.filter((c) => c.provider === "gemini") })
+      makeResp({ providers: CONNECTIONS.filter((c) => c.provider === "claude") })
     );
   }) as any;
 
   const { runOAuthStatus } = await import("../../bin/cli/commands/oauth.mjs");
-  await captureStdout(() => runOAuthStatus({ provider: "gemini" }, makeCmd() as any));
+  await captureStdout(() => runOAuthStatus({ provider: "claude" }, makeCmd() as any));
 
   globalThis.fetch = origFetch;
-  assert.ok(capturedUrl.includes("provider=gemini"));
+  assert.ok(capturedUrl.includes("provider=claude"));
 });
 
-test("runOAuthRevoke com --yes chama endpoint de revogação", async () => {
-  let capturedUrl = "";
-  let capturedMethod = "";
+// There is no /api/oauth/<provider>/revoke action on the server: the dynamic
+// OAuth route answers "Unknown action" 400 for it
+// (src/app/api/oauth/[provider]/[action]/route.ts:898). The only revocation
+// primitive is DELETE /api/providers/<connectionId>
+// (src/app/api/providers/[id]/route.ts:335), so a revoke without an explicit
+// --connection-id must resolve the provider's OAuth connections first.
+test("runOAuthRevoke com --yes resolve conexões e usa DELETE em /api/providers", async () => {
+  const calls: Array<{ url: string; method: string }> = [];
   const origFetch = globalThis.fetch;
   globalThis.fetch = ((url: string, opts: any) => {
-    capturedUrl = url;
-    capturedMethod = opts?.method ?? "GET";
+    calls.push({ url, method: opts?.method ?? "GET" });
+    if (url.includes("/api/providers?")) {
+      return Promise.resolve(makeResp({ providers: CONNECTIONS }));
+    }
     return Promise.resolve(makeResp({}));
   }) as any;
 
   const out = await captureStdout(async () => {
     const { runOAuthRevoke } = await import("../../bin/cli/commands/oauth.mjs");
-    await runOAuthRevoke({ provider: "gemini", yes: true }, makeCmd() as any);
+    await runOAuthRevoke({ provider: "claude", yes: true }, makeCmd() as any);
   });
 
   globalThis.fetch = origFetch;
-  assert.ok(capturedUrl.includes("/api/oauth/gemini/revoke"));
-  assert.equal(capturedMethod, "POST");
+  assert.ok(calls.some((c) => c.url.includes("/api/providers?") && c.method === "GET"));
+  const del = calls.find((c) => c.method === "DELETE");
+  assert.ok(del, "expected a DELETE call");
+  assert.ok(del!.url.includes("/api/providers/conn1"));
+  assert.ok(!calls.some((c) => c.url.includes("/revoke")));
   assert.ok(out.includes("Revoked"));
 });
 
@@ -129,7 +144,7 @@ test("runOAuthRevoke com connectionId usa DELETE no provider", async () => {
   const out = await captureStdout(async () => {
     const { runOAuthRevoke } = await import("../../bin/cli/commands/oauth.mjs");
     await runOAuthRevoke(
-      { provider: "gemini", connectionId: "conn1", yes: true },
+      { provider: "claude", connectionId: "conn1", yes: true },
       makeCmd() as any
     );
   });
@@ -140,43 +155,82 @@ test("runOAuthRevoke com connectionId usa DELETE no provider", async () => {
   assert.ok(out.includes("Revoked"));
 });
 
-test("runOAuthStart flow=import chama endpoint de import", async () => {
+test("runOAuthStart flow=import chama POST /api/oauth/cursor/import", async () => {
   let capturedUrl = "";
   let capturedMethod = "";
   const origFetch = globalThis.fetch;
   globalThis.fetch = ((url: string, opts: any) => {
     capturedUrl = url;
     capturedMethod = opts?.method ?? "GET";
-    return Promise.resolve(makeResp({ count: 3 }));
+    return Promise.resolve(makeResp({ success: true, connection: { id: "c9", email: "a@b.c" } }));
   }) as any;
 
   const out = await captureStdout(async () => {
     const { runOAuthStart } = await import("../../bin/cli/commands/oauth.mjs");
-    await runOAuthStart({ provider: "cursor" }, makeCmd() as any);
+    await runOAuthStart({ provider: "cursor", token: "tok" }, makeCmd() as any);
   });
 
   globalThis.fetch = origFetch;
   assert.ok(capturedUrl.includes("/api/oauth/cursor/import"));
   assert.equal(capturedMethod, "POST");
-  assert.ok(out.includes("3"));
+  assert.ok(out.includes("a@b.c"));
 });
 
-test("runOAuthStart flow=import com --import-from-system usa auto-import", async () => {
-  let capturedUrl = "";
+// /auto-import is a GET and only exists for cursor and kiro. Cursor's variant
+// only DISCOVERS credentials (src/app/api/oauth/cursor/auto-import/route.ts:332),
+// so the CLI must finish with the POST /import call.
+test("runOAuthStart --import-from-system faz GET auto-import e depois POST import", async () => {
+  const calls: Array<{ url: string; method: string }> = [];
   const origFetch = globalThis.fetch;
-  globalThis.fetch = ((url: string) => {
-    capturedUrl = url;
-    return Promise.resolve(makeResp({ count: 1 }));
-  }) as any;
+  globalThis.fetch = ((url: string, opts?: FetchInit) => {
+    calls.push({ url, method: opts?.method ?? "GET" });
+    if (url.includes("/auto-import")) {
+      return Promise.resolve(makeResp({ found: true, accessToken: "tok", machineId: "m1" }));
+    }
+    return Promise.resolve(makeResp({ success: true, connection: { id: "c1", email: "x@y.z" } }));
+  }) as unknown as typeof globalThis.fetch;
 
   const out = await captureStdout(async () => {
     const { runOAuthStart } = await import("../../bin/cli/commands/oauth.mjs");
-    await runOAuthStart({ provider: "zed", importFromSystem: true }, makeCmd() as any);
+    await runOAuthStart({ provider: "cursor", importFromSystem: true }, makeCmd() as any);
   });
 
   globalThis.fetch = origFetch;
-  assert.ok(capturedUrl.includes("/api/oauth/zed/auto-import"));
-  assert.ok(out.includes("1"));
+  assert.equal(calls[0].url.includes("/api/oauth/cursor/auto-import"), true);
+  assert.equal(calls[0].method, "GET");
+  assert.equal(calls[1].url.includes("/api/oauth/cursor/import"), true);
+  assert.equal(calls[1].method, "POST");
+  assert.ok(out.includes("x@y.z"));
+});
+
+// The server registry has no `claude-code` id, no `copilot` id and no `gemini`
+// OAuth provider (src/shared/constants/providers/oauth.ts). The CLI table must
+// not advertise ids the server would reject with "Unknown provider".
+test("PROVIDERS_WITH_OAUTH usa apenas ids do registro do servidor", async () => {
+  const mod = await import("../../bin/cli/commands/oauth.mjs");
+  const providers = mod.PROVIDERS_WITH_OAUTH as OAuthProviderDef[];
+  const ids = providers.map((p) => p.id);
+  for (const stale of ["claude-code", "copilot", "gemini"]) {
+    assert.ok(!ids.includes(stale), `stale provider id still present: ${stale}`);
+  }
+  assert.ok(ids.includes("claude"));
+  assert.ok(ids.includes("github"));
+  assert.ok(ids.includes("codex"));
+  // Flow names must be the server's flowType vocabulary, not invented labels.
+  const allowed = new Set([
+    "authorization_code",
+    "authorization_code_pkce",
+    "pkce_callback",
+    "device_code",
+    "import_token",
+    "import",
+    "keychain_import",
+  ]);
+  for (const p of providers) {
+    assert.ok(allowed.has(p.flow), `unexpected flow "${p.flow}" for ${p.id}`);
+  }
+  // claude is PKCE (src/lib/oauth/providers/claude.ts:81), never a device flow.
+  assert.equal(providers.find((p) => p.id === "claude")?.flow, "authorization_code_pkce");
 });
 
 test("providers lista provedores OAuth conhecidos", async () => {

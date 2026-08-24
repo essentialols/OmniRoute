@@ -653,10 +653,16 @@
     },
     "start": {
       "description": "Start OAuth authorization flow for a provider",
-      "provider": "Provider ID (gemini, copilot, cursor, …)",
-      "no_browser": "Print URL only — do not open browser",
-      "import_system": "Auto-import credentials from local system config",
-      "social": "Social login provider (google|github) — required for kiro",
+      "provider": "Provider ID (claude, codex, github, cursor, …). Run: omniroute oauth providers",
+      "no_browser": "Print URL only, do not open a browser",
+      "import_system": "Auto-import credentials from local system config (cursor, kiro)",
+      "token": "Raw token to import (import_token and import flows)",
+      "code": "Authorization code, skips the interactive paste prompt",
+      "redirect_uri": "Redirect URI for the authorize step (default: http://localhost:8080/callback)",
+      "connection_id": "Update this existing connection instead of creating one",
+      "machine_id": "Machine ID accompanying the token (cursor import)",
+      "start_url": "AWS IAM Identity Center start URL (kiro, amazon-q)",
+      "region": "AWS region for the device flow (kiro, amazon-q; default: us-east-1)",
       "timeout": "Timeout waiting for authorization in ms (default: 300000)"
     },
     "status": {

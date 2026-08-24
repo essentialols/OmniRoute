@@ -98,6 +98,13 @@ interface ProviderConnectionView {
   // resilience-settings defaults." Read by getProviderCredentialsWithQuotaPreflight
   // to decide whether to invoke the upstream usage fetcher.
   quotaWindowThresholds: Record<string, number> | null;
+  // #6148 — set by decryptConnectionFields (src/lib/db/encryption.ts:254) when a
+  // stored credential is still `enc:v1:…` but no longer decrypts. The row reaches
+  // this view with apiKey/accessToken already collapsed to null, so without
+  // carrying the flag the selection path cannot tell "no credential configured"
+  // apart from "credential present but undecryptable" and happily selects a
+  // connection that can only ever produce an empty-Bearer 401.
+  credentialDecryptFailed: boolean;
 }
 
 interface RecoverableConnectionState {
@@ -194,6 +201,11 @@ function toProviderConnection(value: unknown): ProviderConnectionView {
     backoffLevel: toNumber(row.backoffLevel, 0),
     maxConcurrent: toNullableNumber(row.maxConcurrent),
     quotaWindowThresholds,
+    // #6148: preserve the undecryptable-credential marker. Dropping it here was
+    // the actual defect. getProviderConnections() already ran the row through
+    // decryptConnectionFields, so this is the ONLY place the signal can survive
+    // into the chat/auth selection path.
+    credentialDecryptFailed: row.credentialDecryptFailed === true,
   };
 }
 
@@ -1226,9 +1238,19 @@ export async function getProviderCredentials(
 
     let modelLockedCount = 0;
     let familyLockedCount = 0;
+    let undecryptableCount = 0;
     // Filter out unavailable accounts and excluded connection
     const availableConnections = connections.filter((c) => {
       if (excludedConnectionIds.has(c.id)) return false;
+      // #6148: a connection whose stored credential no longer decrypts is
+      // unusable no matter what, so it is filtered even under
+      // allowSuppressedConnections (a combo live test on an empty Bearer only
+      // produces a misleading 401). The credential is null here, never a value,
+      // so this can never suppress a working account.
+      if (c.credentialDecryptFailed) {
+        undecryptableCount += 1;
+        return false;
+      }
       if (requestedModel && isModelExcludedByConnection(requestedModel, c.providerSpecificData)) {
         return false;
       }
@@ -1256,6 +1278,15 @@ export async function getProviderCredentials(
       "AUTH",
       `${provider} | available: ${availableConnections.length}/${connections.length}`
     );
+    if (undecryptableCount > 0) {
+      // #6148: loud, because the cause is operational (STORAGE_ENCRYPTION_KEY
+      // changed/unset, or a credential written with the enc:v1: prefix but never
+      // actually encrypted) and the symptom downstream is an opaque 401.
+      log.warn(
+        "AUTH",
+        `${provider} | ${undecryptableCount} connection(s) skipped: stored credential cannot be decrypted (STORAGE_ENCRYPTION_KEY changed or unset). Re-enter the credential for those connections.`
+      );
+    }
     if (provider === "antigravity") {
       log.info(
         "AUTH",
