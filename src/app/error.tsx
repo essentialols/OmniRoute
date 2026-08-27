@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
+import { SentryErrorReporter } from "@/shared/components/SentryErrorReporter";
 
 /**
  * Server Error Page — P-1
@@ -24,6 +25,7 @@ export default function Error({ error, reset }: ErrorProps) {
       role="alert"
       aria-live="assertive"
     >
+      <SentryErrorReporter boundary="app-error" error={error} />
       <div className="text-[64px] mb-4" aria-hidden="true">
         🔧
       </div>

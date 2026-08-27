@@ -262,6 +262,8 @@ export async function warmAdaptiveVirtualLanesIntoRuntime(): Promise<void> {
 
 export async function registerNodejs(): Promise<void> {
   markServerStarting();
+  const { initSentry } = await import("@/lib/monitoring/sentryServer");
+  initSentry();
 
   // Rename the process title so OmniRoute is identifiable in ps/htop instead
   // of the generic "next-server" standalone server name.
