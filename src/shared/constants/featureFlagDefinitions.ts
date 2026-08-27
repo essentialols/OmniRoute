@@ -387,6 +387,18 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     warningLevel: "info",
   },
   {
+    key: "MODELS_CATALOG_NO_THINK_VARIANTS",
+    label: "Models Catalog no-think Variants",
+    description:
+      "Advertise synthetic 'no-think/<provider>/<model>' ids in /v1/models for thinking-capable Claude models. These exist for clients that hardcode a thinking block and expose no way to disable it, because the alias overrides the request body. Disable if your clients set thinking:{type:'disabled'} (or omit reasoning_effort) themselves, which the gateway already honors, making the variants redundant catalog noise. Disabling only hides them from the catalog; an explicitly requested no-think/ id still routes.",
+    descriptionI18nKey: "featureFlagModelsCatalogNoThinkVariantsDescription",
+    category: "runtime",
+    defaultValue: "true",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "info",
+  },
+  {
     key: "ARENA_ELO_SYNC_ENABLED",
     label: "Arena ELO Sync",
     description: "Enable periodic Arena AI leaderboard ELO sync for model intelligence rankings.",

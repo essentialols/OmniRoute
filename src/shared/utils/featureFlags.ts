@@ -96,6 +96,15 @@ export function getModelsCatalogPrefixMode(): ModelsCatalogPrefixMode {
   return "dual";
 }
 
+/**
+ * Whether `/v1/models` advertises the synthetic `no-think/<provider>/<model>` variants.
+ * Off means catalog-only suppression: an explicitly requested `no-think/` id still routes,
+ * since `applyNoThinkingAlias()` runs on the request path independently of the catalog.
+ */
+export function areNoThinkVariantsEnabled(): boolean {
+  return isFeatureFlagEnabled("MODELS_CATALOG_NO_THINK_VARIANTS");
+}
+
 export function isArenaEloSyncEnabled(): boolean {
   return isFeatureFlagEnabled("ARENA_ELO_SYNC_ENABLED");
 }

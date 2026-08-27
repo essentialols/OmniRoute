@@ -305,6 +305,54 @@ export function sanitizePII(
  * so capture redaction stays consistent with the proxy's detectors, but always
  * runs in redact mode and can never block/mutate live traffic.
  */
+const JSON_WS = new Set([" ", "\t", "\n", "\r"]);
+
+const JSON_NUMBER_CHAR = /[0-9.eE+-]/;
+const JSON_NUMBER = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
+/**
+ * When `text[start,end)` falls inside a bare (unquoted) JSON number, return the
+ * span of that whole numeric literal. Otherwise return null.
+ *
+ * Capture bodies are serialized JSON, and the numeric PII patterns (phone_us in
+ * particular) happily match bare values such as `"created_at":1786952404`.
+ * Substituting an unquoted `[PHONE_REDACTED]` there produces a file that no
+ * longer parses, which silently broke every consumer of the codex captures.
+ * Callers replace the FULL literal with a quoted marker so the document stays
+ * valid: matching only part of it (the integer half of `1786952404.5`, say)
+ * would leave a stray `.5` behind and corrupt the JSON just the same.
+ *
+ * Matches inside a string literal are unaffected, because the surrounding
+ * characters there fail the value-position test below.
+ */
+function bareJsonNumberSpan(text: string, start: number, end: number): [number, number] | null {
+  let s = start;
+  while (s > 0 && JSON_NUMBER_CHAR.test(text[s - 1])) s--;
+  let e = end;
+  while (e < text.length && JSON_NUMBER_CHAR.test(text[e])) e++;
+  if (!JSON_NUMBER.test(text.slice(s, e))) return null;
+
+  let i = s - 1;
+  while (i >= 0 && JSON_WS.has(text[i])) i--;
+  if (i < 0) return null;
+  const before = text[i];
+  if (before === ":") {
+    // Only a real key/value separator counts: `"key": <number>`.
+    let k = i - 1;
+    while (k >= 0 && JSON_WS.has(text[k])) k--;
+    if (k < 0 || text[k] !== '"') return null;
+  } else if (before !== "[" && before !== ",") {
+    return null;
+  }
+
+  let j = e;
+  while (j < text.length && JSON_WS.has(text[j])) j++;
+  if (j >= text.length) return null;
+  const after = text[j];
+  if (after !== "," && after !== "}" && after !== "]") return null;
+  return [s, e];
+}
+
 export function redactPIIForCapture(text: string): string {
   if (!text || typeof text !== "string") return text;
 
@@ -335,7 +383,12 @@ export function redactPIIForCapture(text: string): string {
         continue;
       }
 
-      ranges.push({ start, end, replacement: pattern.replacement });
+      const bare = bareJsonNumberSpan(text, start, end);
+      if (bare) {
+        ranges.push({ start: bare[0], end: bare[1], replacement: `"${pattern.replacement}"` });
+      } else {
+        ranges.push({ start, end, replacement: pattern.replacement });
+      }
       if (!pattern.regex.global) break;
     }
   }
