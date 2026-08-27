@@ -279,9 +279,17 @@ export function sanitizePII(
       }
     }
 
-    for (const range of mergedRanges) {
-      sanitized = sanitized.slice(0, range.start) + range.replacement + sanitized.slice(range.end);
+    // mergedRanges is descending and non-overlapping; emit left-to-right in a
+    // single pass. Splicing per range is O(ranges x length), the same hot spot
+    // fixed in redactPIIForCapture.
+    const parts: string[] = [];
+    let cursor = 0;
+    for (let i = mergedRanges.length - 1; i >= 0; i--) {
+      parts.push(text.slice(cursor, mergedRanges[i].start), mergedRanges[i].replacement);
+      cursor = mergedRanges[i].end;
     }
+    parts.push(text.slice(cursor));
+    sanitized = parts.join("");
   }
 
   return {
@@ -395,17 +403,27 @@ export function redactPIIForCapture(text: string): string {
 
   if (ranges.length === 0) return text;
 
-  // Apply right-to-left so replacements never shift the offsets of pending
-  // ranges; skip any range that overlaps one already applied to its right.
+  // Select right-to-left so a range overlapping one already kept to its right is
+  // dropped, then emit left-to-right in a single pass. Splicing the whole string
+  // per range is O(matches x length): a 1.7MB body with thousands of matches
+  // spent ~1.8s here, versus ~79ms for the regex scans themselves.
   ranges.sort((a, b) => b.start - a.start);
-  let out = text;
+  const kept: Range[] = [];
   let lastStart = Number.POSITIVE_INFINITY;
   for (const r of ranges) {
     if (r.end > lastStart) continue;
-    out = out.slice(0, r.start) + r.replacement + out.slice(r.end);
+    kept.push(r);
     lastStart = r.start;
   }
-  return out;
+
+  const parts: string[] = [];
+  let cursor = 0;
+  for (let i = kept.length - 1; i >= 0; i--) {
+    parts.push(text.slice(cursor, kept[i].start), kept[i].replacement);
+    cursor = kept[i].end;
+  }
+  parts.push(text.slice(cursor));
+  return parts.join("");
 }
 
 /**
