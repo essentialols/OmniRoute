@@ -1,3 +1,9 @@
+---
+title: "Local Turn Recovery"
+version: 3.8.47
+lastUpdated: 2026-08-13
+---
+
 # Local turn recovery
 
 Detects and repairs "dead turns" from local model providers: responses that announce an action
