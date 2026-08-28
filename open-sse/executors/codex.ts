@@ -227,19 +227,6 @@ export function stripStoredItemReferences(body: Record<string, unknown>): void {
       return false;
     }
 
-    // Reasoning blobs (encrypted_content) are unusable with store=false since
-    // previous_response_id is deleted — strip them to avoid wasting context
-    // tokens (O(n^2) growth across agentic turns).
-    if (
-      item &&
-      typeof item === "object" &&
-      !Array.isArray(item) &&
-      (item as Record<string, unknown>).type === "reasoning"
-    ) {
-      strippedCount++;
-      return false;
-    }
-
     // Object items with server-generated IDs: strip the id field but keep the item.
     // e.g. { id: "rs_...", type: "reasoning", summary: [...] } → keep content, remove id
     // e.g. { id: "fc_...", type: "function_call", ... } → keep content, remove id
