@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { AsyncLocalStorage } from "node:async_hooks";
 import { PROVIDERS, OAUTH_ENDPOINTS } from "../config/constants.ts";
+import { getRegistryEntry } from "../config/providerRegistry.ts";
+
 import { getGitHubCopilotRefreshHeaders } from "../config/providerHeaderProfiles.ts";
 import { pbkdf2Sync } from "node:crypto";
 import { runWithProxyContext } from "../utils/proxyFetch.ts";
@@ -47,6 +49,11 @@ export const REFRESH_LEAD_MS: Record<string, number> = {
   antigravity: 15 * 60 * 1000,
   agy: 15 * 60 * 1000, // same Google backend as antigravity (non-rotating refresh tokens)
 };
+
+/** Provider config lookup that also accepts a provider alias (e.g. `antigravity` -> `agy`). */
+function resolveProviderConfig(provider) {
+  return PROVIDERS[provider] || getRegistryEntry(provider) || null;
+}
 
 /**
  * Get the proactive refresh lead time (ms) for a given provider.
@@ -366,7 +373,7 @@ export async function refreshAccessToken(
   log,
   proxyConfig: unknown = null
 ) {
-  const config = PROVIDERS[provider];
+  const config = resolveProviderConfig(provider);
 
   const refreshEndpoint = config?.refreshUrl || config?.tokenUrl;
   if (!config || !refreshEndpoint) {
@@ -1635,8 +1642,8 @@ async function _getAccessTokenInternal(provider, credentials, log, proxyConfig: 
     case "agy":
       return await refreshGoogleToken(
         credentials.refreshToken,
-        PROVIDERS[provider].clientId,
-        PROVIDERS[provider].clientSecret,
+        resolveProviderConfig(provider).clientId,
+        resolveProviderConfig(provider).clientSecret,
         log,
         proxyConfig
       );
@@ -1726,7 +1733,7 @@ export function supportsTokenRefresh(provider) {
     "codebuddy-cn",
   ]);
   if (explicitlySupported.has(provider)) return true;
-  const config = PROVIDERS[provider];
+  const config = resolveProviderConfig(provider);
   return !!(config?.refreshUrl || config?.tokenUrl);
 }
 
@@ -2002,7 +2009,7 @@ export const refreshTokenByProvider = getAccessToken;
  * Format credentials for provider
  */
 export function formatProviderCredentials(provider, credentials, log) {
-  const config = PROVIDERS[provider];
+  const config = resolveProviderConfig(provider);
   if (!config) {
     log?.warn?.("TOKEN_REFRESH", `No configuration found for provider: ${provider}`);
     return null;

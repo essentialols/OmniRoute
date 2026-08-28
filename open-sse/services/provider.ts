@@ -242,7 +242,7 @@ export function getProviderConfig(provider, providerSpecificData = null) {
       baseUrl: ANTHROPIC_COMPATIBLE_DEFAULTS.baseUrl,
     };
   }
-  return PROVIDERS[provider] || PROVIDERS.openai;
+  return PROVIDERS[provider] || getRegistryEntry(provider) || PROVIDERS.openai;
 }
 
 // Get number of fallback URLs for provider (for retry logic)

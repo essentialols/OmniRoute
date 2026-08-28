@@ -10,16 +10,16 @@ import {
 } from "../../src/lib/oauth/constants/oauth.ts";
 import { supportsTokenRefresh, REFRESH_LEAD_MS } from "../../open-sse/services/tokenRefresh.ts";
 import {
-  AGY_PUBLIC_MODELS,
-  isUserCallableAgyModelId,
-  getClientVisibleAgyModelName,
-} from "../../open-sse/config/agyModels.ts";
+  ANTIGRAVITY_PUBLIC_MODELS,
+  isUserCallableAntigravityModelId,
+} from "../../open-sse/config/antigravityModelAliases.ts";
 
 test("agy is registered as an OAuth provider in the UI catalog", () => {
   const agy = AI_PROVIDERS.agy;
   assert.ok(agy, "AI_PROVIDERS.agy must exist");
   assert.equal(agy.id, "agy");
-  assert.equal(agy.name, "Antigravity CLI");
+  assert.equal(agy.name, "Antigravity");
+  assert.equal(agy.alias, "antigravity", "legacy id must survive as the routing alias");
   assert.equal(agy.riskNoticeVariant, "oauth");
   assert.equal(agy.subscriptionRisk, true);
 });
@@ -38,18 +38,22 @@ test("agy registry entry reuses the antigravity backend (no duplicate executor/f
   assert.equal(agy.passthroughModels, true);
 });
 
-test("agy reuses the identical antigravity Google OAuth credentials (no new embedded secret)", () => {
-  // The agy client_id was verified byte-for-byte identical to antigravity's.
-  assert.equal(LEGACY_PROVIDERS.agy.clientId, LEGACY_PROVIDERS.antigravity.clientId);
-  assert.equal(LEGACY_PROVIDERS.agy.clientSecret, LEGACY_PROVIDERS.antigravity.clientSecret);
-  assert.equal(AGY_CONFIG.clientId, LEGACY_PROVIDERS.antigravity.clientId);
+test("agy carries the merged Antigravity Google OAuth credentials", () => {
+  // `antigravity` was merged into `agy`; its OAuth client is now the only one.
+  assert.ok(LEGACY_PROVIDERS.agy.clientId);
+  assert.ok(LEGACY_PROVIDERS.agy.clientSecret);
+  assert.equal(AGY_CONFIG.clientId, LEGACY_PROVIDERS.agy.clientId);
   assert.equal(OAUTH_PROVIDER_IDS.AGY, "agy");
+  assert.equal(LEGACY_PROVIDERS.antigravity, undefined, "duplicate entry must be gone");
 });
 
-test("agy ships its own catalog including the Claude models antigravity omits", () => {
+test("agy ships the merged catalog (union of both former providers)", () => {
   const ids = REGISTRY.agy.models.map((m) => m.id);
   assert.ok(ids.includes("claude-opus-4-6-thinking"), "must expose Claude Opus 4.6 Thinking");
   assert.ok(ids.includes("claude-sonnet-4-6"), "must expose Claude Sonnet 4.6");
+  // Inherited from the former `antigravity` catalog by the merge.
+  assert.ok(ids.includes("claude-sonnet-5"), "must inherit Claude Sonnet 5");
+  assert.ok(ids.includes("gemini-3-pro-preview"), "must inherit Gemini 3 Pro Preview");
   assert.ok(ids.includes("gemini-3.5-flash-low"), "must expose clean Flash Low tier");
   assert.ok(ids.includes("gemini-3.5-flash-medium"), "must expose clean Flash Medium tier");
   assert.ok(ids.includes("gemini-3.5-flash-high"), "must expose clean Flash High tier");
@@ -59,18 +63,13 @@ test("agy ships its own catalog including the Claude models antigravity omits", 
   // Tab-completion models are not chat-callable and must be excluded.
   assert.ok(!ids.includes("tab_flash_lite_preview"));
   assert.ok(!ids.includes("tab_jump_flash_lite_preview"));
-  assert.equal(ids.length, AGY_PUBLIC_MODELS.length);
+  assert.equal(ids.length, ANTIGRAVITY_PUBLIC_MODELS.length);
 });
 
-test("agy model helpers resolve catalog ids and display names", () => {
-  assert.equal(isUserCallableAgyModelId("claude-opus-4-6-thinking"), true);
-  assert.equal(isUserCallableAgyModelId("tab_flash_lite_preview"), false);
-  assert.equal(isUserCallableAgyModelId(""), false);
-  assert.equal(
-    getClientVisibleAgyModelName("claude-opus-4-6-thinking"),
-    "Claude Opus 4.6 (Thinking)"
-  );
-  assert.equal(getClientVisibleAgyModelName("unknown-model", "Fallback"), "Fallback");
+test("agy model helpers resolve catalog ids", () => {
+  assert.equal(isUserCallableAntigravityModelId("claude-opus-4-6-thinking"), true);
+  assert.equal(isUserCallableAntigravityModelId("tab_flash_lite_preview"), false);
+  assert.equal(isUserCallableAntigravityModelId(""), false);
 });
 
 test("agy token refresh is wired on the Google (non-rotating) refresh path", () => {

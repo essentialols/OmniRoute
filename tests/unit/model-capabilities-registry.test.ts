@@ -67,7 +67,7 @@ test("canonical model capability resolver lets exact synced metadata override gl
         limit_output: 12345,
       }),
     },
-    antigravity: {
+    agy: {
       // Since #3229, ANTIGRAVITY_MODEL_ALIASES maps both "gemini-3.1-pro-high" and
       // "gemini-3.1-pro-low" → "gemini-3.1-pro", so the capability resolver looks
       // synced metadata up under the canonical "gemini-3.1-pro" key. Save it there.
@@ -92,9 +92,7 @@ test("canonical model capability resolver lets exact synced metadata override gl
   assert.equal(modelCapabilities.getModelContextLimit("openai", "gpt-4o-2024-11-20"), 256000);
   assert.equal(modelCapabilities.capMaxOutputTokens("openai/gpt-4o-2024-11-20", 999999), 12345);
 
-  const geminiHigh = modelCapabilities.getResolvedModelCapabilities(
-    "antigravity/gemini-3.1-pro-high"
-  );
+  const geminiHigh = modelCapabilities.getResolvedModelCapabilities("agy/gemini-3.1-pro-high");
   assert.equal(geminiHigh.toolCalling, false);
   assert.equal(geminiHigh.reasoning, false);
   assert.equal(geminiHigh.supportsThinking, false);

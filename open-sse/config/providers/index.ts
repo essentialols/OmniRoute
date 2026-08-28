@@ -70,7 +70,6 @@ import { cozeProvider } from "./registry/coze/index.ts";
 import { ai21Provider } from "./registry/ai21/index.ts";
 import { publicaiProvider } from "./registry/publicai/index.ts";
 import { featherless_aiProvider } from "./registry/featherless-ai/index.ts";
-import { antigravityProvider } from "./registry/antigravity/index.ts";
 import { openaiProvider } from "./registry/openai/index.ts";
 import { snowflakeProvider } from "./registry/snowflake/index.ts";
 import { huggingfaceProvider } from "./registry/huggingface/index.ts";
@@ -257,7 +256,6 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   ai21: ai21Provider,
   publicai: publicaiProvider,
   "featherless-ai": featherless_aiProvider,
-  antigravity: antigravityProvider,
   openai: openaiProvider,
   snowflake: snowflakeProvider,
   huggingface: huggingfaceProvider,

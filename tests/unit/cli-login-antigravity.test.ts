@@ -10,10 +10,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  buildAntigravityAuthRequest,
-  runAntigravityLogin,
-} from "../../bin/cli/commands/login.mjs";
+import { buildAntigravityAuthRequest, runAntigravityLogin } from "../../bin/cli/commands/login.mjs";
 import { decodeCredentialBlob } from "../../src/lib/oauth/credentialBlob.ts";
 
 test("buildAntigravityAuthRequest: loopback redirect on 127.0.0.1 + no PKCE", async () => {
@@ -57,7 +54,8 @@ test("runAntigravityLogin: validates state, exchanges code, prints a decodable b
   assert.equal(exchangedRedirect, "http://127.0.0.1:54321/callback");
 
   const decoded = decodeCredentialBlob(blob);
-  assert.equal(decoded.provider, "antigravity");
+  // `omniroute login antigravity` now mints credentials under the canonical `agy` id.
+  assert.equal(decoded.provider, "agy");
   assert.equal(decoded.tokens.access_token, "ya29.a");
   assert.equal(decoded.tokens.refresh_token, "1//r");
 });

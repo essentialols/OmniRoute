@@ -5,6 +5,7 @@ import {
   isOAuthInvalidToken,
 } from "./accountFallback.ts";
 import { getProviderCategory, getRegistryEntry } from "../config/providerRegistry.ts";
+import { isAntigravityFamilyProvider } from "../../src/shared/constants/providers/antigravityFamily.ts";
 
 // Terminal stop signals where an empty content payload is still a legitimate,
 // successful completion (truncated at the token limit, or a tool-call turn) —
@@ -179,7 +180,7 @@ export function classifyProviderError(
     // fixable 403 (which previously required a full OAuth reconnect). (antigravity-403)
     const p = (provider || "").toLowerCase();
     const isCloudCodeProvider =
-      p === "antigravity" ||
+      isAntigravityFamilyProvider(p) ||
       p === "gemini-cli" ||
       p.includes("cloudcode") ||
       p.includes("cloud-code");

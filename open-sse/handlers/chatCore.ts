@@ -194,6 +194,7 @@ import { saveRequestUsage, trackPendingRequest, appendRequestLog } from "@/lib/u
 import { finalizePendingScope, updatePendingScope } from "@/lib/usage/pendingRequestScope";
 import { recordCost } from "@/domain/costRules";
 import { calculateCost } from "@/lib/usage/costCalculator";
+import { isAntigravityFamilyProvider } from "../../src/shared/constants/providers/antigravityFamily.ts";
 import {
   buildClaudePassthroughToolNameMap,
   restoreClaudePassthroughToolNames,
@@ -3451,7 +3452,7 @@ export async function handleChatCore({
     console.log(`${COLORS.red}[ERROR] ${errMsg}${COLORS.reset}`);
 
     // Log Antigravity retry time if available
-    if (retryAfterMs && provider === "antigravity") {
+    if (retryAfterMs && isAntigravityFamilyProvider(provider)) {
       const retrySeconds = Math.ceil(retryAfterMs / 1000);
       log?.debug?.("RETRY", `Antigravity quota reset in ${retrySeconds}s (${retryAfterMs}ms)`);
     }

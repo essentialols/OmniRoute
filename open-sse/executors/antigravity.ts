@@ -417,8 +417,9 @@ async function cleanModelName(model: string, modelIdOverride?: string): Promise<
       // to the static alias resolution below (never return undefined here).
       if (typeof raw === "string" && raw) {
         // Strip the "antigravity/" prefix if present; use the raw model ID otherwise.
-        const PREFIX = "antigravity/";
-        clean = raw.startsWith(PREFIX) ? raw.slice(PREFIX.length) : raw;
+        const PREFIXES = ["agy/", "antigravity/"];
+        const matched = PREFIXES.find((prefix) => raw.startsWith(prefix));
+        clean = matched ? raw.slice(matched.length) : raw;
       }
     }
   } catch {
@@ -609,7 +610,7 @@ export const __test_stripTrailingAntigravityAssistantTurn = stripTrailingAntigra
 
 export class AntigravityExecutor extends BaseExecutor {
   constructor() {
-    super("antigravity", PROVIDERS.antigravity);
+    super("agy", PROVIDERS.agy);
   }
 
   buildUrl(model: string, _stream: boolean, urlIndex = 0): string {

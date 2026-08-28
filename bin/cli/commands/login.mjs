@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
  * if the remote VPS is firewalled from the user's machine.
  */
 
-const PROVIDER = "antigravity";
+const PROVIDER = "agy";
 
 /** Open the system browser; no-op if the optional `open` dependency is missing. */
 async function defaultOpenBrowser(url) {
@@ -54,7 +54,7 @@ function defaultStartServer(preferredPort) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(
         "<!doctype html><meta charset=utf-8><title>OmniRoute</title>" +
-          "<body style=\"font-family:system-ui;padding:2rem\">" +
+          '<body style="font-family:system-ui;padding:2rem">' +
           "<h2>✅ Authorization received</h2>" +
           "<p>Return to your terminal — you can close this tab.</p></body>"
       );
@@ -156,7 +156,7 @@ export async function runAntigravityLogin(opts = {}, deps = {}) {
   print(
     "\n" +
       "Antigravity authorized. Copy the line below and paste it into your remote\n" +
-      "OmniRoute dashboard: Providers → Antigravity → Connect → \"Paste credentials\".\n" +
+      'OmniRoute dashboard: Providers → Antigravity → Connect → "Paste credentials".\n' +
       "(This contains a refresh token — treat it like a password.)\n\n" +
       blob +
       "\n\n"

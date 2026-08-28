@@ -1,4 +1,4 @@
-const ANTIGRAVITY_PROVIDER_ID = "antigravity";
+import { isAntigravityFamilyProvider } from "../../src/shared/constants/providers/antigravityFamily.ts";
 
 export type AntigravityQuotaFamily = "gemini" | "claude" | "other";
 
@@ -42,7 +42,7 @@ export function getQuotaScopedModelForProvider(
   model: string | null | undefined
 ): string | null {
   if (!model) return null;
-  if (provider !== ANTIGRAVITY_PROVIDER_ID) return model;
+  if (!isAntigravityFamilyProvider(provider)) return model;
   const family = getAntigravityQuotaFamily(model);
   return family === "other" ? model : `family:${family}`;
 }
@@ -51,6 +51,6 @@ export function getQuotaScopeLabelForProvider(
   provider: string | null | undefined,
   model: string | null | undefined
 ): string {
-  if (provider !== ANTIGRAVITY_PROVIDER_ID) return "model";
+  if (!isAntigravityFamilyProvider(provider)) return "model";
   return getAntigravityQuotaFamily(model) === "other" ? "model" : "family";
 }

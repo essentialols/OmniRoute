@@ -19,7 +19,6 @@ import {
   isUserCallableAntigravityModelId,
   toClientAntigravityQuotaModelId,
 } from "../../config/antigravityModelAliases.ts";
-import { isUserCallableAgyModelId } from "../../config/agyModels.ts";
 import { getDbInstance } from "@/lib/db/core";
 import {
   applyAntigravityClientProfileHeaders,
@@ -56,10 +55,10 @@ const ANTIGRAVITY_CONFIG = {
   loadProjectApiUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
   tokenUrl: "https://oauth2.googleapis.com/token",
   get clientId() {
-    return PROVIDERS.antigravity.clientId;
+    return PROVIDERS.agy.clientId;
   },
   get clientSecret() {
-    return PROVIDERS.antigravity.clientSecret;
+    return PROVIDERS.agy.clientSecret;
   },
   get userAgent() {
     return antigravityUserAgent();
@@ -636,9 +635,7 @@ export async function getAntigravityUsage(
       if (
         !modelKey ||
         info.isInternal === true ||
-        !(provider === "agy"
-          ? isUserCallableAgyModelId(modelKey)
-          : isUserCallableAntigravityModelId(modelKey)) ||
+        !isUserCallableAntigravityModelId(modelKey) ||
         Object.keys(quotaInfo).length === 0
       ) {
         continue;
@@ -687,12 +684,7 @@ export async function getAntigravityUsage(
     // This keeps Provider Limits honest when Google adds a new Gemini tier before our catalog is
     // updated. Hidden/internal catalog entries above are still filtered by the public pass.
     for (const [modelKey, bucket] of userQuotaEntries) {
-      if (
-        quotas[modelKey] ||
-        !(provider === "agy"
-          ? isUserCallableAgyModelId(modelKey)
-          : isUserCallableAntigravityModelId(modelKey))
-      ) {
+      if (quotas[modelKey] || !isUserCallableAntigravityModelId(modelKey)) {
         continue;
       }
       const rawFraction = toNumber(bucket.remainingFraction, -1);

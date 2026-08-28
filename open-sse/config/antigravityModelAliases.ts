@@ -131,11 +131,12 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     name: "Gemini 2.5 Flash Thinking",
     contextLength: 1048576,
     maxOutputTokens: 65535,
+    supportsReasoning: true,
     toolCalling: true,
   },
   {
     id: "gemini-pro-agent",
-    name: "Gemini 3.1 Pro (High)",
+    name: "Gemini 3.1 Pro (Agent)",
     contextLength: 1048576,
     maxOutputTokens: 65535,
     supportsReasoning: true,

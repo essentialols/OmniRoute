@@ -119,11 +119,13 @@ test("parseFlowOperationResult: done with base64 video (documented shape)", () =
 
 test("parseFlowOperationResult: done with gcsUri/uri video", () => {
   assert.equal(
-    parseFlowOperationResult({ done: true, response: { videos: [{ gcsUri: "gs://b/v.mp4" }] } }).url,
+    parseFlowOperationResult({ done: true, response: { videos: [{ gcsUri: "gs://b/v.mp4" }] } })
+      .url,
     "gs://b/v.mp4"
   );
   assert.equal(
-    parseFlowOperationResult({ done: true, response: { videos: [{ uri: "https://x/v.mp4" }] } }).url,
+    parseFlowOperationResult({ done: true, response: { videos: [{ uri: "https://x/v.mp4" }] } })
+      .url,
     "https://x/v.mp4"
   );
 });
@@ -197,9 +199,10 @@ test("videoRegistry: parseVideoModel resolves googleflow/<model> and its alias",
   assert.equal(aliased.provider, "googleflow");
 });
 
-test("resolveVideoCredentialProvider: googleflow reuses antigravity OAuth, others unchanged", () => {
-  assert.equal(resolveVideoCredentialProvider("googleflow"), "antigravity");
-  assert.equal(GOOGLE_FLOW_CREDENTIAL_PROVIDER, "antigravity");
+test("resolveVideoCredentialProvider: googleflow reuses the agy OAuth, others unchanged", () => {
+  // `antigravity` was merged into `agy`; credentials now live under the canonical id.
+  assert.equal(resolveVideoCredentialProvider("googleflow"), "agy");
+  assert.equal(GOOGLE_FLOW_CREDENTIAL_PROVIDER, "agy");
   assert.equal(resolveVideoCredentialProvider("vertex"), "vertex");
   assert.equal(resolveVideoCredentialProvider("kie"), "kie");
 });

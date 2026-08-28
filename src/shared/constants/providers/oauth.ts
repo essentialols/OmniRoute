@@ -36,10 +36,13 @@ export const OAUTH_PROVIDERS = {
     deprecationReason:
       "Qwen OAuth free tier was discontinued on 2026-04-15. Use 'bailian-coding-plan', 'alibaba', 'alibaba-cn', or 'openrouter' provider with API key instead.",
   },
+  // `antigravity` was a second registration of this same backend, OAuth client and
+  // accounts. Merged into `agy`; the old id survives as the alias so stored connections
+  // and `antigravity/<model>` references keep resolving.
   agy: {
     id: "agy",
-    alias: "agy",
-    name: "Antigravity CLI",
+    alias: "antigravity",
+    name: "Antigravity",
     icon: "terminal",
     color: "#F59E0B",
     textIcon: "AGY",
@@ -80,15 +83,6 @@ export const OAUTH_PROVIDERS = {
     name: "Claude Code",
     icon: "smart_toy",
     color: "#D97757",
-    subscriptionRisk: true,
-    riskNoticeVariant: "oauth",
-  },
-  antigravity: {
-    id: "antigravity",
-    alias: undefined,
-    name: "Antigravity",
-    icon: "rocket_launch",
-    color: "#F59E0B",
     subscriptionRisk: true,
     riskNoticeVariant: "oauth",
   },

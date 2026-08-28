@@ -2,14 +2,14 @@ import type { RegistryEntry } from "../../shared.ts";
 import {
   buildAntigravityUrl,
   ANTIGRAVITY_BASE_URLS,
-  AGY_PUBLIC_MODELS,
+  ANTIGRAVITY_PUBLIC_MODELS,
   getAntigravityProviderHeaders,
   resolvePublicCred,
 } from "../../shared.ts";
 
 export const agyProvider: RegistryEntry = {
   id: "agy",
-  alias: "agy",
+  alias: "antigravity",
   format: "antigravity",
   executor: "antigravity",
   baseUrls: [...ANTIGRAVITY_BASE_URLS],
@@ -23,6 +23,6 @@ export const agyProvider: RegistryEntry = {
     clientSecretEnv: "ANTIGRAVITY_OAUTH_CLIENT_SECRET",
     clientSecretDefault: resolvePublicCred("antigravity_alt"),
   },
-  models: [...AGY_PUBLIC_MODELS],
+  models: [...ANTIGRAVITY_PUBLIC_MODELS],
   passthroughModels: true,
 };

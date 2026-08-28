@@ -133,6 +133,7 @@ import {
   waitForCooldownAwareRetry,
 } from "../services/cooldownAwareRetry";
 import { constrainConnectionsToQuota, resolveQuotaKeyScope } from "../../lib/quota/quotaKey";
+import { isAntigravityFamilyProvider } from "@/shared/constants/providers/antigravityFamily";
 
 registerCodexQuotaFetcher();
 
@@ -1441,7 +1442,7 @@ async function handleSingleModelChat(
       }
 
       const isAntigravityStreamReadinessFailure =
-        provider === "antigravity" &&
+        isAntigravityFamilyProvider(provider) &&
         (result.errorCode === "STREAM_READINESS_TIMEOUT" ||
           result.errorCode === "STREAM_EARLY_EOF" ||
           result.errorType === "stream_timeout" ||
@@ -1522,7 +1523,7 @@ async function handleSingleModelChat(
       }
 
       const isAntigravityPreResponseTimeout =
-        provider === "antigravity" &&
+        isAntigravityFamilyProvider(provider) &&
         result.status === HTTP_STATUS.GATEWAY_TIMEOUT &&
         (result.errorType === "upstream_timeout" ||
           result.errorCode === ANTIGRAVITY_PRE_RESPONSE_TIMEOUT_CODE);

@@ -16,13 +16,11 @@ import { getModelCapabilityOverride } from "@/lib/db/modelCapabilityOverrides";
 import { isVisionModelId } from "@/shared/constants/visionModels";
 
 const TOOL_CALLING_UNSUPPORTED_PATTERNS: string[] = [];
-const REASONING_UNSUPPORTED_PATTERNS = [
-  // Non-Claude antigravity models don't support thinking params (#1361)
-  "antigravity/gemini-",
-  "antigravity/gpt-oss-",
-  "antigravity/gemini-3",
-  "antigravity/tab_",
-];
+// Non-Claude antigravity models don't support thinking params (#1361). Listed under
+// both provider prefixes: `agy` is canonical, `antigravity` remains a routing alias.
+const REASONING_UNSUPPORTED_PATTERNS = ["gemini-", "gpt-oss-", "gemini-3", "tab_"].flatMap(
+  (suffix) => [`agy/${suffix}`, `antigravity/${suffix}`]
+);
 
 const MAX_TOKENS_UNSUPPORTED_PATTERNS = [
   "o1-preview",

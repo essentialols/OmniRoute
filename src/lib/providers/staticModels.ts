@@ -31,6 +31,7 @@ const STATIC_MODEL_PROVIDERS: Record<string, () => Array<{ id: string; name: str
     { id: "universal-3-pro", name: "Universal 3 Pro (Transcription)" },
     { id: "universal-2", name: "Universal 2 (Transcription)" },
   ],
+  agy: () => ANTIGRAVITY_PUBLIC_MODELS.map((model) => ({ ...model })),
   antigravity: () => ANTIGRAVITY_PUBLIC_MODELS.map((model) => ({ ...model })),
   claude: () => [
     { id: "claude-fable-5", name: "Claude Fable 5" },

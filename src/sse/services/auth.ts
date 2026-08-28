@@ -67,6 +67,7 @@ import { isNoAuthProviderBlockedBySettings } from "./noAuthProviderSettings";
 import { resolveAccountProxiesFromRegistry } from "./noAuthProxyResolution";
 import * as log from "../utils/logger";
 import { fisherYatesShuffle, getNextFromDeckSync } from "@/shared/utils/shuffleDeck";
+import { isAntigravityFamilyProvider } from "@/shared/constants/providers/antigravityFamily";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1239,7 +1240,7 @@ export async function getProviderCredentials(
         // Per-model lockout: if this specific model/family is locked on this connection, skip it
         if (requestedModel && isModelLocked(provider, c.id, requestedModel)) {
           if (
-            provider === "antigravity" &&
+            isAntigravityFamilyProvider(provider) &&
             getQuotaScopeLabelForProvider(provider, requestedModel) === "family"
           ) {
             familyLockedCount += 1;
@@ -2031,7 +2032,7 @@ export async function markAccountUnavailable(
 
       const quotaScope = getQuotaScopeLabelForProvider(provider, model);
       const antigravityFamilyInferredBaseCooldownMs =
-        provider === "antigravity" && quotaScope === "family" && status === 429
+        isAntigravityFamilyProvider(provider) && quotaScope === "family" && status === 429
           ? ANTIGRAVITY_FAMILY_INFERRED_BASE_COOLDOWN_MS
           : null;
       const lockout = recordModelLockoutFailure(

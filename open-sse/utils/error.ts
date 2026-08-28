@@ -3,6 +3,7 @@ import { unwrapClinepassEnvelope } from "./clinepassEnvelope.ts";
 import { getDefaultErrorMessage, getErrorInfo } from "../config/errorConfig.ts";
 import { normalizePayloadForLog } from "@/lib/logPayloads";
 import type { ModelCooldownErrorPayload } from "@/types";
+import { isAntigravityFamilyProvider } from "../../src/shared/constants/providers/antigravityFamily.ts";
 
 /**
  * Sanitize an error message to prevent stack trace exposure in API responses.
@@ -347,7 +348,7 @@ export async function parseUpstreamError(response: Response, provider: string | 
   }
 
   // Parse Antigravity-specific retry time from error message
-  if (provider === "antigravity" && response.status === 429) {
+  if (isAntigravityFamilyProvider(provider) && response.status === 429) {
     retryAfterMs = parseAntigravityRetryTime(messageStr);
   }
 

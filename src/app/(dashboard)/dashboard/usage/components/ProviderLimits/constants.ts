@@ -1,4 +1,5 @@
 export const PROVIDER_LABEL: Record<string, string> = {
+  agy: "Antigravity",
   antigravity: "Antigravity",
   github: "GitHub Copilot",
   kiro: "Kiro AI",
@@ -18,6 +19,7 @@ export const PROVIDER_LABEL: Record<string, string> = {
 };
 
 export const PROVIDER_ORDER: Record<string, number> = {
+  agy: 1,
   antigravity: 1,
   github: 3,
   codex: 4,

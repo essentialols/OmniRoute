@@ -1,4 +1,5 @@
 import { HTTP_STATUS } from "../../config/constants.ts";
+import { isAntigravityFamilyProvider } from "../../../src/shared/constants/providers/antigravityFamily.ts";
 
 /**
  * Whether a failed single-model attempt is a *self-inflicted* upstream timeout — i.e.
@@ -21,6 +22,6 @@ export function isSelfInflictedUpstreamTimeout(
   return (
     status === HTTP_STATUS.GATEWAY_TIMEOUT &&
     errorType === "upstream_timeout" &&
-    provider !== "antigravity"
+    !isAntigravityFamilyProvider(provider)
   );
 }

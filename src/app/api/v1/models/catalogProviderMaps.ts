@@ -5,7 +5,7 @@ import { AI_PROVIDERS } from "@/shared/constants/providers";
 // verbatim from ./catalog.ts. `FALLBACK_ALIAS_TO_PROVIDER` is also consumed directly by
 // the catalog host's `resolveCanonicalProviderId`, so it is exported alongside the builder.
 export const FALLBACK_ALIAS_TO_PROVIDER = {
-  ag: "antigravity",
+  ag: "agy",
   cc: "claude",
   cl: "cline",
   cu: "cursor",

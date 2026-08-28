@@ -145,7 +145,12 @@ function ensurePassthroughProviderIds(): Set<string> {
   try {
     const ids = new Set<string>();
     for (const entry of Object.values(REGISTRY)) {
-      if (entry.passthroughModels) ids.add(entry.id);
+      if (!entry.passthroughModels) continue;
+      ids.add(entry.id);
+      // Requests may arrive under a provider's alias (e.g. `antigravity/<model>` for `agy`).
+      // Missing it here makes a per-model quota 429 look like full provider exhaustion and
+      // wrongly skips the remaining same-provider fallbacks.
+      if (entry.alias) ids.add(entry.alias);
     }
     _passthroughProviderIds = ids;
   } catch {
