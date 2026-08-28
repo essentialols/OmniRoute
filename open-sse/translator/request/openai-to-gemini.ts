@@ -203,6 +203,7 @@ function openaiToGeminiBase(
     if (body.reasoning_effort) {
       const highBudget = capThinkingBudget(model, 32768);
       const budgetMap: Record<string, number> = {
+        none: 0,
         low: 1024,
         medium: getDefaultThinkingBudget(model) || 8192,
         high: highBudget,
@@ -719,6 +720,15 @@ export function openaiToAntigravityRequest(model, body, stream, credentials = nu
 
   if (isClaude) {
     cloudCodeRequest.generationConfig.maxOutputTokens = getAntigravityClaudeOutputTokens(body);
+    // Cloud Code honors Gemini thinkingConfig for Claude models, so default them to
+    // high-effort thinking. This only applies when the caller expressed no preference:
+    // an explicit reasoning_effort/thinking (including a 0 budget) already set it above.
+    if (!cloudCodeRequest.generationConfig.thinkingConfig) {
+      cloudCodeRequest.generationConfig.thinkingConfig = {
+        thinkingBudget: capThinkingBudget(model, 32768),
+        includeThoughts: true,
+      };
+    }
   }
 
   const envelope = wrapInCloudCodeEnvelope(model, cloudCodeRequest, credentials);
@@ -738,16 +748,6 @@ export function openaiToAntigravityRequest(model, body, stream, credentials = nu
     envelope.request?.generationConfig
   ) {
     delete envelope.request.generationConfig.maxOutputTokens;
-  }
-
-  // Claude models on Antigravity use their own native thinking — Gemini's thinkingConfig
-  // is not understood by the Cloud Code Claude endpoint and must be stripped.
-  // applyAntigravityGenerationDefaults (inside wrapInCloudCodeEnvelope) already bumped
-  // maxOutputTokens to thinkingBudget+1 before we get here, so the budget is preserved.
-  // Must run AFTER the hasThinking-derived maxOutputTokens decision above so the
-  // budget is accounted for before the field is removed.
-  if (isClaude && envelope.request?.generationConfig) {
-    delete envelope.request.generationConfig.thinkingConfig;
   }
 
   return envelope;

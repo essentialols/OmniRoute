@@ -909,7 +909,13 @@ test("OpenAI -> Antigravity maps Claude-family models to Gemini-compatible schem
   assert.deepEqual((result as any).enabledCreditTypes, ["GOOGLE_ONE_AI"]);
   assert.equal(result.request.systemInstruction.parts[0].text, ANTIGRAVITY_DEFAULT_SYSTEM);
   assert.equal(result.request.systemInstruction.parts[1].text, "Project rules");
-  assert.equal((result as any).request?.generationConfig.maxOutputTokens, undefined);
+  // Claude on Antigravity defaults to high-effort thinking, and a thinking request
+  // must carry maxOutputTokens above the budget, so it is no longer dropped here.
+  assert.deepEqual((result as any).request?.generationConfig.thinkingConfig, {
+    thinkingBudget: 32768,
+    includeThoughts: true,
+  });
+  assert.equal((result as any).request?.generationConfig.maxOutputTokens, 32769);
   assert.equal((result as any).request?.messages, undefined);
   assert.equal((result as any).request?.system, undefined);
   assert.equal((result as any).request?.max_tokens, undefined);
@@ -998,11 +1004,10 @@ test("OpenAI -> Antigravity Claude path sanitizes tool names for Gemini schema",
   assert.deepEqual(toolResultBlock.response, { result: { ok: true } });
 });
 
-test("OpenAI -> Antigravity Claude path applies output cap and strips thinkingConfig", () => {
-  // For Claude on Antigravity, applyAntigravityGenerationDefaults must bump
-  // maxOutputTokens to thinkingBudget+1 BEFORE the envelope strips thinkingConfig
-  // (because Claude on Cloud Code does not understand Gemini's thinkingConfig
-  // shape but still benefits from the larger output cap derived from it).
+test("OpenAI -> Antigravity Claude path applies output cap and preserves thinkingConfig", () => {
+  // Cloud Code does honor Gemini's thinkingConfig for Claude models, so it must
+  // survive the envelope. maxOutputTokens is bumped to thinkingBudget+1 because
+  // upstream rejects thinkingBudget >= maxOutputTokens with a 400.
   const result = openaiToAntigravityRequest(
     "claude-3-7-sonnet",
     {
@@ -1015,14 +1020,15 @@ test("OpenAI -> Antigravity Claude path applies output cap and strips thinkingCo
   );
 
   assert.equal((result as any).request?.generationConfig.maxOutputTokens, 32769);
-  // thinkingConfig must be stripped for Claude — Cloud Code Claude endpoint
-  // does not understand the Gemini-shape thinkingConfig field.
-  assert.equal((result as any).request?.generationConfig.thinkingConfig, undefined);
+  assert.deepEqual((result as any).request?.generationConfig.thinkingConfig, {
+    thinkingBudget: 32768,
+    includeThoughts: true,
+  });
   assert.equal((result as any).request?.max_tokens, undefined);
   assert.equal((result as any).request?.thinking, undefined);
 });
 
-test("OpenAI -> Antigravity Claude path preserves lower requested output and strips thinkingConfig", () => {
+test("OpenAI -> Antigravity Claude path preserves lower requested output and thinkingConfig", () => {
   const result = openaiToAntigravityRequest(
     "claude-3-7-sonnet",
     {
@@ -1035,7 +1041,10 @@ test("OpenAI -> Antigravity Claude path preserves lower requested output and str
   );
 
   assert.equal((result as any).request?.generationConfig.maxOutputTokens, 32769);
-  assert.equal((result as any).request?.generationConfig.thinkingConfig, undefined);
+  assert.deepEqual((result as any).request?.generationConfig.thinkingConfig, {
+    thinkingBudget: 32768,
+    includeThoughts: true,
+  });
   assert.equal((result as any).request?.max_tokens, undefined);
   assert.equal((result as any).request?.thinking, undefined);
 });

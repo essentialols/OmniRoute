@@ -1,6 +1,8 @@
 import { getModelSpec } from "../../src/shared/constants/modelSpecs.ts";
 
-const CLOUD_CODE_REASONING_UNSUPPORTED_PATTERNS = [/^claude-/i, /^gpt-oss-/i, /^tab_/i];
+// claude-* is deliberately absent: Cloud Code does honor generationConfig.thinkingConfig
+// for Claude models, so they fall through to the per-model supportsThinking check below.
+const CLOUD_CODE_REASONING_UNSUPPORTED_PATTERNS = [/^gpt-oss-/i, /^tab_/i];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);

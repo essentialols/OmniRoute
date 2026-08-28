@@ -78,15 +78,26 @@ test("Cap is applied even when no generationConfig is provided initially", () =>
   assert.equal(gc.maxOutputTokens, undefined);
 });
 
-test("Cap interacts safely with thinkingBudget bump: bump still wins when budget exceeds tokens, then the cap still clamps the bumped value", () => {
-  // thinkingBudget bumps maxOutputTokens to floor(budget)+1 when it exceeds
-  // the requested ceiling; if the bump itself overshoots the AG cap, the cap
-  // must still apply.
+test("Cap interacts safely with thinkingBudget bump: the cap never clamps below the budget it was bumped for", () => {
+  // thinkingBudget bumps maxOutputTokens to floor(budget)+1 when it exceeds the
+  // requested ceiling. Upstream rejects thinkingBudget >= maxOutputTokens with a
+  // 400, so the AG cap must not pull the bumped value back under the budget.
   const request: Record<string, unknown> = {
     generationConfig: {
       maxOutputTokens: 1000,
       thinkingConfig: { thinkingBudget: 20000 },
     },
+  };
+
+  applyAntigravityGenerationDefaults(request);
+
+  const gc = request.generationConfig as Record<string, unknown>;
+  assert.equal(gc.maxOutputTokens, 20001);
+});
+
+test("Cap still clamps when no thinking budget is in play", () => {
+  const request: Record<string, unknown> = {
+    generationConfig: { maxOutputTokens: 65536 },
   };
 
   applyAntigravityGenerationDefaults(request);

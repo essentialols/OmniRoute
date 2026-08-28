@@ -155,7 +155,7 @@ test("AntigravityExecutor.transformRequest normalizes model, project and content
   assert.equal(result.request.contents[1].role, "user");
 });
 
-test("AntigravityExecutor.transformRequest strips thinking config for Cloud Code models that do not support reasoning", async () => {
+test("AntigravityExecutor.transformRequest keeps thinkingConfig for Claude but strips root-level reasoning fields", async () => {
   const executor = new AntigravityExecutor();
   const body = {
     reasoning_effort: "high",
@@ -178,8 +178,13 @@ test("AntigravityExecutor.transformRequest strips thinking config for Cloud Code
   const generationConfig = result.request.generationConfig as {
     thinkingConfig?: { thinkingBudget?: number; includeThoughts?: boolean };
   };
+  // Root-level reasoning fields still break the Cloud Code schema (#1926), but the
+  // nested Gemini-native thinkingConfig is honored by the Claude endpoint.
   assert.equal(result.reasoning_effort, undefined);
-  assert.equal(generationConfig.thinkingConfig, undefined);
+  assert.deepEqual(generationConfig.thinkingConfig, {
+    thinkingBudget: 8192,
+    includeThoughts: true,
+  });
 });
 
 test("AntigravityExecutor.transformRequest preserves thinking config for supported Gemini models", async () => {

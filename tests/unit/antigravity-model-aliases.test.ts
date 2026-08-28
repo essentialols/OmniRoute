@@ -232,10 +232,10 @@ test("AntigravityExecutor.transformRequest sends Claude through Gemini-compatibl
   if (result instanceof Response) throw new Error("Unexpected Response from transformRequest");
   const request = result.request as any;
   assert.deepEqual(request.contents, [{ role: "user", parts: [{ text: "Hello" }] }]);
-  // Capped to MAX_ANTIGRAVITY_OUTPUT_TOKENS (16384) by the executor (#4636) to avoid
-  // the Antigravity Cloud Code 400 on maxOutputTokens > 16384, overriding the
-  // thinkingBudget+1 bump (which would otherwise be 32769).
-  assert.equal(request.generationConfig.maxOutputTokens, 16384);
+  // The thinkingBudget+1 bump survives the MAX_ANTIGRAVITY_OUTPUT_TOKENS cap: Cloud
+  // Code rejects thinkingBudget >= maxOutputTokens, so clamping back to 16384 with a
+  // 32768 budget is the combination that actually 400s.
+  assert.equal(request.generationConfig.maxOutputTokens, 32769);
   assert.equal(request.generationConfig.temperature, 0.5);
   assert.equal(request.generationConfig.topK, 40);
   assert.equal(request.generationConfig.topP, 1);
@@ -245,5 +245,8 @@ test("AntigravityExecutor.transformRequest sends Claude through Gemini-compatibl
   assert.equal(request.stream, undefined);
   assert.equal(request.temperature, undefined);
   assert.equal(request.thinking, undefined);
-  assert.equal(request.generationConfig.thinkingConfig, undefined);
+  assert.deepEqual(request.generationConfig.thinkingConfig, {
+    thinkingBudget: 32768,
+    includeThoughts: true,
+  });
 });

@@ -496,9 +496,14 @@ function applyAntigravityGenerationDefaults(request: Record<string, unknown>): v
   // (32K–65K) that trigger upstream 400 "Invalid Argument". Clamp silently
   // — the cap is provider-driven, not client-driven, and only matters when
   // the request would otherwise be rejected outright.
+  // Upstream rejects thinkingBudget >= maxOutputTokens with a 400, so the cap cannot
+  // clamp below the budget it was just bumped to satisfy.
+  const clampFloor =
+    Number.isFinite(thinkingBudget) && thinkingBudget > 0 ? Math.floor(thinkingBudget) + 1 : 0;
+  const cap = Math.max(MAX_ANTIGRAVITY_OUTPUT_TOKENS, clampFloor);
   const finalMax = Number(generationConfig.maxOutputTokens);
-  if (Number.isFinite(finalMax) && finalMax > MAX_ANTIGRAVITY_OUTPUT_TOKENS) {
-    generationConfig.maxOutputTokens = MAX_ANTIGRAVITY_OUTPUT_TOKENS;
+  if (Number.isFinite(finalMax) && finalMax > cap) {
+    generationConfig.maxOutputTokens = cap;
   }
 
   request.generationConfig = generationConfig;
