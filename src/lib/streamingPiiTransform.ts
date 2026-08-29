@@ -1,5 +1,5 @@
 import { createSseTextTransform, FieldCategory, getFieldCategory } from "./sseTextTransform";
-import { sanitizePII } from "./piiSanitizer";
+import { OPAQUE_ROUNDTRIP_KEYS, sanitizePII } from "./piiSanitizer";
 
 export interface PiiTransformOptions {
   windowSize?: number;
@@ -161,6 +161,7 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
       "refusal",
       "name",
       "event",
+      ...OPAQUE_ROUNDTRIP_KEYS,
     ];
 
     // 1. Claude format
