@@ -126,6 +126,21 @@ export const OPAQUE_ROUNDTRIP_KEYS = [
   "thoughtSignature",
 ];
 
+/**
+ * Anthropic `redacted_thinking` blocks carry the same opaque blob under the generic key
+ * `data`, so the skip has to be keyed on the containing block's type. Blanket-skipping
+ * every `data` string would disable redaction across unrelated payloads.
+ */
+export function isOpaqueRoundtripField(key: string, container: unknown): boolean {
+  if (OPAQUE_ROUNDTRIP_KEYS.includes(key)) return true;
+  return (
+    key === "data" &&
+    typeof container === "object" &&
+    container !== null &&
+    (container as { type?: unknown }).type === "redacted_thinking"
+  );
+}
+
 // ── Public API ──
 
 export interface SanitizeResult {
@@ -500,8 +515,8 @@ export function sanitizePIIResponse(response: any, forceEnabled?: boolean): any 
                 "type",
                 "index",
                 "stop_reason",
-                ...OPAQUE_ROUNDTRIP_KEYS,
-              ].includes(key)
+              ].includes(key) ||
+              isOpaqueRoundtripField(key, obj)
             ) {
               continue;
             }

@@ -1,4 +1,4 @@
-import { OPAQUE_ROUNDTRIP_KEYS } from "./piiSanitizer";
+import { isOpaqueRoundtripField, OPAQUE_ROUNDTRIP_KEYS } from "./piiSanitizer";
 
 export type FieldCategory = "content" | "reasoning" | "toolArgs" | "partialJson";
 
@@ -238,7 +238,7 @@ export function createSseTextTransform(
             const compositeKey = `${choiceIdx}_${toolIdx}`;
 
             for (const key of Object.keys(obj)) {
-              if (METADATA_KEYS.includes(key)) {
+              if (METADATA_KEYS.includes(key) || isOpaqueRoundtripField(key, obj)) {
                 continue;
               }
               if (typeof obj[key] === "string") {

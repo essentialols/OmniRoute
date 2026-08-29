@@ -111,3 +111,48 @@ test("streaming SSE transform leaves reasoning encrypted_content byte-exact", as
     "no redaction marker may be spliced into the ciphertext"
   );
 });
+
+// Anthropic redacted_thinking carries the same opaque blob under the generic key
+// `data`, so the skip is keyed on the containing block's type, not the key alone.
+const REDACTED_THINKING_DATA =
+  "EroBCoYBCkC+api_ZGVhZGJlZWZkZWFkYmVlZg+dGhpbmtpbmdfYmxvYl9wYXlsb2FkEgxyZWRhY3RlZA==";
+
+test("sanitizePIIResponse leaves redacted_thinking data byte-exact", () => {
+  assert.notEqual(
+    sanitizePII(REDACTED_THINKING_DATA, false, true).text,
+    REDACTED_THINKING_DATA,
+    "expected the raw text sanitizer to corrupt this blob"
+  );
+
+  const response = {
+    id: "msg_1",
+    content: [
+      { type: "redacted_thinking", data: REDACTED_THINKING_DATA },
+      { type: "text", data: "reach me at jane.doe@example.com" },
+    ],
+  };
+
+  const out = sanitizePIIResponse(response, true);
+
+  assert.equal(out.content[0].data, REDACTED_THINKING_DATA);
+  // Control: `data` is only skipped inside a redacted_thinking block, never generally.
+  assert.ok(
+    !out.content[1].data.includes("jane.doe@example.com"),
+    "a data field outside redacted_thinking must still be redacted"
+  );
+});
+
+test("streaming SSE transform leaves redacted_thinking data byte-exact", async () => {
+  const payload = {
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "redacted_thinking", data: REDACTED_THINKING_DATA },
+  };
+  const sse =
+    `event: content_block_start\ndata: ${JSON.stringify(payload)}\n\n` + `data: [DONE]\n\n`;
+
+  const out = await pumpThroughPiiTransform(sse);
+
+  assert.ok(out.includes(REDACTED_THINKING_DATA), "redacted_thinking data must survive intact");
+  assert.ok(!out.includes("[API_KEY_REDACTED]"), "no redaction marker may be spliced in");
+});
