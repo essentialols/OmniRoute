@@ -61,6 +61,10 @@ function imageUrlToText(value: unknown): string {
   return typeof record?.url === "string" ? record.url : "";
 }
 
+function isToolResultItem(record: JsonRecord): boolean {
+  return typeof record.type === "string" && record.type.endsWith("_call_output");
+}
+
 function sanitizeContentPart(part: unknown, role: string): unknown {
   const record = toRecord(part);
   if (!record) return part;
@@ -99,7 +103,14 @@ function sanitizeOutputContent(record: JsonRecord): JsonRecord {
   // Responses input. In that shape OpenAI validates `input[n].output[m].type`
   // against output content part types, so legacy Chat-style `image_url` parts
   // must be normalized here too, not only in message.content.
-  const role = record.type === "function_call_output" ? "user" : "assistant";
+  // Every `*_call_output` item is a tool RESULT: content fed back INTO the
+  // model, so its parts must stay input-side. Matching the exact string
+  // "function_call_output" let sibling types (notably
+  // "custom_tool_call_output", also "local_shell_call_output" and
+  // "computer_call_output") fall through to the assistant branch, which
+  // rewrote their image parts to `output_text` and drew a 400 from the
+  // Responses API: "Invalid value: 'output_text'" on input[n].output[m].
+  const role = isToolResultItem(record) ? "user" : "assistant";
   const output = record.output.map((part) => sanitizeContentPart(part, role));
   return { ...record, output };
 }
