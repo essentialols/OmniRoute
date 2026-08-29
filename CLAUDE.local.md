@@ -65,6 +65,11 @@ dist/.build/next/server/chunks/`. Incremental builds can leave STALE duplicate c
 - **Build is memory-heavy (OOM-prone on 32GB).** Check free RAM first; ensure any worktree lives
   under `.claude/worktrees/` (excluded from build scope) so `tsconfig`'s `**/*` glob does not
   balloon the build (incident 2026-06-25).
+- **Build memory preflight (measured 2026-08-29).** `npm run build` runs Turbopack, whose Rust heap
+  is NOT bounded by the script's `--max-old-space-size=8192`, and static gen forks
+  `experimental.cpus` workers (default `ncpu` minus 1, so 11 here; logs say "using 11 workers").
+  Check free RAM with `vm_stat` first; under roughly 12 GB free prefer
+  `OMNIROUTE_USE_TURBOPACK=0 npm run build` (webpack, much lower peak, a few minutes slower).
 
 ## 2. The golden reconcile command
 
