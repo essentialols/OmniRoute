@@ -1,9 +1,17 @@
 # OmniRoute (this fork): Operational Learnings and Pitfalls
 
 Local, proprietary companion to `CLAUDE.md`. Read this BEFORE operating or patching the
-running daemon. Scope: the private fork at `~/Documents/GitHub/OmniRoute` (branch
-`feat/codex-passthrough-impl`), served by the launchd daemon `com.omniroute.gateway` on
-`http://localhost:20128`. Sources: `~/.claude/skills/omniroute-maintain/SKILL.md`,
+running daemon. Scope: the private fork at `~/Documents/GitHub/OmniRoute`, served by the
+launchd daemon `com.omniroute.gateway` on `http://localhost:20128`.
+
+**The daemon has no fixed branch.** `~/.omniroute/bin/omniroute-daemon.sh` pins the
+CHECKOUT (`FORK=/Users/ingmarsturm/Documents/GitHub/OmniRoute`) and serves whatever
+`dist/` that checkout last built, from whichever branch was current at build time. So
+resolve the branch live with `git -C ~/Documents/GitHub/OmniRoute branch --show-current`
+and cross-check `stat -f %Sm dist/server.js` against the reflog: the 2026-08-28 bundle
+was built from `refactor/merge-antigravity-into-agy` 23 min before the checkout to
+`refactor/merge-duplicate-providers`, so HEAD and the served code can disagree.
+`feat/codex-passthrough-impl` no longer exists; do not look for it. Sources: `~/.claude/skills/omniroute-maintain/SKILL.md`,
 `~/.omniroute/OMNIROUTE_SETUP.md`, `~/.omniroute/PROXY_MISCONFIG_REGRESSION_2026-07-14.md`,
 omniroute memory files, the repo `CLAUDE.md`, protected-ledger, plus live verification.
 
@@ -155,10 +163,11 @@ key_value(namespace,key,value) VALUES('feature_flags','<KEY>','<VALUE>');"` then
   checkout; a `git checkout`/branch switch there silently discards other sessions' uncommitted
   work. Every task gets its own worktree under `.claude/worktrees/` and nowhere else (that path is
   gitignored and in the `tsconfig`/`.dockerignore` excludes; a worktree elsewhere escapes
-  build-scope excludes and OOMs `next build`). To update the DAEMON, the fix must land on
-  `feat/codex-passthrough-impl` in the MAIN checkout (the daemon serves that checkout's `dist/`),
-  so develop in a worktree, then fast-forward-merge into `feat/codex-passthrough-impl` in the main
-  checkout and rebuild there. Check `git worktree list` first and leave other sessions' worktrees
+  build-scope excludes and OOMs `next build`). To update the DAEMON, the fix must land on the
+  branch the MAIN checkout currently has checked out (the daemon serves that checkout's `dist/`),
+  so develop in a worktree, then merge into that branch in the main checkout and rebuild there.
+  Confirm the branch with the operator first (Hard Rule #19); it changes often. Check
+  `git worktree list` first and leave other sessions' worktrees
   (e.g. `stealth-staging`) untouched.
 - **NEVER `git stash` / `git stash pop` anywhere in this repo (Hard Rule #22a),** including inside a
   worktree or a dispatched subagent. It operates on the shared object store and can clobber another
