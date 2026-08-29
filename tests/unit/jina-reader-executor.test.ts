@@ -43,17 +43,37 @@ test("jinaReaderFetch calls r.jina.ai/{url} with Bearer auth", async () => {
   }
 });
 
-test("jinaReaderFetch returns 401 error when no API key", async () => {
-  const result = await jinaReaderFetch({
-    url: "https://example.com",
-    format: "markdown",
-    includeMetadata: false,
-    credentials: {},
-  });
+test("jinaReaderFetch fetches keylessly instead of failing closed", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured: { url: string; headers: Record<string, string> } = { url: "", headers: {} };
 
-  assert.equal(result.success, false);
-  assert.equal(result.status, 401);
-  assert.ok(!result.error?.includes("at /"), "error must not contain stack trace");
+  globalThis.fetch = async (url, init = {}) => {
+    captured = {
+      url: String(url),
+      headers: (init as RequestInit).headers as Record<string, string>,
+    };
+    return new Response("# Hello from Jina", {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    });
+  };
+
+  try {
+    const result = await jinaReaderFetch({
+      url: "https://example.com",
+      format: "markdown",
+      includeMetadata: false,
+      credentials: {},
+    });
+
+    // r.jina.ai serves anonymous requests, and the web_fetch builtin documents the
+    // keyless jina-reader as its fallback, so a missing key must not short-circuit.
+    assert.equal(result.success, true);
+    assert.ok(captured.url.startsWith("https://r.jina.ai/"));
+    assert.equal(captured.headers["Authorization"], undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("jinaReaderFetch propagates non-200 status without stack trace", async () => {
