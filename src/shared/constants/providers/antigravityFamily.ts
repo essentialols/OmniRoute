@@ -25,4 +25,8 @@ export function isAntigravityFamilyProvider(provider: unknown): boolean {
  */
 export const LEGACY_PROVIDER_ID_MAP: Readonly<Record<string, string>> = Object.freeze({
   [ANTIGRAVITY_LEGACY_PROVIDER_ID]: ANTIGRAVITY_CANONICAL_PROVIDER_ID,
+  // Duplicate registrations of one upstream service, merged into their canonical id.
+  moonshot: "kimi",
+  "vertex-partner": "vertex",
+  qianfan: "baidu",
 });

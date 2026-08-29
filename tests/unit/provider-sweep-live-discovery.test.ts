@@ -55,7 +55,7 @@ const LIVE_CASES: Array<{ provider: string; liveUrl: string }> = [
   { provider: "pollinations", liveUrl: "https://gen.pollinations.ai/v1/models" },
   { provider: "nscale", liveUrl: "https://inference.api.nscale.com/v1/models" },
   { provider: "inference-net", liveUrl: "https://api.inference.net/v1/models" },
-  { provider: "moonshot", liveUrl: "https://api.moonshot.ai/v1/models" },
+  { provider: "kimi", liveUrl: "https://api.moonshot.ai/v1/models" },
   // GPU-cloud / aggregator marketplaces (sweep cont.).
   { provider: "crof", liveUrl: "https://crof.ai/v1/models" },
   { provider: "featherless-ai", liveUrl: "https://api.featherless.ai/v1/models" },

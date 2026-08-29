@@ -6,6 +6,7 @@ export const baiduProvider: RegistryEntry = {
   format: "openai",
   executor: "default",
   baseUrl: "https://qianfan.baidubce.com/v2/chat/completions",
+  modelsUrl: "https://qianfan.baidubce.com/v2/models",
   authType: "apikey",
   authHeader: "bearer",
   // Sweep 2026-06-19: refreshed against the official Baidu AI Studio / Qianfan v2
@@ -13,6 +14,8 @@ export const baiduProvider: RegistryEntry = {
   models: [
     { id: "ernie-5.1", name: "ERNIE 5.1", contextLength: 131072 },
     { id: "ernie-5.0", name: "ERNIE 5.0", contextLength: 131072 },
+    // Folded in from the retired `qianfan` entry (same endpoint and credentials).
+    { id: "ernie-5.0-thinking-latest", name: "ERNIE 5.0 Thinking Latest" },
     { id: "ernie-x1.1", name: "ERNIE X1.1", contextLength: 32768 },
     { id: "ernie-4.5-turbo-128k", name: "ERNIE 4.5 Turbo 128K", contextLength: 131072 },
     { id: "ernie-4.5-turbo-32k", name: "ERNIE 4.5 Turbo 32K", contextLength: 32768 },

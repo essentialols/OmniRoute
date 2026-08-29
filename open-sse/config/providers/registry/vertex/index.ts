@@ -27,7 +27,10 @@ export const vertexProvider: RegistryEntry = {
     { id: "DeepSeek-V4-Pro", name: "DeepSeek V4 Pro (Vertex Partner)" },
     { id: "Qwen3.6-35B-A3B", name: "Qwen3.6 35B A3B (Vertex Partner)" },
     { id: "GLM-5.1-FP8", name: "GLM-5.1 (Vertex Partner)" },
+    // Folded in from the retired `vertex-partner` entry (same endpoint and credentials).
+    { id: "claude-opus-4-8", name: "Claude Opus 4.8 (Vertex)" },
     { id: "claude-opus-4-7", name: "Claude Opus 4.7 (Vertex)" },
+    { id: "claude-opus-4-6", name: "Claude Opus 4.6 (Vertex)" },
     { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6 (Vertex)" },
   ],
 };

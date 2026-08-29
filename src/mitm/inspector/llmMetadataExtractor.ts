@@ -33,7 +33,7 @@ const PROVIDER_MATCHERS: ProviderMatch[] = [
   { pattern: /(^|\.)huggingface\.co$/i, provider: "huggingface" },
   { pattern: /(^|\.)openrouter\.ai$/i, provider: "openrouter" },
   { pattern: /(^|\.)x\.ai$/i, provider: "xai" },
-  { pattern: /(^|\.)moonshot\.ai$/i, provider: "moonshot" },
+  { pattern: /(^|\.)moonshot\.ai$/i, provider: "kimi" },
   { pattern: /bigmodel\.cn$/i, provider: "bigmodel" },
   { pattern: /(^|\.)githubcopilot\.com$/i, provider: "github-copilot" },
   { pattern: /(^|\.)cursor\.sh$/i, provider: "cursor" },

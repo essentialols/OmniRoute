@@ -43,7 +43,8 @@ const PROVIDERS_WITHOUT_SYSTEM_MESSAGE = new Set([
   "glmt", // GLM Thinking variant
   "glm-cn", // GLM China variant
   "zai", // Z.AI uses same GLM backend
-  "qianfan", // Baidu ERNIE rejects system role
+  "qianfan", // retired id, kept for legacy refs
+  "baidu", // Baidu ERNIE rejects system role
 ]);
 
 /**

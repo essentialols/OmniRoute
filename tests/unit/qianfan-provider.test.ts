@@ -7,64 +7,50 @@ import { REGISTRY, getRegistryEntry } from "../../open-sse/config/providerRegist
 import { PROVIDERS } from "../../open-sse/config/constants.ts";
 import { getModelsByProviderId, isValidModel } from "../../src/shared/constants/models.ts";
 import { APIKEY_PROVIDERS } from "../../src/shared/constants/providers.ts";
-import { validateBody, createProviderSchema } from "../../src/shared/validation/schemas.ts";
+import { providerSupportsSystemMessage } from "../../src/lib/memory/injection.ts";
 
-test("qianfan registers Baidu ERNIE as an OpenAI-compatible API key provider", () => {
-  const registryEntry = getRegistryEntry("qianfan");
+// `qianfan` was a duplicate registration of the same qianfan.baidubce.com ERNIE
+// endpoint as `baidu`. It was merged into `baidu`; the retired id still routes.
 
-  assert.ok(registryEntry, "qianfan should be in the provider registry");
-  assert.equal(registryEntry, REGISTRY.qianfan);
-  assert.equal(registryEntry.id, "qianfan");
-  assert.equal(registryEntry.alias, "qianfan");
-  assert.equal(registryEntry.format, "openai");
-  assert.equal(registryEntry.executor, "default");
-  assert.equal(registryEntry.authType, "apikey");
-  assert.equal(registryEntry.authHeader, "bearer");
-  assert.equal(registryEntry.baseUrl, "https://qianfan.baidubce.com/v2/chat/completions");
-  assert.equal(registryEntry.defaultContextLength, 128000);
-  assert.equal(registryEntry.passthroughModels, undefined);
+test("the retired qianfan id resolves to the canonical baidu provider", () => {
+  assert.equal(REGISTRY.qianfan, undefined, "qianfan must no longer be its own entry");
+  assert.equal(APIKEY_PROVIDERS.qianfan, undefined, "and must not be offered in the picker");
 
-  assert.ok(APIKEY_PROVIDERS.qianfan, "qianfan should be visible in API key providers");
-  assert.equal(APIKEY_PROVIDERS.qianfan.name, "Baidu Qianfan");
-  assert.equal(APIKEY_PROVIDERS.qianfan.website, "https://cloud.baidu.com/product/wenxinworkshop");
-  assert.equal(APIKEY_PROVIDERS.qianfan.passthroughModels, undefined);
-
-  assert.equal(PROVIDERS.qianfan.baseUrl, registryEntry.baseUrl);
-  assert.equal(PROVIDERS.qianfan.format, "openai");
-  assert.equal("modelsUrl" in PROVIDERS.qianfan, false);
-  assert.equal("passthroughModels" in PROVIDERS.qianfan, false);
+  const resolved = getRegistryEntry("qianfan");
+  assert.ok(resolved, "qianfan must still resolve for stored connections and legacy refs");
+  assert.equal(resolved.id, "baidu");
 });
 
-test("qianfan exposes ERNIE chat models in the local model catalog", () => {
-  const models = getModelsByProviderId("qianfan");
-  const modelIds = models.map((model) => model.id);
+test("baidu registers the ERNIE endpoint as an OpenAI-compatible API key provider", () => {
+  const entry = getRegistryEntry("baidu");
 
-  assert.ok(modelIds.includes("ernie-5.1"));
-  assert.ok(modelIds.includes("ernie-5.0-thinking-latest"));
-  assert.ok(modelIds.includes("ernie-x1.1"));
-  assert.equal(models.find((model) => model.id === "ernie-x1.1")?.contextLength, 64000);
-  assert.ok(models.every((model) => typeof model.name === "string" && model.name.length > 0));
+  assert.ok(entry);
+  assert.equal(entry.id, "baidu");
+  assert.equal(entry.format, "openai");
+  assert.equal(entry.executor, "default");
+  assert.equal(PROVIDERS.baidu.baseUrl, "https://qianfan.baidubce.com/v2/chat/completions");
+  // Folded in from qianfan, which was the only side that carried it. modelsUrl lives on
+  // the registry entry; the legacy PROVIDERS shape does not carry it.
+  assert.equal(entry.modelsUrl, "https://qianfan.baidubce.com/v2/models");
 });
 
-test("qianfan accepts known model IDs", () => {
-  assert.equal(isValidModel("qianfan", "ernie-5.1"), true);
-  assert.equal(isValidModel("qianfan", "future-qianfan-openai-compatible-model"), false);
+test("baidu exposes the merged ERNIE catalog", () => {
+  const ids = getModelsByProviderId("baidu").map((model) => model.id);
+
+  assert.ok(ids.includes("ernie-5.1"));
+  assert.ok(ids.includes("ernie-x1.1"));
+  // Inherited from qianfan by the merge.
+  assert.ok(ids.includes("ernie-5.0-thinking-latest"));
+  assert.equal(isValidModel("baidu", "ernie-5.1"), true);
 });
 
-test("qianfan provider creation schema accepts API-key connections", () => {
-  const validation = validateBody(createProviderSchema, {
-    provider: "qianfan",
-    apiKey: "bce-v3/test-key",
-    name: "Baidu Qianfan",
-  });
-
-  assert.equal(validation.success, true);
-  if (validation.success) {
-    assert.equal(validation.data.provider, "qianfan");
-    assert.equal(validation.data.apiKey, "bce-v3/test-key");
-  }
+test("ERNIE system-role normalization survives the merge", () => {
+  // qianfan was the only id flagged here before the merge; baidu serves the same
+  // upstream, which rejects a system role.
+  assert.equal(providerSupportsSystemMessage("baidu"), false);
+  assert.equal(providerSupportsSystemMessage("qianfan"), false);
 });
 
-test("qianfan has a static provider icon asset", () => {
-  assert.equal(existsSync(join(process.cwd(), "public/providers/qianfan.svg")), true);
+test("the qianfan icon asset is retained for legacy connections", () => {
+  assert.ok(existsSync(join(process.cwd(), "public", "providers", "qianfan.svg")));
 });

@@ -68,6 +68,7 @@ import { resolveAccountProxiesFromRegistry } from "./noAuthProxyResolution";
 import * as log from "../utils/logger";
 import { fisherYatesShuffle, getNextFromDeckSync } from "@/shared/utils/shuffleDeck";
 import { isAntigravityFamilyProvider } from "@/shared/constants/providers/antigravityFamily";
+import { getSharedCredentialPool } from "@/shared/constants/providers/credentialPools";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -970,11 +971,11 @@ async function getProviderSearchPool(provider: string): Promise<string[]> {
   const canonicalProvider = resolveProviderId(provider);
   const canonicalAlias = getProviderAlias(canonicalProvider);
 
-  if (provider === "nvidia") {
-    return ["nvidia", "nvidia_nim"];
-  }
-  if (provider === "nvidia_nim") {
-    return ["nvidia_nim", "nvidia"];
+  // Providers sharing one upstream account must search one connection pool, otherwise
+  // each tracks its own quota/cooldown state against a single real quota.
+  const sharedPool = getSharedCredentialPool(provider);
+  if (sharedPool) {
+    return sharedPool;
   }
 
   const searchPool = new Set([provider, canonicalProvider, canonicalAlias].filter(Boolean));

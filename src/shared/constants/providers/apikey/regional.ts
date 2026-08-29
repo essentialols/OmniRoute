@@ -3,17 +3,6 @@
  * Pure data; merged by apikey/index.ts via spread (god-file decomposition; semantic split).
  */
 export const APIKEY_PROVIDERS_REGIONAL = {
-  qianfan: {
-    id: "qianfan",
-    alias: "qianfan",
-    name: "Baidu Qianfan",
-    icon: "cloud",
-    color: "#2468F2",
-    textIcon: "BD",
-    website: "https://cloud.baidu.com/product/wenxinworkshop",
-    apiHint:
-      "Use a Qianfan API key from Baidu AI Cloud. The default endpoint is OpenAI-compatible v2.",
-  },
   glm: {
     id: "glm",
     alias: "glm",
@@ -139,15 +128,6 @@ export const APIKEY_PROVIDERS_REGIONAL = {
     hasFree: true,
     freeNote:
       "Free: one-time 10M-token grant after account signup + KYC verification (LongCat-2.0). One-time only — not a recurring daily/monthly allowance.",
-  },
-  moonshot: {
-    id: "moonshot",
-    alias: "moonshot",
-    name: "Moonshot AI",
-    icon: "rocket_launch",
-    color: "#1E40AF",
-    textIcon: "MS",
-    website: "https://platform.moonshot.ai",
   },
   volcengine: {
     id: "volcengine",

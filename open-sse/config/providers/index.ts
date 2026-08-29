@@ -91,7 +91,6 @@ import { lambda_aiProvider } from "./registry/lambda-ai/index.ts";
 import { t3_webProvider } from "./registry/t3-web/index.ts";
 import { iflytekProvider } from "./registry/iflytek/index.ts";
 import { crofProvider } from "./registry/crof/index.ts";
-import { moonshotProvider } from "./registry/moonshot/index.ts";
 import { bazaarlinkProvider } from "./registry/bazaarlink/index.ts";
 import { perplexityProvider } from "./registry/perplexity/index.ts";
 import { perplexity_webProvider } from "./registry/perplexity/web/index.ts";
@@ -118,7 +117,6 @@ import { deepinfraProvider } from "./registry/deepinfra/index.ts";
 import { agyProvider } from "./registry/agy/index.ts";
 import { udioProvider } from "./registry/udio/index.ts";
 import { longcatProvider } from "./registry/longcat/index.ts";
-import { vertex_partnerProvider } from "./registry/vertex/partner/index.ts";
 import { vertexProvider } from "./registry/vertex/index.ts";
 import { duckduckgo_webProvider } from "./registry/duckduckgo-web/index.ts";
 import { xaiProvider } from "./registry/xai/index.ts";
@@ -137,7 +135,6 @@ import { waferProvider } from "./registry/wafer/index.ts";
 import { huggingchatProvider } from "./registry/huggingchat/index.ts";
 import { yuanbao_webProvider } from "./registry/yuanbao-web/index.ts";
 import { galadrielProvider } from "./registry/galadriel/index.ts";
-import { qianfanProvider } from "./registry/qianfan/index.ts";
 import { meta_llamaProvider } from "./registry/meta-llama/index.ts";
 import { cloudflare_aiProvider } from "./registry/cloudflare-ai/index.ts";
 import { nous_researchProvider } from "./registry/nous-research/index.ts";
@@ -277,7 +274,6 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   "t3-web": t3_webProvider,
   iflytek: iflytekProvider,
   crof: crofProvider,
-  moonshot: moonshotProvider,
   bazaarlink: bazaarlinkProvider,
   perplexity: perplexityProvider,
   "perplexity-web": perplexity_webProvider,
@@ -304,7 +300,6 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   agy: agyProvider,
   udio: udioProvider,
   longcat: longcatProvider,
-  "vertex-partner": vertex_partnerProvider,
   vertex: vertexProvider,
   "duckduckgo-web": duckduckgo_webProvider,
   xai: xaiProvider,
@@ -322,7 +317,6 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   huggingchat: huggingchatProvider,
   "yuanbao-web": yuanbao_webProvider,
   galadriel: galadrielProvider,
-  qianfan: qianfanProvider,
   "meta-llama": meta_llamaProvider,
   "cloudflare-ai": cloudflare_aiProvider,
   "nous-research": nous_researchProvider,

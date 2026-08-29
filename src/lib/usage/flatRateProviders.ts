@@ -41,6 +41,7 @@ const FLAT_RATE_SUBSCRIPTION_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "xiaomi-mimo", // Xiaomi MiMo plan (issue: "MiMo Token Plan")
   "bailian-coding-plan", // Alibaba Coding Plan
   "glm", // GLM Coding plan
+  "glmt", // same z.ai coding plan, thinking preset
   "glm-cn", // GLM Coding (China) plan
 ]);
 

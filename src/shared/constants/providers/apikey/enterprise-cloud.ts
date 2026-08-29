@@ -113,16 +113,6 @@ export const APIKEY_PROVIDERS_ENTERPRISE = {
     hasFree: true,
     authHint: "Provide Service Account JSON or OAuth access_token",
   },
-  "vertex-partner": {
-    id: "vertex-partner",
-    alias: "vp",
-    name: "Vertex AI Partners",
-    icon: "cloud",
-    color: "#34A853",
-    textIcon: "VP",
-    website: "https://cloud.google.com/vertex-ai",
-    authHint: "Provide the same Service Account JSON used for Vertex AI partner models.",
-  },
   "cloudflare-ai": {
     id: "cloudflare-ai",
     alias: "cf",

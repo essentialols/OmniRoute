@@ -104,6 +104,7 @@ const CHINESE_PROVIDERS: ReadonlySet<string> = new Set([
   "volcengine",
   "codebuddy-cn",
   "qianfan",
+  "baidu",
   "siliconflow",
 ]);
 
