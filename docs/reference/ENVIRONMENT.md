@@ -688,6 +688,13 @@ The logging system writes to both stdout and rotated log files. All configuratio
 | ----------------------------------------- | -------------------------- | --------------------------------------------------------------------------------- |
 | `APP_LOG_LEVEL`                           | `info`                     | Minimum log level: `debug`, `info`, `warn`, `error`.                              |
 | `APP_LOG_FORMAT`                          | `text`                     | Output format: `text` (human-readable) or `json` (structured).                    |
+| `SENTRY_DSN`                              | _(unset)_                  | Server-side Sentry DSN. Error reporting is disabled when unset.                   |
+| `NEXT_PUBLIC_SENTRY_DSN`                  | _(unset)_                  | Browser-visible Sentry DSN for client error boundaries.                           |
+| `SENTRY_ENVIRONMENT`                      | `NODE_ENV`                 | Environment label attached to Sentry events.                                      |
+| `SENTRY_RELEASE`                          | `OMNIROUTE_BUILD_SHA`      | Release identifier attached to Sentry events.                                     |
+| `SENTRY_TRACES_SAMPLE_RATE`               | `0`                        | Sentry tracing sample rate.                                                       |
+| `SENTRY_PROFILES_SAMPLE_RATE`             | `0`                        | Sentry profiling sample rate.                                                     |
+| `SENTRY_DEBUG`                            | `false`                    | Enable Sentry SDK debug logging.                                                  |
 | `APP_LOG_TO_FILE`                         | `true`                     | Write logs to file alongside stdout.                                              |
 | `APP_LOG_FILE_PATH`                       | `logs/application/app.log` | Log file path (relative to project root or `DATA_DIR`).                           |
 | `APP_LOG_MAX_FILE_SIZE`                   | `50M`                      | Max file size before rotation. Accepts: `50M`, `1G`, `512K`, or plain bytes.      |

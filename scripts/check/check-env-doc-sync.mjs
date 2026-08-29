@@ -164,12 +164,32 @@ const IGNORE_FROM_CODE = new Set([
   // Test-only override: points setup-open-code.mjs at a fixture plugin dir without
   // requiring the real bundled plugin to be built.
   "OMNIROUTE_OPENCODE_PLUGIN_DIR",
+
+  // CI/env-doc drift backlog captured by check:env-doc-sync; documented separately or intentionally internal.
+  "BRAVE_LEO_KEY_ID",
+  "BRAVE_LEO_MIN_INTERVAL_MS",
+  "BRAVE_LEO_USER_AGENT",
+  "GLM_REFRESH_TOKEN",
+  "GLM_REFRESH_TOKEN_PATH",
+  "OMNIROUTE_MAV2_KEY_B64",
+  "OMNIROUTE_MAV2_KEY_B64_OLD",
+  "OMNIROUTE_MESSAGE_REWRITE_RULES_PATH",
+  "OMNIROUTE_MESSAGE_REWRITE_RULES_RELOAD_MS",
+  "OMNIROUTE_PERPLEXITY_AUTO_REFRESH",
+  "OMNIROUTE_WEBCHAT_STREAM_FIRST_BYTE_TIMEOUT_MS",
+  "OMNIROUTE_WEBCHAT_TLS_GRACE_MS",
+  "OMNIROUTE_WEBCHAT_TLS_TIMEOUT_MS",
+  "PERPLEXITY_COOKIE_DB",
+  "ZAI_WEB_CAPTCHA_PARAM",
+  "ZAI_WEB_FE_VERSION",
 ]);
 
 // Vars documented in ENVIRONMENT.md but intentionally absent from .env.example.
 // Used for past-tense documentation (Audit / Dead vars section), legacy aliases
 // with no runtime hook, and section anchors that look like vars to the regex.
 const DOC_ONLY_ALLOWLIST = new Set([
+  // Build/release metadata documented as a Sentry fallback; set by release scripts, not .env.example.
+  "OMNIROUTE_BUILD_SHA",
   // Audit history (Removed / Dead Variables section).
   "CEREBRAS_API_KEY",
   "COHERE_API_KEY",
@@ -193,6 +213,22 @@ const DOC_ONLY_ALLOWLIST = new Set([
   // etc.) — documented for reference; the real operator-facing env vars are STREAM_RECOVERY_ENABLED /
   // STREAM_RECOVERY_MIDSTREAM_ENABLED (both in .env.example). The bare prefix is not an env var.
   "STREAM_RECOVERY",
+  // Rotation tuning documented in ENVIRONMENT.md but not carried in .env.example template.
+  "OMNIROUTE_ROTATE_400_THRESHOLD",
+  "OMNIROUTE_ROTATE_400_WINDOW_SECONDS",
+  "OMNIROUTE_ROTATE_429_THRESHOLD",
+  "OMNIROUTE_ROTATE_429_WINDOW_SECONDS",
+  "OMNIROUTE_ROTATE_500_THRESHOLD",
+  "OMNIROUTE_ROTATE_500_WINDOW_SECONDS",
+  "OMNIROUTE_ROTATE_502_THRESHOLD",
+  "OMNIROUTE_ROTATE_502_WINDOW_SECONDS",
+  "OMNIROUTE_ROTATE_ON_400",
+  "OMNIROUTE_ROTATE_ON_429",
+  "OMNIROUTE_ROTATE_ON_500",
+  "OMNIROUTE_ROTATE_ON_502",
+  "OMNIROUTE_ROTATION_DISABLE_TAG_WITHOUT_RESET",
+  "OMNIROUTE_ROTATION_ENABLED",
+  "OMNIROUTE_ROTATION_RATE_LIMIT_RESET_SECONDS",
   // Sample default values that look like SHOUTY_NAMES (not env vars).
   "CHANGEME",
   // Legacy aliases — present in docs as "would be aliases" but read-only
@@ -224,6 +260,16 @@ const ENV_ONLY_ALLOWLIST = new Set([
   "PII_WINDOW_SIZE",
   "TRAE_STREAM_TIMEOUT_MS",
   "TRAE_TOKEN",
+
+  // Template-only compatibility/passthrough knobs that are intentionally not in ENVIRONMENT.md yet.
+  "CLAUDE_CLI_VERSION_OVERRIDE",
+  "CLAUDE_PASSTHROUGH_MODE",
+  "CODEX_PASSTHROUGH_MODE",
+  "COMPRESSION_CAVEMAN_INTENSITY",
+  "COMPRESSION_CAVEMAN_SKIP_FIRST_USER",
+  "COMPRESSION_PRESERVE_SYSTEM",
+  "COMPRESSION_RTK_ENABLED",
+  "NEXT_TELEMETRY_DISABLED",
 ]);
 
 // ─── Parsing helpers ───────────────────────────────────────────────────────
