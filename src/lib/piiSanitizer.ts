@@ -110,6 +110,22 @@ const PII_PATTERNS: PIIPattern[] = [
   },
 ];
 
+/**
+ * Provider-generated blobs the client must echo back byte-exact on the next turn.
+ * They are base64/base64url, so `api_key_generic` can match a chance `-pk_<20+ alnum>_`
+ * run inside one; replacing that slice silently corrupts the blob and upstream rejects
+ * every later turn of that conversation (Codex: 400 `invalid_encrypted_content`, which
+ * poisons the client's stored history permanently). Never sanitize these values.
+ * Anthropic `redacted_thinking` carries the same kind of blob under the generic key
+ * `data`, which is too broad to blanket-skip and is therefore still exposed.
+ */
+export const OPAQUE_ROUNDTRIP_KEYS = [
+  "encrypted_content",
+  "signature",
+  "thought_signature",
+  "thoughtSignature",
+];
+
 // ── Public API ──
 
 export interface SanitizeResult {
@@ -484,6 +500,7 @@ export function sanitizePIIResponse(response: any, forceEnabled?: boolean): any 
                 "type",
                 "index",
                 "stop_reason",
+                ...OPAQUE_ROUNDTRIP_KEYS,
               ].includes(key)
             ) {
               continue;

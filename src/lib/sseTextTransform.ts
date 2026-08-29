@@ -1,3 +1,5 @@
+import { OPAQUE_ROUNDTRIP_KEYS } from "./piiSanitizer";
+
 export type FieldCategory = "content" | "reasoning" | "toolArgs" | "partialJson";
 
 const CATEGORY_MAP: Record<string, FieldCategory> = {
@@ -213,6 +215,7 @@ export function createSseTextTransform(
             "refusal",
             "name",
             "event",
+            ...OPAQUE_ROUNDTRIP_KEYS,
           ];
 
           // Recursively sanitize all string properties (except system metadata)
