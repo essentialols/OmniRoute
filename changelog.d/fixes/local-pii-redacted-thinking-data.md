@@ -1,0 +1,1 @@
+- **fix(sse):** PII sanitization no longer rewrites the opaque blob in Anthropic `redacted_thinking` blocks. The blob lives under the generic key `data`, so the skip is keyed on the containing block's `type` rather than the key alone, which leaves `data` redactable everywhere else.

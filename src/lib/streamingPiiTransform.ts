@@ -1,5 +1,5 @@
 import { createSseTextTransform, FieldCategory, getFieldCategory } from "./sseTextTransform";
-import { OPAQUE_ROUNDTRIP_KEYS, sanitizePII } from "./piiSanitizer";
+import { isOpaqueRoundtripField, OPAQUE_ROUNDTRIP_KEYS, sanitizePII } from "./piiSanitizer";
 
 export interface PiiTransformOptions {
   windowSize?: number;
@@ -331,7 +331,7 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
     const clearDeltas = (obj: any) => {
       if (!obj || typeof obj !== "object") return;
       for (const key of Object.keys(obj)) {
-        if (METADATA_KEYS.includes(key)) {
+        if (METADATA_KEYS.includes(key) || isOpaqueRoundtripField(key, obj)) {
           continue;
         }
         if (typeof obj[key] === "string") {
@@ -362,7 +362,7 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
       const compositeKey = `${choiceIdx}_${toolIdx}`;
 
       for (const key of Object.keys(obj)) {
-        if (METADATA_KEYS.includes(key)) {
+        if (METADATA_KEYS.includes(key) || isOpaqueRoundtripField(key, obj)) {
           continue;
         }
         if (typeof obj[key] === "string") {
