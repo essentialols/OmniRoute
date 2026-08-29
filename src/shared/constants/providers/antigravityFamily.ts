@@ -17,3 +17,12 @@ export function isAntigravityFamilyProvider(provider: unknown): boolean {
     provider === ANTIGRAVITY_CANONICAL_PROVIDER_ID || provider === ANTIGRAVITY_LEGACY_PROVIDER_ID
   );
 }
+
+/**
+ * Retired provider ids that must still resolve to a live provider. Kept separate from
+ * `alias`, which doubles as the user-facing model prefix: a legacy id has to route
+ * without being advertised.
+ */
+export const LEGACY_PROVIDER_ID_MAP: Readonly<Record<string, string>> = Object.freeze({
+  [ANTIGRAVITY_LEGACY_PROVIDER_ID]: ANTIGRAVITY_CANONICAL_PROVIDER_ID,
+});

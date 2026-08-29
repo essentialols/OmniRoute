@@ -11,6 +11,7 @@ export interface ProviderRiskNoticeFields {
 }
 
 import { NOAUTH_PROVIDERS } from "./providers/noauth";
+import { LEGACY_PROVIDER_ID_MAP } from "./providers/antigravityFamily";
 import { OAUTH_PROVIDERS } from "./providers/oauth";
 import { WEB_COOKIE_PROVIDERS, resolveWebProviderHost } from "./providers/web-cookie";
 export { resolveWebProviderHost };
@@ -329,6 +330,11 @@ export const AUTH_METHODS = {
 };
 
 export function getProviderByAlias(alias: string): AiProviderDefinition | null {
+  const legacyTarget = LEGACY_PROVIDER_ID_MAP[alias];
+  if (legacyTarget) {
+    const canonical = getProviderById(legacyTarget);
+    if (canonical) return canonical as AiProviderDefinition;
+  }
   for (const section of _PROVIDER_SECTIONS) {
     for (const provider of Object.values(section)) {
       if (provider.alias === alias || provider.id === alias) {

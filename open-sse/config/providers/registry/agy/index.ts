@@ -9,7 +9,7 @@ import {
 
 export const agyProvider: RegistryEntry = {
   id: "agy",
-  alias: "antigravity",
+  alias: "agy",
   format: "antigravity",
   executor: "antigravity",
   baseUrls: [...ANTIGRAVITY_BASE_URLS],

@@ -19,7 +19,7 @@ test("agy is registered as an OAuth provider in the UI catalog", () => {
   assert.ok(agy, "AI_PROVIDERS.agy must exist");
   assert.equal(agy.id, "agy");
   assert.equal(agy.name, "Antigravity");
-  assert.equal(agy.alias, "antigravity", "legacy id must survive as the routing alias");
+  assert.equal(agy.alias, "agy", "agy stays the advertised alias/prefix");
   assert.equal(agy.riskNoticeVariant, "oauth");
   assert.equal(agy.subscriptionRisk, true);
 });

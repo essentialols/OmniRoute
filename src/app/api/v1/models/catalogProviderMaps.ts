@@ -6,6 +6,8 @@ import { AI_PROVIDERS } from "@/shared/constants/providers";
 // the catalog host's `resolveCanonicalProviderId`, so it is exported alongside the builder.
 export const FALLBACK_ALIAS_TO_PROVIDER = {
   ag: "agy",
+  // retired id, still routable
+  antigravity: "agy",
   cc: "claude",
   cl: "cline",
   cu: "cursor",

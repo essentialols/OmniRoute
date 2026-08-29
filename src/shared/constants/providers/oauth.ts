@@ -37,11 +37,11 @@ export const OAUTH_PROVIDERS = {
       "Qwen OAuth free tier was discontinued on 2026-04-15. Use 'bailian-coding-plan', 'alibaba', 'alibaba-cn', or 'openrouter' provider with API key instead.",
   },
   // `antigravity` was a second registration of this same backend, OAuth client and
-  // accounts. Merged into `agy`; the old id survives as the alias so stored connections
-  // and `antigravity/<model>` references keep resolving.
+  // accounts. Merged into `agy`; the retired id still resolves via LEGACY_PROVIDER_ID_MAP
+  // but is no longer advertised as a model prefix.
   agy: {
     id: "agy",
-    alias: "antigravity",
+    alias: "agy",
     name: "Antigravity",
     icon: "terminal",
     color: "#F59E0B",

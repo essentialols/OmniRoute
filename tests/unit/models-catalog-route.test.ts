@@ -679,12 +679,12 @@ test("v1 models catalog exposes bare Codex-preferred IDs for native Codex client
   assert.equal(providerModel.parent, aliasModel.id);
 });
 
-test("v1 models catalog exposes Antigravity client-visible preview aliases instead of upstream internal IDs", async () => {
-  await seedConnection("antigravity", {
+test("v1 models catalog exposes agy client-visible preview aliases instead of upstream internal IDs", async () => {
+  await seedConnection("agy", {
     authType: "oauth",
-    name: "antigravity-preview",
+    name: "agy-preview",
     apiKey: null,
-    accessToken: "antigravity-access",
+    accessToken: "agy-access",
   });
 
   const response = await v1ModelsCatalog.getUnifiedModelsResponse(
@@ -694,20 +694,20 @@ test("v1 models catalog exposes Antigravity client-visible preview aliases inste
   const ids = new Set(body.data.map((item) => item.id));
 
   assert.equal(response.status, 200);
-  assert.ok(ids.has("antigravity/gemini-3-pro-preview"));
-  assert.ok(ids.has("antigravity/gemini-3.5-flash-low"));
-  assert.ok(ids.has("antigravity/gemini-3.5-flash-medium"));
-  assert.ok(ids.has("antigravity/gemini-3.5-flash-high"));
-  assert.equal(ids.has("antigravity/gemini-3-flash-preview"), false);
-  assert.equal(ids.has("antigravity/gemini-3-flash-agent"), false);
+  assert.ok(ids.has("agy/gemini-3-pro-preview"));
+  assert.ok(ids.has("agy/gemini-3.5-flash-low"));
+  assert.ok(ids.has("agy/gemini-3.5-flash-medium"));
+  assert.ok(ids.has("agy/gemini-3.5-flash-high"));
+  assert.equal(ids.has("agy/gemini-3-flash-preview"), false);
+  assert.equal(ids.has("agy/gemini-3-flash-agent"), false);
   // Gemini 3.1 Pro budget tiers remain client-visible aliases for the plain
   // `gemini-3.1-pro` upstream id — see ANTIGRAVITY_MODEL_ALIASES.
-  assert.ok(ids.has("antigravity/gemini-3.1-pro-high"));
+  assert.ok(ids.has("agy/gemini-3.1-pro-high"));
   // The legacy `gemini-claude-*` ids are alias KEYS (remapped to live upstream
   // ids), not public catalog entries, so they stay unexposed.
-  assert.equal(ids.has("antigravity/gemini-claude-sonnet-4-5"), false);
-  assert.equal(ids.has("antigravity/gemini-claude-sonnet-4-5-thinking"), false);
-  assert.equal(ids.has("antigravity/gemini-claude-opus-4-5-thinking"), false);
+  assert.equal(ids.has("agy/gemini-claude-sonnet-4-5"), false);
+  assert.equal(ids.has("agy/gemini-claude-sonnet-4-5-thinking"), false);
+  assert.equal(ids.has("agy/gemini-claude-opus-4-5-thinking"), false);
 });
 
 test("v1 models catalog uses provider-node prefixes for compatible provider custom models", async () => {

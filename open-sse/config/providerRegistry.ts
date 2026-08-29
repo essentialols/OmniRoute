@@ -6,6 +6,7 @@
 export * from "./providers/shared.ts";
 export { REGISTRY } from "./providers/index.ts";
 import { REGISTRY } from "./providers/index.ts";
+import { LEGACY_PROVIDER_ID_MAP } from "../../src/shared/constants/providers/antigravityFamily.ts";
 import {
   RegistryModel,
   REASONING_UNSUPPORTED,
@@ -147,6 +148,9 @@ function ensurePassthroughProviderIds(): Set<string> {
     for (const entry of Object.values(REGISTRY)) {
       if (!entry.passthroughModels) continue;
       ids.add(entry.id);
+      for (const [legacyId, canonicalId] of Object.entries(LEGACY_PROVIDER_ID_MAP)) {
+        if (canonicalId === entry.id) ids.add(legacyId);
+      }
       // Requests may arrive under a provider's alias (e.g. `antigravity/<model>` for `agy`).
       // Missing it here makes a per-model quota 429 look like full provider exhaustion and
       // wrongly skips the remaining same-provider fallbacks.
@@ -172,6 +176,9 @@ function ensureByAliasPopulated(): void {
   for (const entry of Object.values(REGISTRY)) {
     if (entry.alias && entry.alias !== entry.id) {
       _byAlias.set(entry.alias, entry);
+    }
+    for (const [legacyId, canonicalId] of Object.entries(LEGACY_PROVIDER_ID_MAP)) {
+      if (canonicalId === entry.id) _byAlias.set(legacyId, entry);
     }
   }
 }
