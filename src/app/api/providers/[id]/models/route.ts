@@ -1795,6 +1795,94 @@ export async function GET(
       });
     }
 
+    // Gemini API-key connections use the same live Generative Language catalog
+    // as Vertex Express, but authenticate with x-goog-api-key.  Treating them
+    // as a generic OpenAI-style provider only surfaced the small static
+    // registry, leaving newly released Gemini models invisible to native
+    // Gemini clients (including the Gemini CLI model picker).
+    if (provider === "gemini") {
+      const cachedResponse = maybeReturnCachedDiscovery();
+      if (cachedResponse) return cachedResponse;
+
+      const autoFetchDisabledResponse = maybeReturnAutoFetchDisabled();
+      if (autoFetchDisabledResponse) return autoFetchDisabledResponse;
+
+      const credential = (apiKey || "").trim();
+      if (!credential) {
+        const fallback = buildDiscoveryFallbackResponse({
+          cacheWarning: "No usable Gemini API key — using cached catalog",
+          localWarning: "No usable Gemini API key — using local catalog",
+        });
+        if (fallback) return fallback;
+        return NextResponse.json(
+          { error: "No usable Gemini API key configured for model discovery." },
+          { status: 400 }
+        );
+      }
+
+      const baseUrl = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000";
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": credential,
+      };
+      const allModels: GeminiDiscoveryModel[] = [];
+      let pageUrl = baseUrl;
+      let pageCount = 0;
+      const MAX_PAGES = 20;
+      const seenTokens = new Set<string>();
+
+      try {
+        while (pageUrl && pageCount < MAX_PAGES) {
+          pageCount++;
+          const response = await safeOutboundFetch(pageUrl, {
+            ...SAFE_OUTBOUND_FETCH_PRESETS.modelsPagination,
+            guard: getProviderOutboundGuard(),
+            proxyConfig: proxy,
+            method: "GET",
+            headers,
+          });
+
+          if (!response.ok) {
+            console.log("[models] Gemini model discovery failed", {
+              provider,
+              status: response.status,
+            });
+            const fallback = buildDiscoveryFallbackResponse();
+            if (fallback) return fallback;
+            return NextResponse.json(
+              { error: `Failed to fetch Gemini models: ${response.status}` },
+              { status: response.status }
+            );
+          }
+
+          const data = await response.json();
+          allModels.push(...parseGeminiModelsList(data));
+
+          const nextPageToken = data.nextPageToken;
+          if (!nextPageToken || seenTokens.has(nextPageToken)) break;
+          seenTokens.add(nextPageToken);
+          pageUrl = `${baseUrl}&pageToken=${encodeURIComponent(nextPageToken)}`;
+        }
+      } catch (error) {
+        const fallback = buildDiscoveryErrorFallbackResponse(error);
+        if (fallback) return fallback;
+        throw error;
+      }
+
+      if (allModels.length > 0) {
+        return buildApiDiscoveryResponse(allModels);
+      }
+
+      const fallback = buildDiscoveryFallbackResponse();
+      if (fallback) return fallback;
+      return buildResponse({
+        provider,
+        connectionId,
+        models: [],
+        source: "api",
+      });
+    }
+
     if (provider === "vertex" || provider === "vertex-partner") {
       const cachedResponse = maybeReturnCachedDiscovery();
       if (cachedResponse) return cachedResponse;
