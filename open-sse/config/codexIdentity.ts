@@ -550,32 +550,6 @@ export function applyCodexClientMetadata(
   body.client_metadata = existing;
 }
 
-/**
- * #3697: detect the Codex CLI as the request *client* (not the routed provider) from
- * request headers, so the model-echo shim can fire regardless of which upstream provider
- * ultimately serves the request (e.g. `codex/gpt-5.5-xhigh` routed through a combo).
- */
-export function isCodexOriginatedHeaders(
-  headers: Headers | Record<string, unknown> | null | undefined
-): boolean {
-  const getHeader = (name: string): string => {
-    if (headers instanceof Headers) {
-      return headers.get(name)?.toLowerCase() ?? "";
-    }
-    if (headers && typeof headers === "object") {
-      for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
-        if (key.toLowerCase() === name && typeof value === "string") {
-          return value.toLowerCase();
-        }
-      }
-    }
-    return "";
-  };
-
-  if (getHeader("originator").startsWith("codex")) return true;
-  return getHeader("user-agent").startsWith("codex");
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)

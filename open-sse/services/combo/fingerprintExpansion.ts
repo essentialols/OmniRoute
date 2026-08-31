@@ -20,9 +20,6 @@ const FINGERPRINT_PROVIDERS: ReadonlySet<string> = new Set(["opencode"]);
 /** Separator the combo builder UI uses to encode an account pin (#6087). */
 const FP_PIN_SEPARATOR = "|fp|";
 
-/** Separator the combo builder UI uses to encode an account pin (#6087). */
-const FP_PIN_SEPARATOR = "|fp|";
-
 /** Check whether a provider uses fingerprint-based multi-account. */
 export function isFingerprintProvider(provider: string): boolean {
   return FINGERPRINT_PROVIDERS.has(provider);

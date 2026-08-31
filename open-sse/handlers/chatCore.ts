@@ -446,7 +446,6 @@ import {
 } from "../services/localTurnRecovery.ts";
 import { synthesizeOpenAiSseFromJson } from "../utils/jsonToSse.ts";
 import { builtinSkills } from "@/lib/skills/builtins";
-import { resolveInterceptSearch } from "@/lib/db/interceptionRules";
 import {
   resolveExplicitStreamAlias,
   resolveStreamFlag,

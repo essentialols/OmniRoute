@@ -185,11 +185,6 @@ export interface ComboRecoveryHint {
   next_step: string;
 }
 
-export interface ComboExclusion {
-  provider: string;
-  model?: string;
-  reason: string;
-}
 export interface ComboDiagnostics {
   poolSize: number;
   attempted: number;
