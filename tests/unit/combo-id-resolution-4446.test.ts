@@ -82,3 +82,13 @@ test("#4446 exact name match still wins and unknown slugs still return null", as
   const unknown = await sseModelService.getComboForModel("no-such-combo-xyz");
   assert.equal(unknown, null, "an unknown slug must not resolve to any combo");
 });
+
+test("getComboForModel ignores combos without a populated model array", async () => {
+  await combosDb.createCombo({
+    name: "EMPTY-COMBO",
+    models: [],
+  });
+
+  const resolved = await sseModelService.getComboForModel("EMPTY-COMBO");
+  assert.equal(resolved, null, "an empty combo must not be selected for routing");
+});

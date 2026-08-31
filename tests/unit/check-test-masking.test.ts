@@ -330,6 +330,21 @@ test("scanBareTautologies: excludes check-test-masking.test.ts itself", () => {
   assert.deepEqual(scanBareTautologies(files, read), []);
 });
 
+test("scanBareTautologies: excludes sibling gate self-test files (#6634 selfref regression)", () => {
+  // The gate's own regression files (e.g. check-test-masking-selfref-6634.test.ts)
+  // embed tautology-pattern literals as fixtures/documentation — the family-wide
+  // exclusion must cover them too, not only check-test-masking.test.ts itself.
+  const files = ["tests/unit/check-test-masking-selfref-6634.test.ts"];
+  const read = () => `assert.equal(1, 1);`;
+  assert.deepEqual(scanBareTautologies(files, read), []);
+});
+
+test("scanBareTautologies: a non-family file with the pattern is still flagged (exclusion is scoped)", () => {
+  const files = ["tests/unit/some-unrelated.test.ts"];
+  const read = () => `assert.equal(1, 1);`;
+  assert.equal(scanBareTautologies(files, read).length, 1);
+});
+
 test("scanBareTautologies: skips unreadable files instead of throwing", () => {
   const files = ["tests/unit/does-not-exist.test.ts"];
   const read = () => {
@@ -548,7 +563,11 @@ test("MASKED: test re-implements `status >= 500` without importing the owner →
     "  assert.equal(localCheck(503), true);",
     "});",
   ].join("\n");
-  const flags = findReimplementedConditions([PROD_SERVER_ERROR], testSrc, extractImports(testSrc));
+  const flags = findReimplementedConditions(
+    [PROD_SERVER_ERROR],
+    testSrc,
+    extractImports(testSrc)
+  );
   assert.equal(flags.length, 1);
   assert.equal(flags[0].condition, "status >= 500");
   assert.equal(flags[0].owner, "isServerError");
@@ -564,7 +583,11 @@ test("CLEAN: test imports and calls the real function → not flagged", () => {
     "  assert.equal(isServerError(200), false);",
     "});",
   ].join("\n");
-  const flags = findReimplementedConditions([PROD_SERVER_ERROR], testSrc, extractImports(testSrc));
+  const flags = findReimplementedConditions(
+    [PROD_SERVER_ERROR],
+    testSrc,
+    extractImports(testSrc)
+  );
   assert.deepEqual(flags, []);
 });
 
@@ -576,7 +599,11 @@ test("CLEAN: importing the owner exempts even a textual copy of its condition", 
     "// documents that isServerError fires when status >= 500",
     'test("t", () => { isServerError(503); });',
   ].join("\n");
-  const flags = findReimplementedConditions([PROD_SERVER_ERROR], testSrc, extractImports(testSrc));
+  const flags = findReimplementedConditions(
+    [PROD_SERVER_ERROR],
+    testSrc,
+    extractImports(testSrc)
+  );
   assert.deepEqual(flags, []);
 });
 

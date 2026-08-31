@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { homedir } from "os";
 import { join } from "path";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
+import { isNextBuildPhase } from "@/lib/buildPhase";
 import {
   createProviderConnection,
   getProviderConnections,
@@ -12,6 +13,7 @@ import {
 import { syncToCloud } from "@/lib/cloudSync";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { KiroService } from "@/lib/oauth/services/kiro";
+import { findKiroConnectionByIdentity } from "@/lib/oauth/kiroConnectionIdentity";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import {
   emailFromExternalIdpToken,
@@ -30,11 +32,9 @@ import {
  * 🔒 Auth-guarded: requires JWT cookie or Bearer API key.
  */
 export async function GET(request: Request) {
-  if (await isAuthRequired(request)) {
-    if (!(await isAuthenticated(request))) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  // GHSA-mg76 / GHSA-gxv4: reading/importing host credentials is a management action.
+  const authError = await requireManagementAuth(request, { invalidApiKeyStatus: 401 });
+  if (authError) return authError;
 
   const { searchParams } = new URL(request.url);
   const targetProvider = searchParams.get("targetProvider") === "amazon-q" ? "amazon-q" : "kiro";
@@ -73,6 +73,7 @@ async function tryKiroCliSqlite(): Promise<{
   clientSecret?: string;
   region?: string;
   profileArn?: string;
+  authMethod?: "builder-id" | "idc";
   source?: string;
 }> {
   // Build list of candidate DB paths to probe in order.
@@ -83,6 +84,11 @@ async function tryKiroCliSqlite(): Promise<{
 
   let Database: any;
   try {
+    // Never load the native better-sqlite3 addon during the Next.js build:
+    // its Statement destructor aborts with SIGABRT at build-worker teardown
+    // (node::RemoveEnvironmentCleanupHook). Kiro auto-import never runs during
+    // build, so returning "not found" here is safe. (#10060)
+    if (isNextBuildPhase()) throw new Error("Skip better-sqlite3 during build");
     Database = (await import("better-sqlite3")).default;
   } catch {
     return { found: false, triedPaths: candidatePaths };
@@ -190,6 +196,7 @@ async function tryKiroCliSqlite(): Promise<{
         clientSecret: regData?.client_secret,
         region,
         profileArn,
+        authMethod: resolveKiroCliAuthMethod(profileArn),
       };
     } finally {
       try {
@@ -341,6 +348,34 @@ async function tryAwsSsoCache(targetProvider: string): Promise<{
           }
         }
 
+        // Newer kiro-auth-token.json files omit `clientIdHash` and instead carry
+        // the OIDC `clientId` directly on the token object (#1253). In that case
+        // find the client-registration file whose own `clientId` matches the
+        // token's `clientId`, rather than leaving clientId/clientSecret unset.
+        // Matching by exact clientId (not region/latest-expiry) avoids picking
+        // an unrelated stale registration on hosts with multiple cached SSO
+        // client registrations.
+        if (!clientId && data.clientId) {
+          for (const candidateFile of files) {
+            if (candidateFile === file || !candidateFile.endsWith(".json")) continue;
+            try {
+              const candidateContent = await readFile(join(cachePath, candidateFile), "utf-8");
+              const candidateData = JSON.parse(candidateContent);
+              if (
+                candidateData.clientId === data.clientId &&
+                typeof candidateData.clientSecret === "string" &&
+                candidateData.clientSecret
+              ) {
+                clientId = candidateData.clientId;
+                clientSecret = candidateData.clientSecret;
+                break;
+              }
+            } catch {
+              // Skip unreadable/malformed candidate files.
+            }
+          }
+        }
+
         // Read profileArn from Kiro IDE's profile.json. The region is preserved
         // verbatim by readKiroIdeProfileArn() (#2314) — see its docstring for why.
         const profileArn: string | null = await readKiroIdeProfileArn();
@@ -387,6 +422,12 @@ export function deriveKiroConnectionName(opts: {
   return `Kiro (${r})`;
 }
 
+export function resolveKiroCliAuthMethod(
+  profileArn: string | null | undefined
+): "builder-id" | "idc" {
+  return profileArn ? "idc" : "builder-id";
+}
+
 type ProviderConnectionLike = {
   id?: unknown;
   providerSpecificData?: unknown;
@@ -398,23 +439,22 @@ type ProviderConnectionLike = {
  * whose stored `providerSpecificData.profileArn` matches the given ARN.
  * Returns null when profileArn is undefined/null or no match is found.
  *
+ * #10815 hardened `findKiroConnectionByIdentity` to require an account-level
+ * identifier (email or clientId) alongside a matching profileArn before
+ * trusting the match — distinct Builder ID accounts (Google/GitHub social
+ * login) can share the same CodeWhisperer profile ARN, and matching on ARN
+ * alone let a second social login silently overwrite the first connection.
+ * `email`/`clientId` here let a caller supply that account identifier; the
+ * real `saveAndRespond()` call sites already do (see below).
+ *
  * Exported for unit tests (#3615).
  */
 export function findKiroConnectionByProfileArn(
   connections: ProviderConnectionLike[],
-  profileArn: string | undefined
+  profileArn: string | undefined,
+  accountIdentity?: { email?: string | null; clientId?: string | null }
 ): ProviderConnectionLike | null {
-  if (!profileArn) return null;
-  for (const conn of connections) {
-    const psd = conn.providerSpecificData;
-    if (psd && typeof psd === "object" && !Array.isArray(psd)) {
-      const stored = (psd as Record<string, unknown>).profileArn;
-      if (typeof stored === "string" && stored === profileArn) {
-        return conn;
-      }
-    }
-  }
-  return null;
+  return findKiroConnectionByIdentity(connections, { profileArn, ...accountIdentity });
 }
 
 // ── Save to OmniRoute DB ──────────────────────────────────────────────────────
@@ -475,10 +515,12 @@ async function saveAndRespond(
       if (profileArn) providerSpecificData.profileArn = profileArn;
 
       const existingConnections = await getProviderConnections({ provider: targetProvider });
-      const existingByArn = findKiroConnectionByProfileArn(
-        existingConnections,
-        profileArn || undefined
-      );
+      const existingByArn = findKiroConnectionByIdentity(existingConnections, {
+        authType: "oauth",
+        profileArn,
+        clientId: result.clientId,
+        email,
+      });
       const record = {
         accessToken: refreshed.accessToken,
         refreshToken: refreshed.refreshToken || result.refreshToken!,
@@ -497,7 +539,7 @@ async function saveAndRespond(
           ...record,
         } as any);
       }
-      if (isCloudEnabled()) {
+      if (await isCloudEnabled()) {
         const machineId = await getConsistentMachineId();
         await syncToCloud(machineId).catch(() => {});
       }
@@ -517,13 +559,12 @@ async function saveAndRespond(
     let expiresAt = result.expiresAt;
     let profileArn = result.profileArn;
 
-    // Determine authMethod: prefer the value from the SSO cache token (e.g. "idc")
-    // so that kiroService.refreshToken() takes the correct OIDC path for IDC tokens
-    // (#2059). Fall back to "kiro-cli" for the SQLite path and "imported" for plain
-    // social SSO cache tokens (no clientIdHash → no IDC client creds).
+    // `kiro-cli` identifies where credentials came from, not the account type. Persist
+    // the actual auth method so IdC accounts still use their profile ARN and Builder ID
+    // accounts keep the profile-less flow.
     const resolvedAuthMethod =
       result.source === "kiro-cli-sqlite"
-        ? "kiro-cli"
+        ? result.authMethod || resolveKiroCliAuthMethod(profileArn)
         : result.clientId
           ? result.authMethod || "idc"
           : "imported";
@@ -588,7 +629,12 @@ async function saveAndRespond(
     // just refresh its tokens instead of inserting a new row. This prevents the
     // duplicate-row accumulation reported in #3615 (4 rows after 6 days).
     const existingConnections = await getProviderConnections({ provider: targetProvider });
-    const existingByArn = findKiroConnectionByProfileArn(existingConnections, profileArn);
+    const existingByArn = findKiroConnectionByIdentity(existingConnections, {
+      authType: "oauth",
+      profileArn,
+      clientId: providerSpecificData.clientId,
+      email,
+    });
 
     if (existingByArn && typeof existingByArn.id === "string") {
       await updateProviderConnection(existingByArn.id, {
@@ -614,7 +660,7 @@ async function saveAndRespond(
       } as any);
     }
 
-    if (isCloudEnabled()) {
+    if (await isCloudEnabled()) {
       const machineId = await getConsistentMachineId();
       await syncToCloud(machineId).catch(() => {});
     }

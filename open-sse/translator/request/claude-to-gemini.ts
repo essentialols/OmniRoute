@@ -5,18 +5,20 @@ import {
   tryParseJSON,
   cleanJSONSchemaForAntigravity,
 } from "../helpers/geminiHelper.ts";
-import { DEFAULT_THINKING_GEMINI_SIGNATURE } from "../../config/defaultThinkingSignature.ts";
 import { buildGeminiTools, sanitizeGeminiToolName } from "../helpers/geminiToolsSanitizer.ts";
-import { capMaxOutputTokens, capThinkingBudget } from "../../../src/lib/modelCapabilities.ts";
 import {
   buildGeminiThoughtSignatureKey,
   resolveGeminiThoughtSignature,
 } from "../../services/geminiThoughtSignatureStore.ts";
+import { capMaxOutputTokens, capThinkingBudget } from "../../../src/lib/modelCapabilities.ts";
+import { getModelSpec } from "../../../src/shared/constants/modelSpecs.ts";
 import {
+  buildChangedToolNameMap,
   buildHistoricalToolResultContext,
   extractClientThoughtSignature,
+  mergeConsecutiveSameRoleContents,
+  type GeminiContent,
 } from "./openai-to-gemini/helpers.ts";
-import { mergeConsecutiveSameRoleContents } from "./openai-to-gemini.ts";
 
 /**
  * Direct Claude → Gemini request translator.
@@ -34,10 +36,22 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
   // is scoped to the routed vertex provider only (threaded via credentials._provider).
   const provider = credentials && typeof credentials === "object" ? credentials._provider : null;
   const stripFunctionCallId = provider === "vertex" || provider === "vertex-partner";
+  // Thread the signature namespace so a thinking model's thoughtSignature (cached on the
+  // Gemini→Claude response turn under `<connectionId>:<toolUseId>`) is found and
+  // re-attached on the follow-up Claude→Gemini request. Without this, Claude Desktop
+  // combo turns hit HTTP 400 "missing thought_signature" (#8979 / #2504 parity).
+  const signatureNamespace =
+    credentials &&
+    typeof credentials === "object" &&
+    typeof credentials._signatureNamespace === "string"
+      ? credentials._signatureNamespace
+      : null;
   // Only thinking-tier Gemini models validate thought_signature on historical
-  // functionCall parts. Same heuristic openaiToAntigravityRequest uses
-  // (openai-to-gemini.ts), so non-thinking targets keep their native tool history
-  // instead of being flattened into context text they never needed.
+  // functionCall/functionResponse parts. Same heuristic openaiToAntigravityRequest
+  // uses (openai-to-gemini.ts). Non-thinking targets never receive a signature to
+  // cache in the first place, so gating the context-mode fallback below on
+  // isThinkingGemini keeps their tool history native instead of flattening every
+  // historical tool call into inert text they never needed signed.
   const modelLower = String(model || "").toLowerCase();
   const isThinkingGemini =
     !modelLower.includes("claude") &&
@@ -47,7 +61,7 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
       modelLower.includes("gemini-pro"));
   const result: {
     model: string;
-    contents: Array<Record<string, unknown>>;
+    contents: GeminiContent[];
     generationConfig: Record<string, unknown>;
     safetySettings: unknown;
     systemInstruction?: { role: string; parts: Array<{ text: string }> };
@@ -61,7 +75,10 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
     model: model,
     contents: [],
     generationConfig: {},
-    safetySettings: DEFAULT_SAFETY_SETTINGS,
+    // Honor an explicit caller-supplied safetySettings (including one that itself
+    // requests HARM_CATEGORY_CIVIC_INTEGRITY — the caller's explicit choice), matching
+    // the openai-to-gemini.ts standard-path behavior. See DEFAULT_SAFETY_SETTINGS (#8231).
+    safetySettings: body.safetySettings || DEFAULT_SAFETY_SETTINGS,
   };
 
   // ── Generation config ──────────────────────────────────────────
@@ -97,22 +114,15 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
     }
   }
 
-  // ── Build tool_use name lookup (for tool_result matching) ──────
-  // Also resolve the cached thoughtSignature for every historical tool_use id.
-  // Gemini 3+ thinking models reject a functionCall part that carries no
-  // thought_signature (400 "Function call is missing a thought_signature ...
-  // position N"). The signature is captured on the response turn by
-  // gemini-to-claude.ts under `<connectionId>:<toolCallId>` and re-attached here
-  // (#2504). Tool calls we cannot sign are represented as inert context instead of
-  // being sent unsigned, the same context-mode fallback the hub path uses (#3688).
-  const signatureNamespace =
-    credentials &&
-    typeof credentials === "object" &&
-    typeof credentials._signatureNamespace === "string"
-      ? credentials._signatureNamespace
-      : null;
-  const toolUseNames = {};
-  const rawToolUseNames: Record<string, string> = {};
+  // ── Build tool_use name lookup + resolve thought signatures ────
+  // Standard Gemini rejects signature-less native functionCall parts with
+  // HTTP 400 (#8979). Match the OPENAI→GEMINI "context" policy (#3688) for
+  // thinking-tier targets (isThinkingGemini): only emit native
+  // functionCall/functionResponse when a real signature is available;
+  // otherwise represent history as context text. Non-thinking targets never
+  // cache a signature and keep native tool history unconditionally (local fix,
+  // see isThinkingGemini above).
+  const toolUseNames: Record<string, string> = {};
   const resolvedSignatures = new Map<string, string>();
   if (body.messages && Array.isArray(body.messages)) {
     for (const msg of body.messages) {
@@ -120,7 +130,6 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
         for (const block of msg.content) {
           if (block.type === "tool_use" && block.id && block.name) {
             toolUseNames[block.id] = sanitizeToolName(block.name);
-            rawToolUseNames[block.id] = block.name;
             const resolved = resolveGeminiThoughtSignature(
               buildGeminiThoughtSignatureKey(signatureNamespace, block.id),
               extractClientThoughtSignature(block)
@@ -138,20 +147,7 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
   if (body.messages && Array.isArray(body.messages)) {
     for (const msg of body.messages) {
       const parts = [];
-
-      // Gemini wants the signature on the FIRST functionCall part of a model turn
-      // only; repeating it across a parallel tool-call batch is rejected (#1316).
-      // Pick the first resolvable signature in this turn and spend it once.
-      let turnSignature: string | undefined;
-      if (Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (block.type === "tool_use" && block.id && resolvedSignatures.has(block.id)) {
-            turnSignature = resolvedSignatures.get(block.id);
-            break;
-          }
-        }
-      }
-      let turnSignatureUnspent = turnSignature !== undefined;
+      let shouldUseEmbeddedSignature = true;
 
       if (Array.isArray(msg.content)) {
         for (const block of msg.content) {
@@ -168,18 +164,25 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
               break;
 
             case "tool_use": {
-              if (isThinkingGemini && !resolvedSignatures.has(block.id)) {
-                // Context-mode fallback (#3688): standard Gemini rejects an unsigned
-                // historical functionCall part, so omit it here. The paired
-                // tool_result is emitted as inert context in the branch below, which
-                // keeps the transcript readable without a pseudo tool-call record the
-                // model can echo back as its visible answer.
+              const signatureForToolCall = resolvedSignatures.get(block.id);
+              // Signature-less historical tool_use on a thinking target → omit
+              // native functionCall (context mode). Matching tool_result becomes
+              // context text below (#3688). Non-thinking targets keep native
+              // tool_use history even without a signature — they never validate
+              // one (local fix, gated on isThinkingGemini).
+              if (isThinkingGemini && !signatureForToolCall) {
                 break;
               }
-              const partSignature = turnSignatureUnspent ? turnSignature : undefined;
-              if (partSignature) turnSignatureUnspent = false;
+
+              const embeddedThoughtSignature = shouldUseEmbeddedSignature
+                ? signatureForToolCall
+                : undefined;
+              if (embeddedThoughtSignature) {
+                shouldUseEmbeddedSignature = false;
+              }
+
               parts.push({
-                ...(partSignature ? { thoughtSignature: partSignature } : {}),
+                ...(embeddedThoughtSignature ? { thoughtSignature: embeddedThoughtSignature } : {}),
                 functionCall: {
                   ...(stripFunctionCallId ? {} : { id: block.id }),
                   name: sanitizeToolName(block.name),
@@ -196,28 +199,32 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
                   .map((c) => (c.type === "text" ? c.text : JSON.stringify(c)))
                   .join("\n");
               }
-              if (isThinkingGemini && !resolvedSignatures.has(block.tool_use_id)) {
-                // The matching functionCall was omitted above, so a native
-                // functionResponse here would be an orphan. Emit the result as
-                // inert context text instead (#3688).
-                parts.push({
-                  text: buildHistoricalToolResultContext(
-                    rawToolUseNames[block.tool_use_id] || "unknown",
-                    content
-                  ),
-                });
-                break;
-              }
               let parsedContent = tryParseJSON(content);
               if (parsedContent === null) {
                 parsedContent = { result: content };
               } else if (typeof parsedContent !== "object") {
                 parsedContent = { result: parsedContent };
               }
+
+              const toolUseId = block.tool_use_id;
+              const name = toolUseNames[toolUseId] || "unknown";
+
+              // Signature-less history on a thinking target: represent as context
+              // text so Gemini 3+ does not reject a native functionResponse
+              // without a matching signed functionCall (#8979 / #3688). Non-thinking
+              // targets keep native functionResponse history (local fix, gated on
+              // isThinkingGemini).
+              if (isThinkingGemini && !resolvedSignatures.has(toolUseId)) {
+                parts.push({
+                  text: buildHistoricalToolResultContext(name, content),
+                });
+                break;
+              }
+
               parts.push({
                 functionResponse: {
-                  ...(stripFunctionCallId ? {} : { id: block.tool_use_id }),
-                  name: toolUseNames[block.tool_use_id] || "unknown",
+                  ...(stripFunctionCallId ? {} : { id: toolUseId }),
+                  name,
                   response: { result: parsedContent },
                 },
               });
@@ -244,21 +251,9 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
       if (parts.length > 0) {
         // Map Claude roles to Gemini roles
         const geminiRole = msg.role === "assistant" ? "model" : "user";
-
-        // Gemini 3+ expects the signature on the functionCall part itself. It is
-        // attached above from the signature cache; a fake one is never injected
-        // because the Gemini API validates it strictly and returns 400.
         result.contents.push({ role: geminiRole, parts });
       }
     }
-
-    // A model turn whose only content was unsigned tool_use blocks is dropped by the
-    // context-mode fallback above, which can leave two adjacent user turns. Gemini
-    // rejects consecutive same-role contents with 400 INVALID_ARGUMENT, so apply the
-    // same merge the hub path already does.
-    result.contents = mergeConsecutiveSameRoleContents(
-      result.contents as Parameters<typeof mergeConsecutiveSameRoleContents>[0]
-    ) as typeof result.contents;
   }
 
   // ── Convert tools ──────────────────────────────────────────────
@@ -273,11 +268,30 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
   // Priority: thinking.budget_tokens (Claude native) > output_config.effort (Claude Code).
   if (model.startsWith("gemma-4")) {
     // gemma-4 models returns - 400: Thinking budget is not supported for this model
-  } else if (body.thinking?.type === "enabled" && body.thinking.budget_tokens) {
-    result.generationConfig.thinkingConfig = {
-      thinkingBudget: body.thinking.budget_tokens,
-      includeThoughts: true,
-    };
+  } else if (body.thinking?.type === "enabled" && typeof body.thinking.budget_tokens === "number") {
+    // typeof check ensures only numeric budget_tokens triggers the thinking path;
+    // non-numeric values (e.g. string "auto") fall through to the effort-based path.
+    // #6813: a truthy check here dropped `budget_tokens: 0` (dynamic thinking).
+    // `undefined` (no budget specified) still falls through to the effort branch.
+    // #3842: cap to the model's real thinking-budget limit.
+    const cappedBudget = capThinkingBudget(model, body.thinking.budget_tokens);
+    // Only send thinkingConfig if the model supports thinking via budget.
+    // Models with thinkingBudgetCap:0 (e.g. gemini-3-flash) reject
+    // thinkingConfig even when capped to 0. The supportsThinking flag
+    // tracks thinkingLevel support, not thinkingBudget; use thinkingBudgetCap
+    // as the reliable indicator (gemini-2.5-flash has supportsThinking:false
+    // but thinkingBudgetCap:24576, meaning it supports thinking via budget).
+    // Models not in MODEL_SPECS (thinkingBudgetCap=undefined) default to allowed.
+    if (cappedBudget > 0 || getModelSpec(model)?.thinkingBudgetCap !== 0) {
+      result.generationConfig.thinkingConfig = {
+        thinkingBudget: cappedBudget,
+        // #6813: `budget_tokens: 0` on this explicit path is the client's dynamic-thinking
+        // sentinel, not an off-switch — includeThoughts stays true regardless of the
+        // (possibly cap-clamped) budget value. Only the reasoning_effort/output_config.effort
+        // paths below treat a resulting budget of 0 as "thinking disabled".
+        includeThoughts: true,
+      };
+    }
   } else if (typeof body.output_config?.effort === "string") {
     const effort = body.output_config.effort.toLowerCase();
     const effortBudgetMap: Record<string, number> = {
@@ -296,21 +310,34 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
     // pro-tier (real cap 32768) untouched.
     const budget = rawBudget !== undefined ? capThinkingBudget(model, rawBudget) : undefined;
     if (budget !== undefined && budget > 0) {
-      result.generationConfig.thinkingConfig = {
-        thinkingBudget: budget,
-        includeThoughts: true,
-      };
+      // Only send thinkingConfig if the model supports thinking via budget.
+      // Models with thinkingBudgetCap:0 (e.g. gemini-3-flash) reject
+      // thinkingConfig even for effort-based paths.
+      if (getModelSpec(model)?.thinkingBudgetCap !== 0) {
+        result.generationConfig.thinkingConfig = {
+          thinkingBudget: budget,
+          includeThoughts: true,
+        };
+      }
     }
   }
 
-  const changedToolNameMap = new Map(
-    [...toolNameMap.entries()].filter(
-      ([sanitizedName, originalName]) => sanitizedName !== originalName
-    )
-  );
-  if (changedToolNameMap.size > 0) {
+  // Gemini lowercases tool names in its functionCall responses, so identity
+  // entries (Read → Read) still need a lowercase alias ("read" → "Read") for
+  // gemini-to-claude to restore the casing Claude Code registered (#9568 parity
+  // — that fix landed on the openai-to-gemini path only).
+  const changedToolNameMap = buildChangedToolNameMap(toolNameMap);
+  if (changedToolNameMap) {
     result._toolNameMap = changedToolNameMap;
   }
+
+  // Gemini strictly rejects requests containing consecutive messages with the same role
+  // (400 INVALID_ARGUMENT: "Request contains consecutive messages with the same role").
+  // Normalize adjacent same-role messages by concatenating their parts. This also
+  // repairs the case where a whole model turn was dropped by the context-mode
+  // fallback above (an assistant turn whose only content was unsigned tool_use
+  // blocks), which can otherwise leave two adjacent user turns.
+  result.contents = mergeConsecutiveSameRoleContents(result.contents);
 
   return result;
 }

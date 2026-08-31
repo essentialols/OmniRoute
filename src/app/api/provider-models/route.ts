@@ -9,6 +9,7 @@ import {
   updateCustomModel,
   getModelCompatOverrides,
   mergeModelCompatOverride,
+  getHiddenModelsByProvider,
   type ModelCompatPatch,
 } from "@/lib/localDb";
 import {
@@ -27,6 +28,7 @@ import {
   isAnthropicCompatibleProvider,
 } from "@/shared/constants/providers";
 import { isAuthenticated } from "@/shared/utils/apiAuth";
+export const dynamic = "force-dynamic";
 import { providerModelMutationSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
@@ -81,7 +83,21 @@ export async function GET(request) {
           })
         : models;
 
-    return Response.json({ models: modelsWithContextOverride, modelCompatOverrides });
+    // #9203: surface the unified hidden-model map (customModels.isHidden +
+    // modelCompatOverrides.isHidden) so the client can filter every model source
+    // (system catalog, fallback, aliases, auto-fetched) — not just custom rows.
+    const hiddenModelsByProvider: Record<string, string[]> = {};
+    for (const [providerId, hiddenModelIds] of getHiddenModelsByProvider()) {
+      if (hiddenModelIds.size > 0) {
+        hiddenModelsByProvider[providerId] = [...hiddenModelIds];
+      }
+    }
+
+    return Response.json({
+      models: modelsWithContextOverride,
+      modelCompatOverrides,
+      hiddenModelsByProvider,
+    });
   } catch {
     return Response.json(
       { error: { message: "Failed to fetch provider models", type: "server_error" } },
@@ -129,6 +145,10 @@ export async function POST(request) {
       // #1294: persist the per-model token limits set in the add-model form.
       max_input_tokens: maxInputTokens,
       max_output_tokens: maxOutputTokens,
+      // #1904: manual vision-capability override set in the add-model form.
+      supportsVision,
+      // #9820: optional video-generation job preset (job/poll path).
+      generationConfig,
     } = validation.data;
 
     const model = await addCustomModel(
@@ -142,7 +162,9 @@ export async function POST(request) {
       {
         ...(maxInputTokens != null ? { inputTokenLimit: maxInputTokens } : {}),
         ...(maxOutputTokens != null ? { outputTokenLimit: maxOutputTokens } : {}),
-      }
+      },
+      typeof supportsVision === "boolean" ? supportsVision : undefined,
+      generationConfig
     );
     return Response.json({ model });
   } catch (error) {
@@ -194,6 +216,8 @@ export async function PUT(request) {
       upstreamHeaders,
       compatByProtocol,
       contextWindowOverride,
+      supportsVision,
+      generationConfig,
     } = validation.data;
 
     const raw = rawBody as Record<string, unknown>;
@@ -206,6 +230,13 @@ export async function PUT(request) {
     if ("preserveOpenAIDeveloperRole" in raw)
       updates.preserveOpenAIDeveloperRole = preserveOpenAIDeveloperRole;
     if ("upstreamHeaders" in raw) updates.upstreamHeaders = upstreamHeaders;
+    // #1904: manual vision-capability override — null clears back to heuristic.
+    if ("supportsVision" in raw) updates.supportsVision = supportsVision;
+    // #9820: video-generation job preset — schema is non-nullable optional, so
+    // presence implies a well-formed { preset } object; null is rejected by Zod.
+    if ("generationConfig" in raw && generationConfig !== undefined) {
+      updates.generationConfig = generationConfig;
+    }
     if ("compatByProtocol" in raw && compatByProtocol !== undefined) {
       updates.compatByProtocol = compatByProtocol;
     }
@@ -234,18 +265,26 @@ export async function PUT(request) {
           [
             "provider",
             "modelId",
+            "modelName",
+            "source",
             "normalizeToolCallId",
             "preserveOpenAIDeveloperRole",
             "upstreamHeaders",
             "compatByProtocol",
             "contextWindowOverride",
+            "apiFormat",
+            "targetFormat",
+            "supportsVision",
           ].includes(k)
         ) &&
         ("normalizeToolCallId" in raw ||
           "preserveOpenAIDeveloperRole" in raw ||
           "upstreamHeaders" in raw ||
           "compatByProtocol" in raw ||
-          "contextWindowOverride" in raw);
+          "contextWindowOverride" in raw ||
+          "apiFormat" in raw ||
+          "targetFormat" in raw ||
+          "supportsVision" in raw);
       if (compatOnly) {
         const knownProvider =
           !!provider &&
@@ -278,6 +317,18 @@ export async function PUT(request) {
           patch.upstreamHeaders =
             upstreamHeaders === null || typeof upstreamHeaders === "object"
               ? upstreamHeaders
+              : undefined;
+        }
+        if ("apiFormat" in raw) {
+          patch.apiFormat = typeof apiFormat === "string" ? apiFormat : null;
+        }
+        if ("targetFormat" in raw) {
+          patch.targetFormat = typeof targetFormat === "string" ? targetFormat : null;
+        }
+        if ("supportsVision" in raw) {
+          patch.supportsVision =
+            supportsVision === null || typeof supportsVision === "boolean"
+              ? supportsVision
               : undefined;
         }
         if (Object.keys(patch).length > 0) {
@@ -418,6 +469,7 @@ export async function DELETE(request) {
     const { searchParams } = new URL(request.url);
     const provider = searchParams.get("provider");
     const modelId = searchParams.get("model");
+    const resetOverride = searchParams.get("resetOverride") === "true";
 
     if (!provider) {
       return Response.json(
@@ -457,18 +509,25 @@ export async function DELETE(request) {
       );
     }
 
+    // Resetting a user-owned overlay must never delete the same-id synced base.
+    // The normal delete action retains its existing behavior for a standalone
+    // synced row, while the detail-page reset control uses resetOverride=true.
     const removedCustom = await removeCustomModel(provider, modelId);
-    const removedSynced = await removeSyncedAvailableModel(provider, modelId);
-    if (removedSynced) {
-      // #3199 + #3782: mark the deleted synced model with the DISTINCT `isDeleted`
-      // marker so a later auto-fetch re-import does not re-add it. We also keep
-      // `isHidden:true` so existing UI/visibility behavior is unchanged. The sync
-      // filter keys on `isDeleted` (not `isHidden`), which is what lets an
-      // eye/visibility-hidden model (`isHidden` only) survive a re-sync while a
-      // deleted one stays dropped.
-      mergeModelCompatOverride(provider, modelId, { isDeleted: true, isHidden: true });
-    }
+    const removedSynced =
+      removedCustom || resetOverride ? false : await removeSyncedAvailableModel(provider, modelId);
     const removed = removedCustom || removedSynced;
+    if (resetOverride && removedCustom) {
+      removeModelContextOverride(provider, modelId);
+      const aliasChanges = await syncManagedAvailableModelAliases(provider, [modelId], {
+        pruneMissing: false,
+      });
+      return Response.json({
+        removed,
+        resetOverride: true,
+        aliasChanges,
+      });
+    }
+
     const removedAliases = await deleteManagedAvailableModelAliases(provider, [modelId]);
     return Response.json({ removed, aliasChanges: { removed: removedAliases, assigned: [] } });
   } catch (error) {

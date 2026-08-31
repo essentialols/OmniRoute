@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from "node:fs/promises";
+import { mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -79,13 +80,35 @@ export async function movePath(sourcePath, destinationPath, fsImpl = fs) {
   }
 }
 
+/**
+ * Best-effort: physically create the isolated Windows profile dirs that
+ * resolveNextBuildEnv() may have pointed APPDATA/LOCALAPPDATA at. No-op when
+ * resolveNextBuildEnv didn't set them (non-Windows, or NEXT_DIST_DIR already set).
+ */
+export function ensureWindowsBuildProfileDirs(env, mkdirImpl = mkdirSync) {
+  if (!env?.APPDATA || !env?.LOCALAPPDATA) return;
+  mkdirImpl(env.APPDATA, { recursive: true });
+  mkdirImpl(env.LOCALAPPDATA, { recursive: true });
+}
+
 function runNextBuild() {
   return new Promise((resolve) => {
     const nextBin = path.join(projectRoot, "node_modules", "next", "dist", "bin", "next");
-    const child = spawn(process.execPath, [nextBin, "build", resolveNextBuildBundlerFlag()], {
+    const buildEnv = resolveNextBuildEnv(process.env);
+    ensureWindowsBuildProfileDirs(buildEnv);
+    const nextArgs = process.versions.bun
+      ? [
+          "--preload",
+          path.join(projectRoot, "open-sse", "utils", "setupPolyfill.ts"),
+          nextBin,
+          "build",
+          resolveNextBuildBundlerFlag(),
+        ]
+      : [nextBin, "build", resolveNextBuildBundlerFlag()];
+    const child = spawn(process.execPath, nextArgs, {
       cwd: projectRoot,
       stdio: "inherit",
-      env: resolveNextBuildEnv(process.env),
+      env: buildEnv,
     });
 
     const forward = (signal) => {
@@ -108,19 +131,61 @@ function runNextBuild() {
 }
 
 export function resolveNextBuildBundlerFlag(baseEnv = process.env) {
-  // Turbopack is the default production bundler (Next 16 stable). Benchmarked on
-  // this codebase: 2-3x faster than the single-threaded webpack pass (17min -> 9min
-  // on a 32-core box; ~20min -> 7min on ubuntu-latest), artifact validated
-  // end-to-end (standalone smoke + e2e/package/electron CI jobs). Webpack stays as
-  // the explicit escape hatch (=0) for bundler-compat regressions.
-  return baseEnv.OMNIROUTE_USE_TURBOPACK === "0" ? "--webpack" : "--turbopack";
+  // Turbopack is the default on Node.js; on Bun or when explicitly disabled (=0),
+  // use Webpack (--webpack) to avoid Turbopack V8 internal worker API mismatches.
+  if (process.versions.bun || baseEnv.OMNIROUTE_USE_TURBOPACK === "0") {
+    return "--webpack";
+  }
+  return "--turbopack";
 }
 
-export function resolveNextBuildEnv(baseEnv = process.env) {
+/**
+ * Deterministic per-process isolated Windows user-profile directory, used to
+ * sandbox HOME/USERPROFILE/APPDATA/LOCALAPPDATA for the spawned `next build`.
+ * Kept as a separate helper (rather than inline in resolveNextBuildEnv) so the
+ * directory-creation side effect (ensureWindowsBuildProfileDirs) can be invoked
+ * once per real build without re-deriving the path.
+ */
+export function getWindowsBuildProfileDir() {
+  return path.join(os.tmpdir(), `omniroute-build-winhome-${process.pid}`);
+}
+
+export function resolveNextBuildEnv(baseEnv = process.env, platform = process.platform) {
   const env = {
     ...baseEnv,
     NEXT_PRIVATE_BUILD_WORKER: baseEnv.NEXT_PRIVATE_BUILD_WORKER || "0",
+    // Reliable build signal inherited by every spawned `next build` worker.
+    // Next.js workers sometimes drop NEXT_PHASE, so DB entry points key off
+    // OMNIROUTE_BUILDING=1 to stub out SQLite and never load the native
+    // better-sqlite3 addon (its Statement destructor SIGABRTs at worker
+    // teardown: node::RemoveEnvironmentCleanupHook). (#10060)
+    OMNIROUTE_BUILDING: "1",
+    // No telemetry, anywhere: disable Next.js's anonymous build-time telemetry
+    // on every build path (local, CI, Docker), not just the image build.
+    NEXT_TELEMETRY_DISABLED: baseEnv.NEXT_TELEMETRY_DISABLED || "1",
   };
+
+  // Windows-only: `next build`'s static-generation glob scan and framework cache
+  // helpers walk %USERPROFILE%/AppData, which on GitHub-hosted Windows runners (and
+  // some OneDrive-backed dev profiles) contains reparse points/junctions that raise
+  // EPERM during Next's file-system scans. `.github/workflows/electron-release.yml`
+  // ("Sanitize Windows home directory" step) already patches USERPROFILE for the CI
+  // runner, but that only covers the electron-release CI job — a local `npm run
+  // build` on Windows (or any other Windows CI path that calls this script
+  // directly) hits the same EPERM unprotected. Doing the isolation here covers
+  // every caller of build-next-isolated.mjs, not just one workflow step. Skipped
+  // when a caller has already sandboxed the build via NEXT_DIST_DIR (the existing
+  // signal this file already reads for "isolated build" callers — see `distDir`
+  // above) to avoid double-isolating nested build invocations.
+  // Port of decolua/9router#2402 ("fix(build): isolate Windows HOME/AppData
+  // during next build").
+  if (platform === "win32" && !baseEnv.NEXT_DIST_DIR) {
+    const buildHomeDir = getWindowsBuildProfileDir();
+    env.HOME = buildHomeDir;
+    env.USERPROFILE = buildHomeDir;
+    env.APPDATA = path.join(buildHomeDir, "AppData", "Roaming");
+    env.LOCALAPPDATA = path.join(buildHomeDir, "AppData", "Local");
+  }
 
   // Raise the Node heap for the spawned `next build`. The webpack production pass
   // ("Compiling instrumentation" bundles the whole server graph) is the heaviest
@@ -280,8 +345,24 @@ export async function main() {
           distDir,
           outDir: standaloneDir,
           projectRoot,
+          // Match the hardened packaging path used by Electron builds:
+          // Turbopack can emit hashed external-package references and
+          // standalone symlinks that break after the bundle is moved/copied.
+          patchTurbopackChunks: true,
           copyNatives: true,
+          materializeSymlinks: true,
         });
+        const { spawnSync } = await import("node:child_process");
+        const basePathWrite = spawnSync(
+          process.execPath,
+          [path.join(projectRoot, "scripts", "build", "write-build-base-path.mjs")],
+          { cwd: projectRoot, env: process.env, stdio: "inherit" }
+        );
+        if (basePathWrite.status !== 0) {
+          console.warn(
+            "[build-next-isolated] Non-fatal error writing BUILD_OMNIROUTE_BASE_PATH sentinel"
+          );
+        }
       } catch (assembleErr) {
         console.warn("[build-next-isolated] Non-fatal error assembling standalone:", assembleErr);
       }

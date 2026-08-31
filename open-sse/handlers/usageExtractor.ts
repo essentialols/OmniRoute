@@ -26,7 +26,8 @@ export function extractUsageFromResponse(responseBody, provider) {
         responseBody.usage.prompt_tokens_details?.cached_tokens ??
         responseBody.usage.input_tokens_details?.cached_tokens ??
         responseBody.usage.prompt_cache_hit_tokens ??
-        responseBody.usage.cached_tokens,
+        responseBody.usage.cached_tokens ??
+        responseBody.usage.cache_read_input_tokens,
       reasoning_tokens:
         responseBody.usage.completion_tokens_details?.reasoning_tokens ??
         responseBody.usage.output_tokens_details?.reasoning_tokens ??
@@ -35,8 +36,10 @@ export function extractUsageFromResponse(responseBody, provider) {
       // @ryanngit). Only set the key when present so non-xAI OpenAI-shaped usage
       // (Codex, DeepSeek, etc.) is unaffected. Ticks → USD conversion happens in
       // costCalculator.ts, not here.
-      ...(Number.isFinite(Number(responseBody.usage.cost_in_usd_ticks))
-        ? { cost_in_usd_ticks: Number(responseBody.usage.cost_in_usd_ticks) }
+      ...(typeof responseBody.usage.cost_in_usd_ticks === "number" &&
+      Number.isFinite(responseBody.usage.cost_in_usd_ticks) &&
+      responseBody.usage.cost_in_usd_ticks >= 0
+        ? { cost_in_usd_ticks: responseBody.usage.cost_in_usd_ticks }
         : {}),
     };
   }
@@ -61,6 +64,9 @@ export function extractUsageFromResponse(responseBody, provider) {
       completion_tokens: responseBody.usage.output_tokens || 0,
       cache_read_input_tokens: cacheRead,
       cache_creation_input_tokens: cacheCreation,
+      ...(typeof responseBody.usage.output_tokens_details?.thinking_tokens === "number"
+        ? { reasoning_tokens: responseBody.usage.output_tokens_details.thinking_tokens }
+        : {}),
     };
   }
 
@@ -87,12 +93,19 @@ export function extractUsageFromResponse(responseBody, provider) {
     };
   }
 
-  // Gemini format
-  if (responseBody.usageMetadata && typeof responseBody.usageMetadata === "object") {
+  // Gemini format. Antigravity / gemini-cli wrap the payload in
+  // { response: { ... } } — read the envelope so non-streaming requests do
+  // not silently log zero usage (port of decolua/9router#59d858b).
+  const usageMetadata = responseBody.usageMetadata || responseBody.response?.usageMetadata;
+  if (usageMetadata && typeof usageMetadata === "object") {
+    // Gemini reports thoughts outside candidates. Fold them into completion so
+    // every provider keeps reasoning as a subset of completion tokens.
+    const thoughts = usageMetadata.thoughtsTokenCount || 0;
     return {
-      prompt_tokens: responseBody.usageMetadata.promptTokenCount || 0,
-      completion_tokens: responseBody.usageMetadata.candidatesTokenCount || 0,
-      reasoning_tokens: responseBody.usageMetadata.thoughtsTokenCount,
+      prompt_tokens: usageMetadata.promptTokenCount || 0,
+      completion_tokens: (usageMetadata.candidatesTokenCount || 0) + thoughts,
+      cached_tokens: usageMetadata.cachedContentTokenCount || 0,
+      reasoning_tokens: thoughts,
     };
   }
 

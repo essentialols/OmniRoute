@@ -363,13 +363,13 @@ export function __setAnthropicSaturationDepsForTests(deps: AnthropicSaturationDe
 }
 
 async function defaultAnthropicDeps(): Promise<AnthropicSaturationDeps> {
-  const [providersMod, usageMod] = await Promise.all([
-    import("@/lib/db/providers"),
+  const [localDbMod, usageMod] = await Promise.all([
+    import("@/lib/localDb"),
     import("@omniroute/open-sse/services/usage"),
   ]);
   return {
     loadConnection: (connectionId) =>
-      providersMod.getProviderConnectionById(connectionId) as Promise<Record<
+      localDbMod.getCachedProviderConnectionById(connectionId) as Promise<Record<
         string,
         unknown
       > | null>,

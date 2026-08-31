@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+
 import {
   findOffendingField,
   stripGroqUnsupportedFields,
@@ -20,6 +21,10 @@ test("findOffendingField matches known field names in a 400 body", () => {
   assert.equal(
     findOffendingField("context_management: Extra inputs are not permitted"),
     "context_management"
+  );
+  assert.equal(
+    findOffendingField("Extra inputs are not permitted, field: 'verbosity', value: 'low'"),
+    "verbosity"
   );
   assert.equal(findOffendingField("all good"), null);
   assert.equal(findOffendingField(""), null);
@@ -495,4 +500,27 @@ test("anchorJsonSchemaPatterns handles multiple tools, only modifies those with 
   const out = anchorJsonSchemaPatterns(body);
   assert.notEqual(out.tools[0], toolWithPattern, "tool with pattern should be a new object");
   assert.equal(out.tools[1], toolWithout, "tool without pattern should be the same reference");
+});
+
+test("stripGroqUnsupportedFields drops unsupported messages[].model and other metadata while keeping role and content", () => {
+  const out = stripGroqUnsupportedFields({
+    messages: [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: "hello!",
+        model: "groq/openai/gpt-oss-20b",
+        messageId: "msg_123",
+        sender: "assistant",
+      },
+    ],
+  });
+  assert.equal(out.messages.length, 2);
+  assert.equal(out.messages[0].role, "user");
+  assert.equal(out.messages[0].content, "hello");
+  assert.equal(out.messages[1].role, "assistant");
+  assert.equal(out.messages[1].content, "hello!");
+  assert.equal("model" in out.messages[1], false);
+  assert.equal("messageId" in out.messages[1], false);
+  assert.equal("sender" in out.messages[1], false);
 });

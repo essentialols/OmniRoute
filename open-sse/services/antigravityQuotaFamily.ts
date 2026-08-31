@@ -18,7 +18,7 @@ function normalizeModelId(model: string | null | undefined): string {
 export function getAntigravityQuotaFamily(
   model: string | null | undefined
 ): AntigravityQuotaFamily {
-  const normalized = normalizeModelId(model).replace(/^antigravity\//, "");
+  const normalized = normalizeModelId(model).replace(/^(antigravity|agy)\//, "");
   const slashIndex = normalized.indexOf("/");
   const bare = slashIndex >= 0 ? normalized.slice(slashIndex + 1) : normalized;
 

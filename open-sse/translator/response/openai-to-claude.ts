@@ -4,6 +4,142 @@ import { CLAUDE_OAUTH_TOOL_PREFIX } from "../request/openai-to-claude.ts";
 import { hasToolCallShim, applyToolCallShimToBuffer } from "../helpers/toolCallShim.ts";
 import { appendToolCallArgumentDelta } from "../../utils/toolCallArguments.ts";
 import { isAbortFinishReason } from "../../utils/finishReason.ts";
+import {
+  isInternalReasoningPlaceholder,
+  stripInternalReasoningPlaceholder,
+} from "../../utils/reasoningPlaceholder.ts";
+import { REVERSE_MAP, restoreClaudeToolName } from "../../services/claudeCodeToolRemapper.ts";
+import { sanitizeToolId } from "../helpers/schemaCoercion.ts";
+
+function normalizeToolName(name: string): string {
+  return REVERSE_MAP[name] ?? name;
+}
+
+interface XmlToolCall {
+  id: string;
+  name: string;
+  args: Record<string, string>;
+}
+
+/**
+ * Extract complete XML <invoke> blocks from text content.
+ * Some models (e.g. nvidia/abacusai/dracarys) emit tool calls as
+ * XML blocks instead of JSON tool_calls. This function detects
+ * <invoke name="ToolName"><parameter name="arg">value</parameter></invoke>
+ * blocks, converts them to tool calls, and returns the cleaned text.
+ * Incomplete XML is buffered in state for the next chunk.
+ */
+function extractXmlInvokeBlocks(
+  text: string,
+  state
+): { cleaned: string; toolCalls: XmlToolCall[] } {
+  const toolCalls: XmlToolCall[] = [];
+  const combined = (state._xmlInvokeBuffer || "") + text;
+  state._xmlInvokeBuffer = "";
+  let remaining = combined;
+  let cleaned = "";
+
+  while (remaining.length > 0) {
+    // Find all possible tool call patterns and pick the earliest
+    const invokeMatch = remaining.match(/<invoke\s+name="([^"]*)"\s*>/);
+    const toolCallTagMatch = remaining.match(/<tool_call>/);
+    const toolCallTextMatch = remaining.match(/TOOL_CALL\s+([A-Za-z0-9_]+):\s*/);
+
+    const matches = [
+      invokeMatch ? { type: "invoke" as const, index: invokeMatch.index!, data: invokeMatch } : null,
+      toolCallTagMatch ? { type: "tool_call_tag" as const, index: toolCallTagMatch.index!, data: toolCallTagMatch } : null,
+      toolCallTextMatch ? { type: "tool_call_text" as const, index: toolCallTextMatch.index!, data: toolCallTextMatch } : null,
+    ].filter(Boolean).sort((a, b) => a!.index - b!.index);
+
+    if (matches.length === 0) {
+      cleaned += remaining;
+      break;
+    }
+
+    const first = matches[0]!;
+    cleaned += remaining.slice(0, first.index);
+    const rest = remaining.slice(first.index);
+
+    if (first.type === "invoke") {
+      const startMatch = first.data;
+      const endMatch = rest.match(/<\/invoke>/);
+      if (!endMatch) {
+        state._xmlInvokeBuffer = rest;
+        break;
+      }
+      const innerXml = rest.slice(startMatch[0].length, endMatch.index!);
+      const fullLength = endMatch.index! + endMatch[0].length;
+      const args: Record<string, string> = {};
+      const paramRegex = /<parameter\s+name="([^"]*)"[^>]*>([\s\S]*?)<\/parameter>/g;
+      let pm;
+      while ((pm = paramRegex.exec(innerXml)) !== null) {
+        args[pm[1]] = pm[2].trim();
+      }
+      toolCalls.push({
+        id: `toolu_xml_${Date.now()}_${toolCalls.length}`,
+        name: startMatch[1],
+        args,
+      });
+      remaining = rest.slice(fullLength);
+    } else if (first.type === "tool_call_tag") {
+      const endMatch = rest.match(/<\/tool_call>/);
+      if (!endMatch) {
+        state._xmlInvokeBuffer = rest;
+        break;
+      }
+      const innerJson = rest.slice("<tool_call>".length, endMatch.index!).trim();
+      const fullLength = endMatch.index! + "</tool_call>".length;
+      try {
+        const parsed = JSON.parse(innerJson) as Record<string, unknown>;
+        const name = (parsed.name || parsed.tool_name || "") as string;
+        const rawArgs = parsed.arguments || parsed.args || parsed.parameters || {};
+        const args: Record<string, string> =
+          typeof rawArgs === "string"
+            ? JSON.parse(rawArgs)
+            : (rawArgs as Record<string, string>);
+        if (name) {
+          toolCalls.push({ id: `toolu_txt_${Date.now()}_${toolCalls.length}`, name, args });
+        }
+      } catch {
+        cleaned += rest.slice(0, fullLength);
+      }
+      remaining = rest.slice(fullLength);
+    } else {
+      const startMatch = first.data;
+      const toolName = startMatch[1];
+      const afterPrefix = rest.slice(startMatch[0].length);
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let jsonEndIndex = -1;
+      for (let i = 0; i < afterPrefix.length; i++) {
+        const c = afterPrefix[i];
+        if (escape) { escape = false; continue; }
+        if (c === "\\" && inString) { escape = true; continue; }
+        if (c === '"') { inString = !inString; continue; }
+        if (!inString) {
+          if (c === "{") depth++;
+          else if (c === "}") { depth--; if (depth === 0) { jsonEndIndex = i + 1; break; } }
+        }
+      }
+      if (jsonEndIndex === -1) {
+        state._xmlInvokeBuffer = rest;
+        break;
+      }
+      const jsonStr = afterPrefix.slice(0, jsonEndIndex);
+      const fullLength = startMatch[0].length + jsonEndIndex;
+      try {
+        const args = JSON.parse(jsonStr) as Record<string, string>;
+        toolCalls.push({ id: `toolu_txt_${Date.now()}_${toolCalls.length}`, name: toolName, args });
+      } catch {
+        cleaned += rest.slice(0, fullLength);
+      }
+      remaining = rest.slice(fullLength);
+    }
+  }
+
+  return { cleaned, toolCalls };
+}
 
 // Helper: stop thinking block if started
 function stopThinkingBlock(state, results) {
@@ -80,6 +216,8 @@ export function openaiToClaudeResponse(chunk, state) {
     }
     state.model = chunk.model || "unknown";
     state.nextBlockIndex = 0;
+    state._pendingXmlToolCalls = [];
+    state._xmlInvokeBuffer = "";
     results.push({
       type: "message_start",
       message: {
@@ -108,7 +246,11 @@ export function openaiToClaudeResponse(chunk, state) {
     }
     if (parts.length > 0) reasoningContent = parts.join("");
   }
-  if (reasoningContent) {
+  if (
+    typeof reasoningContent === "string" &&
+    reasoningContent !== "" &&
+    !isInternalReasoningPlaceholder(reasoningContent)
+  ) {
     stopTextBlock(state, results);
 
     if (!state.thinkingBlockStarted) {
@@ -128,41 +270,63 @@ export function openaiToClaudeResponse(chunk, state) {
     });
   }
 
-  // Handle regular content. Guard against empty / whitespace-only leading deltas
-  // so a tool-only turn never emits a visible empty text block ("(empty
-  // response)"). The `if (delta?.content)` guard only filtered "" / null; some
-  // OpenAI-compatible upstreams send a truthy-but-blank delta (e.g. "\n" / " ")
-  // before their tool_calls, which opened an empty text block. Mirror + harden
-  // the gemini-to-claude non-empty-text guard: defer opening the FIRST text block
-  // until real (non-whitespace) content arrives, buffering leading whitespace so
-  // a normal text turn still streams byte-identical text.
-  if (typeof delta?.content === "string" && delta.content.length > 0) {
-    if (!state.textBlockStarted && delta.content.trim().length === 0) {
-      // Leading whitespace before any real text (or on a tool-only turn): buffer,
-      // do not open. Flushed with the first real text; dropped if the turn is
-      // tool-only.
-      state.pendingLeadingWhitespace = (state.pendingLeadingWhitespace || "") + delta.content;
-    } else {
-      stopThinkingBlock(state, results);
+  // Handle regular content — strip the internal reasoning placeholder if
+  // the model echoed it through ordinary content (#8081). Only the content
+  // block emission is skipped when nothing meaningful remains; the chunk
+  // may still carry tool_calls / finish_reason below, which must still run.
+  if (delta?.content) {
+    const strippedContent = stripInternalReasoningPlaceholder(delta.content);
+    if (strippedContent) {
+      // Check for XML <invoke> blocks that some models emit instead of JSON tool_calls
+      const { cleaned, toolCalls: xmlToolCalls } = extractXmlInvokeBlocks(strippedContent, state);
 
-      if (!state.textBlockStarted) {
-        state.textBlockIndex = state.nextBlockIndex++;
-        state.textBlockStarted = true;
-        state.textBlockClosed = false;
-        results.push({
-          type: "content_block_start",
-          index: state.textBlockIndex,
-          content_block: { type: "text", text: "" },
-        });
+      // Accumulate extracted tool calls for emission at finish
+      if (xmlToolCalls.length > 0) {
+        // Close any ongoing text block before tool calls
+        stopTextBlock(state, results);
+        state._pendingXmlToolCalls.push(...xmlToolCalls);
       }
 
-      const buffered = state.pendingLeadingWhitespace || "";
-      state.pendingLeadingWhitespace = "";
-      results.push({
-        type: "content_block_delta",
-        index: state.textBlockIndex,
-        delta: { type: "text_delta", text: buffered + delta.content },
-      });
+      // Guard against empty / whitespace-only leading text so a tool-only turn
+      // never emits a visible empty text block ("(empty response)"). Some
+      // OpenAI-compatible upstreams send a truthy-but-blank delta (e.g. "\n" / " ")
+      // before their tool_calls (or before/around an XML invoke block), which
+      // opened an empty text block. Mirror + harden the gemini-to-claude
+      // non-empty-text guard: defer opening the FIRST text block until real
+      // (non-whitespace) `cleaned` text arrives, buffering leading whitespace so
+      // a normal text turn still streams byte-identical text. `cleaned` (not the
+      // raw delta) is what gets buffered/emitted, since XML invoke blocks are
+      // never part of the visible text.
+      if (!cleaned) {
+        // All content was XML invoke blocks — skip text block entirely
+        // (tool calls will be emitted at finish)
+      } else if (!state.textBlockStarted && cleaned.trim().length === 0) {
+        // Leading whitespace before any real text (or on a tool-only turn): buffer,
+        // do not open. Flushed with the first real text; dropped if the turn is
+        // tool-only.
+        state.pendingLeadingWhitespace = (state.pendingLeadingWhitespace || "") + cleaned;
+      } else {
+        stopThinkingBlock(state, results);
+
+        if (!state.textBlockStarted) {
+          state.textBlockIndex = state.nextBlockIndex++;
+          state.textBlockStarted = true;
+          state.textBlockClosed = false;
+          results.push({
+            type: "content_block_start",
+            index: state.textBlockIndex,
+            content_block: { type: "text", text: "" },
+          });
+        }
+
+        const buffered = state.pendingLeadingWhitespace || "";
+        state.pendingLeadingWhitespace = "";
+        results.push({
+          type: "content_block_delta",
+          index: state.textBlockIndex,
+          delta: { type: "text_delta", text: buffered + cleaned },
+        });
+      }
     }
   }
 
@@ -175,7 +339,7 @@ export function openaiToClaudeResponse(chunk, state) {
       const incomingName = (() => {
         let n = tc.function?.name || "";
         if (n.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)) n = n.slice(CLAUDE_OAUTH_TOOL_PREFIX.length);
-        return n;
+        return restoreClaudeToolName(n, state.toolNameMap);
       })();
 
       // A tool call is identified by its id. Some OpenAI-compatible upstreams
@@ -187,8 +351,9 @@ export function openaiToClaudeResponse(chunk, state) {
         stopThinkingBlock(state, results);
         stopTextBlock(state, results);
 
+        const sanitizedId = sanitizeToolId(tc.id);
         state.toolCalls.set(idx, {
-          id: tc.id,
+          id: sanitizedId,
           name: incomingName,
           blockIndex: state.nextBlockIndex++,
           // Shimmed tools buffer their raw args and emit a single corrected
@@ -202,7 +367,7 @@ export function openaiToClaudeResponse(chunk, state) {
       const toolInfo = state.toolCalls.get(idx);
       if (toolInfo) {
         // Capture a late-arriving id or name (streamed after the initial chunk).
-        if (tc.id && !toolInfo.id) toolInfo.id = tc.id;
+        if (tc.id && !toolInfo.id) toolInfo.id = sanitizeToolId(tc.id);
         if (incomingName && !toolInfo.startEmitted && !toolInfo.name) {
           toolInfo.name = incomingName;
           toolInfo.shimmed = hasToolCallShim(incomingName);
@@ -309,16 +474,48 @@ export function openaiToClaudeResponse(chunk, state) {
       });
     }
 
+    // Emit any XML-extracted tool calls (from models like Dracarys that
+    // emit <invoke> blocks in content instead of JSON tool_calls in delta)
+    const xmlToolCalls = state._pendingXmlToolCalls || [];
+    for (const tc of xmlToolCalls) {
+      const blockIndex = state.nextBlockIndex++;
+      results.push({
+        type: "content_block_start",
+        index: blockIndex,
+        content_block: {
+          type: "tool_use",
+          id: tc.id,
+          name: restoreClaudeToolName(
+            tc.name,
+            state.toolNameMap instanceof Map ? state.toolNameMap : null
+          ),
+          input: tc.args,
+        },
+      });
+      results.push({
+        type: "content_block_stop",
+        index: blockIndex,
+      });
+    }
+
+    // Override finish_reason to tool_use if XML tool calls were found
+    const overrideFinishReason = xmlToolCalls.length > 0 ? "tool_calls" : choice.finish_reason;
+
     // Reasoning-only / content-less finish guard. If the whole turn produced a
-    // thinking block (or nothing) but NO visible text block and NO tool_use, a
-    // Claude client renders it as "(empty response)". This happens with terse
-    // local models (e.g. Ornith) that put everything into reasoning_content and
-    // then finish (stop or length-truncated mid-reasoning) without emitting any
-    // content or tool call. Emit a minimal, non-empty text block so the turn
-    // always carries something renderable. `textBlockIndex` is assigned only when
-    // a real (non-whitespace) text block is opened, so this fires iff no visible
+    // thinking block (or nothing) but NO visible text block and NO tool_use
+    // (native OR XML-extracted), a Claude client renders it as "(empty
+    // response)". This happens with terse local models (e.g. Ornith) that put
+    // everything into reasoning_content and then finish (stop or
+    // length-truncated mid-reasoning) without emitting any content or tool
+    // call. Emit a minimal, non-empty text block so the turn always carries
+    // something renderable. `textBlockIndex` is assigned only when a real
+    // (non-whitespace) text block is opened, so this fires iff no visible
     // content was ever produced this turn.
-    if (state.textBlockIndex === undefined && state.toolCalls.size === 0) {
+    if (
+      state.textBlockIndex === undefined &&
+      state.toolCalls.size === 0 &&
+      xmlToolCalls.length === 0
+    ) {
       const placeholderIndex = state.nextBlockIndex++;
       results.push({
         type: "content_block_start",
@@ -337,13 +534,13 @@ export function openaiToClaudeResponse(chunk, state) {
     }
 
     // Mark finish for later usage injection in stream.js
-    state.finishReason = choice.finish_reason;
+    state.finishReason = overrideFinishReason;
 
     // Use tracked usage (will be estimated in stream.js if not valid)
     const finalUsage = state.usage || { input_tokens: 0, output_tokens: 0 };
     results.push({
       type: "message_delta",
-      delta: { stop_reason: convertFinishReason(choice.finish_reason) },
+      delta: { stop_reason: convertFinishReason(overrideFinishReason) },
       usage: finalUsage,
     });
     results.push({ type: "message_stop" });

@@ -52,6 +52,7 @@ test("Gemini non-stream: thought signature is stored under <connectionId>:<toolC
     FORMATS.GEMINI,
     FORMATS.OPENAI,
     null,
+    null,
     { signatureNamespace: connectionId }
   );
 
@@ -74,6 +75,7 @@ test("Gemini non-stream: signature from a preceding thinking-only part is namesp
     ]),
     FORMATS.GEMINI,
     FORMATS.OPENAI,
+    null,
     null,
     { signatureNamespace: connectionId }
   );
@@ -99,6 +101,7 @@ test("Gemini non-stream: stored signature round-trips to the next request turn",
     ]),
     FORMATS.ANTIGRAVITY,
     FORMATS.OPENAI,
+    null,
     null,
     { signatureNamespace: connectionId }
   );

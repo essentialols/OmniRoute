@@ -12,37 +12,37 @@
 
 # 🚀 OmniRoute — 免费 AI 网关
 
-### 编码，永无止境。通过一个端点，让所有 AI 工具直连 **236 家服务商** — **50+ 家免费**。
+### 面对服务商限额仍可继续编码。一个端点连接 **329 个服务商目录项**，其中 **155 个标记为免费／免验证**。
 
 **将 Claude Code、Codex、Cursor、Cline、Copilot 和 Antigravity 接入免费的 Claude / GPT / Gemini。自动容灾，无感切换。**
 
 <br/>
 
-**RTK + Caveman 压缩引擎，Token 节省 15–95%。从此告别用量限制。**
+**RTK + Caveman 压缩引擎可节省 15–95% 的适用 Token；实际效果取决于内容与配置。**
 
 <br/>
 
-**约 1.6B 可统计免费 Token / 月** — 计入注册奖励后，首月最高可达 **~2.1B** — 聚合各家免费层配额，外加一众永久免费、不限量的服务商；再叠加上述压缩引擎，每一枚 Token 都物超所值。([统计方法 →](../../reference/FREE_TIERS.md#tldr--how-much-free-inference-does-omniroute-actually-aggregate))
+**约 1.53B 可统计的循环免费 Token / 月** — 计入一次性注册奖励后，首月约 **~2.15B**。另有未公布 Token 上限但受速率、并发、账户、地区、KYC 与服务条款限制的访问，单独列示而不计入标题数字。([统计方法 →](../../reference/FREE_TIERS.md#tldr--how-much-free-inference-does-omniroute-actually-aggregate))
 
 <br/>
 
-[![231 AI Providers](https://img.shields.io/badge/231-AI_Providers-6C5CE7?style=for-the-badge)](#-231-ai-providers--50-free)
-[![50+ Free](https://img.shields.io/badge/50%2B-Free_Tiers-00B894?style=for-the-badge)](#-231-ai-providers--50-free)
-[![1.6B Free Tokens/mo](https://img.shields.io/badge/1.6B-Free_Tokens%2Fmo-00B894?style=for-the-badge)](../../reference/FREE_TIERS.md)
+[![329 AI Providers](https://img.shields.io/badge/329-AI_Providers-6C5CE7?style=for-the-badge)](#-329-ai-providers--155-freeno-auth)
+[![155 Free/No-Auth](https://img.shields.io/badge/155-Free%2FNo--Auth-00B894?style=for-the-badge)](#-329-ai-providers--155-freeno-auth)
+[![1.53B Free Tokens/mo](https://img.shields.io/badge/1.53B-Free_Tokens%2Fmo-00B894?style=for-the-badge)](../../reference/FREE_TIERS.md)
 [![Token Savings](https://img.shields.io/badge/up_to_95%25-Token_Savings-E17055?style=for-the-badge)](#%EF%B8%8F-save-1595-tokens--automatically)
-[![18 Strategies](https://img.shields.io/badge/18-Routing_Strategies-0984E3?style=for-the-badge)](#-combos--the-flagship)
+[![19 Strategies](https://img.shields.io/badge/19-Routing_Strategies-0984E3?style=for-the-badge)](#-combos--the-flagship)
 [![$0 to start](https://img.shields.io/badge/%240-To_Start-FDCB6E?style=for-the-badge&logoColor=black)](#-quick-start)
 
 <br/>
 
 ### 💬 加入社区
 
-[![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/EkzRkpzKYt)
+[![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/U47eFqAXCn)
 [![Telegram](https://img.shields.io/badge/Telegram-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/omnirouteOficial)
 [![WhatsApp Global](https://img.shields.io/badge/WhatsApp_Global-25D366?style=for-the-badge&logo=whatsapp&logoColor=white)](https://chat.whatsapp.com/JI7cDQ1GyaiDHhVBpLxf8b?mode=gi_t)
-[![WhatsApp Brasil](https://img.shields.io/badge/WhatsApp_Brasil-25D366?style=for-the-badge&logo=whatsapp&logoColor=white)](https://chat.whatsapp.com/BTGJXIyjeNIIgExvTMGGhI)
+[![WhatsApp Brasil](https://img.shields.io/badge/WhatsApp_Brasil-25D366?style=for-the-badge&logo=whatsapp&logoColor=white)](https://chat.whatsapp.com/LTSpdFhXTxjH4R6CCNiKWz)
 
-**疑难解答、服务商攻略、路线图与支持 → [Discord](https://discord.gg/EkzRkpzKYt) · [Telegram](https://t.me/omnirouteOficial) · WhatsApp [🌍 全球](https://chat.whatsapp.com/JI7cDQ1GyaiDHhVBpLxf8b?mode=gi_t) / [🇧🇷 巴西](https://chat.whatsapp.com/BTGJXIyjeNIIgExvTMGGhI)**
+**疑难解答、服务商攻略、路线图与支持 → [Discord](https://discord.gg/U47eFqAXCn) · [Telegram](https://t.me/omnirouteOficial) · WhatsApp [🌍 全球](https://chat.whatsapp.com/JI7cDQ1GyaiDHhVBpLxf8b?mode=gi_t) / [🇧🇷 巴西](https://chat.whatsapp.com/LTSpdFhXTxjH4R6CCNiKWz)**
 
 <br/>
 
@@ -66,14 +66,14 @@
 
 <br/>
 
-[**🚀 快速开始**](#-quick-start) • [**🎯 Combo**](#-combos--the-flagship) • [**🌐 服务商**](#-231-ai-providers--50-free) • [**🔌 CLI 与 MCP**](#-full-cli--a2a--mcp) • [**🗜️ 压缩**](#%EF%B8%8F-save-1595-tokens--automatically) • [**🌍 官网**](https://omniroute.online)
+[**🚀 快速开始**](#-quick-start) • [**🎯 Combo**](#-combos--the-flagship) • [**🌐 服务商**](#-329-ai-providers--155-freeno-auth) • [**🔌 CLI 与 MCP**](#-full-cli--a2a--mcp) • [**🗜️ 压缩**](#%EF%B8%8F-save-1595-tokens--automatically) • [**🌍 官网**](https://omniroute.online)
 
 [💥 我们的承诺](#-the-promise) • [🤔 为什么选择 OmniRoute](#-why-omniroute) • [🏆 核心优势](#-what-sets-omniroute-apart) • [🤖 兼容的编程工具](#-compatible-clis--coding-agents) • [🖥️ 运行平台](#%EF%B8%8F-where-omniroute-runs--anywhere) • [🔒 隐私优先](#-private--local-first) • [🎬 实机演示](#-omniroute-in-action) • [📚 探索更多](#-explore-more) • [📧 支持](#-support--community)
 
 </div>
 
 <div align="center">
- <b>🌐 支持 41+ 种语言</b>
+ <b>🌐 支持 43 种语言环境</b>
  <table>
   <tr>
     <td align="center"><a href="README.md">🇺🇸</a></td>
@@ -121,15 +121,15 @@
 
 <div align="center">
 
-# 💰 约 1.6B 免费 Token / 月
+# 💰 约 1.53B 免费 Token / 月
 
 </div>
 
-> 手动凑各家免费额度有多痛苦 — 数十套 SDK、数十个速率限制，根本搞不清到底还剩多少。OmniRoute 将 **40+ 服务商池 / 500+ 模型**的**可核实**免费层聚合为一个真实的统一数字，并在控制台实时展示 (`/dashboard/free-tiers`)。
+> 手动凑各家免费额度有多痛苦 — 数十套 SDK、数十个速率限制，根本搞不清到底还剩多少。OmniRoute 当前公开 **155 个标记为免费／免验证的目录项**；其中严格量化的预算覆盖 **43 个服务商池 / 522 个模型预算项**，并在控制台实时展示 (`/dashboard/free-tiers`)。
 >
-> - **约 1.6B 免费 Token / 月**（稳定值） — 注册奖励加持下，首月最高约 **2.1B**。
+> - **约 1.53B 免费 Token / 月**（循环值） — 计入一次性注册奖励后，首月约 **2.15B**。
 > - **去重统计，诚实透明** — 每个共享免费池只计**一次**，标题数字不被速率上限注水。若以全天候速率上限累算会得出 ~10B 的虚假数据，我们从不发布此类数字。
-> - **外加不可计数的部分** — 永久免费、无 Token 上限的服务商（SiliconFlow、Z.AI GLM-Flash、Kilo、OpenCode Zen…）以及 **$10 的 OpenRouter 充值**可解锁 **+24M/月**，二者独立列示，绝不混入标题数字。
+> - **外加不可计数的部分** — 没有公布 Token 上限、但仍受速率／并发等限制的服务商（SiliconFlow、Z.AI GLM-Flash、Kilo、OpenCode Zen…），以及 **$10 的 OpenRouter 一次性充值**可解锁 **+24M/月**；两者独立列示，绝不混入标题数字。
 > - **逐模型明细**、当月**已用 / 剩余**实时显示，以及每家服务商的透明**条款标注**。
 
 ![Free-Tier Budget card (preview mockup)](../../screenshots/free-tier-budget-card.svg)
@@ -144,18 +144,18 @@
 
 </div>
 
-> 一个端点。**236 家服务商。** 编码不止步 — 让 OmniRoute 帮你选出最便宜且可用的那个。
+> 一个端点。**329 个服务商目录项。** OmniRoute 尝试选择最便宜且符合条件的可用路由。
 
 <table>
   <tr>
-    <td width="33%" valign="top"><b>🚫 永不触达限制</b><br/><sub>横跨 236 家服务商的毫秒级自动切换。配额耗尽？下一家即刻接管 — 零停机。</sub></td>
+    <td width="33%" valign="top"><b>🛡️ 弹性回退</b><br/><sub>上游或配额失败时尝试下一条合格路由；实际可用性取决于服务商与候选路由。</sub></td>
     <td width="33%" valign="top"><b>💸 Token 节省高达 95%</b><br/><sub>RTK + Caveman 级联压缩可削减 15–95% 的可压缩 Token（工具密集型会话平均约 89%）。</sub></td>
-    <td width="33%" valign="top"><b>🆓 零元起步</b><br/><sub>50+ 家服务商提供免费层，其中 11 家永久免费（Kiro、Qoder、Pollinations、LongCat…）。无需绑卡。</sub></td>
+    <td width="33%" valign="top"><b>🆓 零元起步</b><br/><sub>155 个目录项标记为免费／免验证；配额、账户、地区、KYC 与条款因服务商而异。</sub></td>
   </tr>
   <tr>
     <td width="33%" valign="top"><b>🔌 所有工具一网打尽</b><br/><sub>16+ 款编程助手 — Claude Code、Codex、Cursor、Cline、Copilot、Antigravity — 一套配置全搞定。</sub></td>
     <td width="33%" valign="top"><b>🧩 一个端点通吃</b><br/><sub>OpenAI ↔ Claude ↔ Gemini ↔ Responses API 无缝翻译。任意工具指向 <code>/v1</code> 即开即用。</sub></td>
-    <td width="33%" valign="top"><b>🛡️ 生产级品质</b><br/><sub>熔断器、TLS 指纹伪装、MCP（87 工具）、A2A、记忆系统、安全护栏、评估框架。14,965 项测试。</sub></td>
+    <td width="33%" valign="top"><b>🛡️ 生产级品质</b><br/><sub>熔断器、TLS 指纹伪装、MCP（107 工具、32 权限域）、A2A、记忆系统、安全护栏、评估框架。</sub></td>
   </tr>
 </table>
 
@@ -189,7 +189,7 @@
                           ▼
 ┌──────────────────────────────────────────────────────────┐
 │                  OmniRoute — 智能路由中枢                   │
-│  RTK + Caveman 压缩 · 17 种路由策略                          │
+│  RTK + Caveman 压缩 · 19 种路由策略                          │
 │  熔断器 · TLS 指纹伪装 · MCP · A2A · 安全护栏                 │
 └─────────────────────────┬──────────────────────────────────┘
         ┌─────────────┬────┴────────┬─────────────┐
@@ -197,7 +197,7 @@
       订阅          API Key      廉价          免费
    Claude Code,     DeepSeek,      GLM $0.5,      Kiro, Qoder,
    Codex, Copilot   Groq, xAI      MiniMax $0.2   Pollinations
-   配额耗尽？ ───▶   预算触顶？ ─▶  预算触顶？ ─▶ 永久在线
+   配额耗尽？ ───▶   预算触顶？ ─▶  预算触顶？ ─▶ 受上游限制
 ```
 
 </div>
@@ -227,7 +227,7 @@
 
 ##
 
-### 🔀 或亲手定制 — 17 种路由策略
+### 🔀 或亲手定制 — 19 种路由策略
 
 | 目标                      | 对应策略 / 组合                                   |
 | ------------------------- | ------------------------------------------------- |
@@ -235,12 +235,13 @@
 | ⚖️ 跨账号均衡负载         | `round-robin` · `weighted` · `p2c` · `least-used` |
 | 💸 永远选最便宜的可行模型 | `cost-optimized` · `auto/cheap`                   |
 | 🧠 模型间接力传递长上下文 | `context-relay` · `context-optimized`             |
+| 🎯 提高提示词缓存命中率   | `cache-optimized`                                 |
 | 🎲 随机 / 隐私路由        | `random` · `strict-random`                        |
 | 🧬 多模型并行 + 裁判裁决  | `fusion`                                          |
 | 📊 按剩余配额余量路由     | `reset-window` · `headroom`                       |
-| 🤖 智能自动               | `auto`（9 维度评分）· `lkgp` · `reset-aware`      |
+| 🤖 智能自动               | `auto`（13 因素评分）· `lkgp` · `reset-aware`     |
 
-<sub>Auto-Combo 引擎基于 **9 个维度**（健康度、配额、成本、延迟、成功率、新鲜度…）逐候选打分 — 详见 [`docs/routing/AUTO-COMBO.md`](../../routing/AUTO-COMBO.md)。</sub>
+<sub>Auto-Combo 引擎基于 **13 个因素**（健康度、配额、成本、延迟、成功率、新鲜度、缓存亲和度…）逐候选打分 — 详见 [`docs/routing/AUTO-COMBO.md`](../../routing/AUTO-COMBO.md)。</sub>
 
 ##
 
@@ -257,8 +258,8 @@ Combo: "always-on"                         策略: priority
   1. cc/claude-opus-4-7   ← 订阅（先用满）
   2. cx/gpt-5.5           ← 第二订阅
   3. glm/glm-5.1          ← 廉价备选 ($0.5/1M)
-  4. kr/claude-sonnet-4.5 ← 免费、无限（永不断线）
-结论: 四层容灾 = 零停机
+  4. kr/claude-sonnet-4.5 ← 列入免费访问；账户与速率限制适用
+结论: 四层回退可提高韧性；不保证上游持续可用
 ```
 
 <sub>📖 [Auto-Combo 引擎](../../routing/AUTO-COMBO.md) · [容灾指南](../../architecture/RESILIENCE_GUIDE.md)</sub>
@@ -271,20 +272,20 @@ Combo: "always-on"                         策略: priority
 
 </div>
 
-| 功能                           | OmniRoute                                              | 其他路由方案 |
-| ------------------------------ | ------------------------------------------------------ | ------------ |
-| 🌐 服务商数量                  | **231**                                                | 20–100       |
-| 🆓 免费服务商                  | **50+ （其中 11 家永久免费）**                         | 1–5          |
-| 🔀 路由策略                    | **17 种**（优先级、加权、成本优先、上下文中继、融合…） | 1–3          |
-| 🗜️ Token 压缩                  | **RTK + Caveman 级联（15–95%）**                       | 无 / 20–40%  |
-| 🧰 内置 MCP 服务器             | **87 个工具、3 种传输、30 个权限域**                   | 少见         |
-| 🤝 A2A 代理协议                | **6 项技能、JSON-RPC 2.0**                             | 无           |
-| 🧠 记忆系统（FTS5 + 向量）     | **原生支持**                                           | 少见         |
-| 🛡️ 安全护栏（PII、注入、视觉） | **原生支持**                                           | 少见         |
-| ☁️ 云代理                      | **Codex、Devin、Jules**                                | 无           |
-| 🥷 TLS 指纹伪装                | **JA3/JA4 基于 wreq-js**                               | 无           |
-| 🖥️ 多平台                      | **Web · 桌面 · Termux · PWA**                          | 仅 Web       |
-| 🌍 国际化                      | **42 种语言**                                          | 0–4          |
+| 功能                           | OmniRoute                                                        | 其他路由方案 |
+| ------------------------------ | ---------------------------------------------------------------- | ------------ |
+| 🌐 服务商数量                  | **329 个目录项**                                                 | 20–100       |
+| 🆓 免费／免验证                | **155 个目录项**                                                 | 1–5          |
+| 🔀 路由策略                    | **19 种**（优先级、加权、成本优先、缓存优化、上下文中继、融合…） | 1–3          |
+| 🗜️ Token 压缩                  | **RTK + Caveman 级联（15–95%）**                                 | 无 / 20–40%  |
+| 🧰 内置 MCP 服务器             | **107 个工具、3 种传输、32 个权限域**                            | 少见         |
+| 🤝 A2A 代理协议                | **6 项技能、JSON-RPC 2.0**                                       | 无           |
+| 🧠 记忆系统（FTS5 + 向量）     | **原生支持**                                                     | 少见         |
+| 🛡️ 安全护栏（PII、注入、视觉） | **原生支持**                                                     | 少见         |
+| ☁️ 云代理                      | **Codex、Cursor、Devin、Jules**                                  | 无           |
+| 🥷 TLS 指纹伪装                | **JA3/JA4 基于 wreq-js**                                         | 无           |
+| 🖥️ 多平台                      | **Web · 桌面 · Termux · PWA**                                    | 仅 Web       |
+| 🌍 国际化                      | **43 种语言环境**                                                | 0–4          |
 
 <sub>📊 与 LiteLLM、OpenRouter、Portkey 的详细对比 → [`docs/comparison/OMNIROUTE_VS_ALTERNATIVES.md`](../../comparison/OMNIROUTE_VS_ALTERNATIVES.md)</sub>
 
@@ -307,7 +308,7 @@ Combo: "always-on"                         策略: priority
 - **💸 全方位成本遥测** — 每个端点上的 `X-OmniRoute-*` 成本/用量响应头（含媒体端点）、非 Token 成本引擎、缓存命中 `X-OmniRoute-Cost-Saved` 响应头，以及每密钥美元消费配额。→ [API 参考](../../reference/API_REFERENCE.md)
 - **🧠 完全可控的记忆系统** — 可选 int8 向量量化（Qdrant + sqlite-vec）、默认关闭记忆、每请求 `x-omniroute-no-memory` 响应头。→ [记忆系统](../../frameworks/MEMORY.md)
 - **🛡️ 安全** — 所有 LLM 路由的提示注入防护（后台有红队测试套件），外加免费的 DuckDuckGo 兜底网页搜索。→ [安全护栏](../../security/GUARDRAILS.md)
-- **🤝 更多服务商与代理** — Cursor Cloud Agent（第四云代理）、CodeBuddy CN（`copilot.tencent.com`）、Google Flow 视频生成服务商、新网关 **DGrid** 和 **Pioneer AI**（Fastino Labs）、入站 **xAI Grok** 翻译器加 **Grok Build (xAI)**（含 OAuth 导入 Token 流程）、GitHub Copilot 服务商的 GPT-4 / GPT-4o-mini、多模型 **Factory Droid**、**ZenMux Free**（会话 Cookie 免费层）、**阿里云 DashScope** 文生视频（`wan2.7-t2v`）、刷新至 236 家服务商的目录（OrcaRouter、Wafer AI、OpenAdapter、dit.ai、TokenRouter…）、Vertex AI 媒体生成（语音/转录/音乐/视频），以及一键从 CLIProxyAPI 导入账号（`~/.cli-proxy-api/`）。→ [服务商](../../reference/PROVIDER_REFERENCE.md)
+- **🤝 更多服务商与代理** — Cursor Cloud Agent（第四云代理）、CodeBuddy CN（`copilot.tencent.com`）、Google Flow 视频生成服务商、新网关 **DGrid** 和 **Pioneer AI**（Fastino Labs）、入站 **xAI Grok** 翻译器加 **Grok Build (xAI)**（含 OAuth 导入 Token 流程）、GitHub Copilot 服务商的 GPT-4 / GPT-4o-mini、多模型 **Factory Droid**、**ZenMux Free**（会话 Cookie 免费层）、**阿里云 DashScope** 文生视频（`wan2.7-t2v`）、刷新至 329 个服务商目录项、Vertex AI 媒体生成（语音/转录/音乐/视频），以及一键从 CLIProxyAPI 导入账号（`~/.cli-proxy-api/`）。→ [服务商](../../reference/PROVIDER_REFERENCE.md)
 - **⚡ 本地性能与基础设施** — 一键本地 Redis 启动器（`omniroute redis up`，含控制台 Redis 面板）、一键 **Cloudflare Workers** 和 **Deno Deploy** 中继部署器（接入代理池），以及可选 Bifrost Go 边车将最热中继路径卸载至 Go 侧（`BIFROST_BASE_URL`，超时自动回退 TypeScript 路径）— 现支持中继后端选择器（`OMNIROUTE_RELAY_BACKEND=ts|bifrost|auto`），`/v1/relay` 端点保持对外稳定接口的同时内部自动择取最快后端。→ [环境配置](../../reference/ENVIRONMENT.md)
 
 <br/>
@@ -350,20 +351,20 @@ Combo: "always-on"                         策略: priority
 
 <div align="center">
 
-# 🌐 231 家 AI 服务商 — 50+ 家免费
+# 🌐 329 个 AI 服务商目录项 — 155 个免费／免验证
 
 </div>
 
-> 开源路由方案中最完整的服务商目录：**236 家服务商**、**50+ 家含免费层**、**11 家永久免费**。
+> 开源路由方案中最完整的服务商目录：**329 个服务商目录项**，其中 **155 个标记为免费／免验证**。该标记不代表永久或无限使用；模型、配额、账户、地区、KYC、隐私条款与服务商政策均可能变化。
 
 <div align="center">
 
-### 🆓 永久免费 — 零元，无需绑卡
+### 🆓 当前有记录的免费访问 — 条款与限额可能变化
 
 <table>
   <tr>
     <td align="center" width="150"><img src="https://img.shields.io/badge/AgentRouter-FF6600?style=flat-square" alt="AgentRouter"/><br/><sub>GPT-5、Claude、Gemini<br/>$100 免费额度</sub></td>
-    <td align="center" width="150"><img src="https://img.shields.io/badge/Qoder_AI-6366F1?style=flat-square" alt="Qoder AI"/><br/><sub>Kimi-K2、DeepSeek-R1<br/>无限免费</sub></td>
+    <td align="center" width="150"><img src="https://img.shields.io/badge/Qoder_AI-6366F1?style=flat-square" alt="Qoder AI"/><br/><sub>Kimi-K2、DeepSeek-R1<br/>免费访问；日限额／速率限制可能适用</sub></td>
     <td align="center" width="150"><img src="https://img.shields.io/badge/Pollinations-10B981?style=flat-square" alt="Pollinations"/><br/><sub>GPT-5、Claude、Llama 4<br/>无需密钥</sub></td>
     <td align="center" width="150"><img src="https://img.shields.io/badge/LongCat-FF7A00?style=flat-square" alt="LongCat"/><br/><sub>LongCat-2.0<br/>一次性 10M Token (需 KYC) 🔑</sub></td>
   </tr>
@@ -462,12 +463,12 @@ Token 权限域为 `read` / `write` / `admin`；涉及进程启动的路由仅�
 
 通过 **MCP** 或 **A2A** 协议暴露 OmniRoute，任何智能代理都能获得网关的完整控制权 — 路由、服务商、Combo、缓存、压缩、记忆 — 全自主运行。
 
-| 协议                | 端点                                            | 用途                                                |
-| ------------------- | ----------------------------------------------- | --------------------------------------------------- |
-| 🧰 **MCP（stdio）** | `omniroute --mcp`                               | 接入 Claude Desktop、Cursor 等各种 MCP 客户端       |
-| 🌊 **MCP（HTTP）**  | `http://localhost:20128/api/mcp/stream`         | 远程 MCP — **87 个工具**、30 个权限域、完整审计追踪 |
-| 📡 **MCP（SSE）**   | `http://localhost:20128/api/mcp/sse`            | 流式 MCP 传输                                       |
-| 🤝 **A2A**          | `http://localhost:20128/.well-known/agent.json` | 代理间通信，**JSON-RPC 2.0** + SSE，6 项技能        |
+| 协议                | 端点                                            | 用途                                                 |
+| ------------------- | ----------------------------------------------- | ---------------------------------------------------- |
+| 🧰 **MCP（stdio）** | `omniroute --mcp`                               | 接入 Claude Desktop、Cursor 等各种 MCP 客户端        |
+| 🌊 **MCP（HTTP）**  | `http://localhost:20128/api/mcp/stream`         | 远程 MCP — **107 个工具**、32 个权限域、完整审计追踪 |
+| 📡 **MCP（SSE）**   | `http://localhost:20128/api/mcp/sse`            | 流式 MCP 传输                                        |
+| 🤝 **A2A**          | `http://localhost:20128/.well-known/agent.json` | 代理间通信，**JSON-RPC 2.0** + SSE，6 项技能         |
 
 ```bash
 # 通过 MCP 将 OmniRoute 完整工具集赋予 Claude Code：
@@ -658,18 +659,22 @@ devbox run npm run dev
 **🦭 Podman**
 
 ```bash
-# 1. 构建镜像
-podman build --target runner-base -t omniroute:base .
+# 1. 准备绑定挂载的数据目录
+mkdir -p data
 
-# 2. 修复无 Root 权限 Podman 的数据目录权限
-mkdir -p data && podman unshare chown 1000:1000 ./data
+# 2. 仅限 Linux + 本地无根 Podman（切勿用于远程 Podman Machine 客户端）
+podman unshare chown 1000:1000 ./data
 
-# 3. 在 .env 中设置运行时，然后运行（参见 contrib/podman/ 中的 Quadlet）
+# 3. 设置运行时提示，构建本地 Compose 镜像并启动
 echo "CONTAINER_HOST=podman" >> .env
-podman compose --profile base up -d
+podman compose --profile base up -d --build
 ```
 
-📖 [Podman 指南](../../contrib/podman/README.md) — Quadlet 设置、podman-compose、Quadlet。
+在 macOS 或 Windows 上，Podman 使用远程 Podman Machine：请跳过
+`podman unshare`，并按照[针对不同拓扑的数据目录说明](../../../contrib/podman/README.md#data-directory-permissions-by-topology)操作。
+
+📖 [Podman 指南](../../../contrib/podman/README.md) — Compose 构建、Podman Machine
+以及仅限 Linux/systemd 的 Quadlet 设置。
 
 <br/>
 
@@ -712,33 +717,33 @@ podman compose --profile base up -d
 </div>
 
 <details>
-<summary><b>💰 费用一览与零元免费栈（11 家服务商）</b></summary>
+<summary><b>💰 费用一览与免费访问示例（条款与限额可能变化）</b></summary>
 
 <br/>
 
-| 层次                       | 举例                                     | 成本       |
-| -------------------------- | ---------------------------------------- | ---------- |
-| 💳 **订阅制**              | Claude Code Pro / Codex / Copilot        | $10–200/月 |
-| 🔑 **API Key（含免费层）** | NVIDIA NIM、Cerebras、Groq               | **免费**   |
-| 💰 **廉价**                | GLM-5 $0.5/1M · MiniMax M2.5 $0.3/1M     | 几分钱     |
-| 🆓 **永久免费**            | Kiro、Qoder、Qwen、Pollinations、LongCat | **$0**     |
+| 层次                       | 举例                                     | 成本                          |
+| -------------------------- | ---------------------------------------- | ----------------------------- |
+| 💳 **订阅制**              | Claude Code Pro / Codex / Copilot        | $10–200/月                    |
+| 🔑 **API Key（含免费层）** | NVIDIA NIM、Cerebras、Groq               | **免费**                      |
+| 💰 **廉价**                | GLM-5 $0.5/1M · MiniMax M2.5 $0.3/1M     | 几分钱                        |
+| 🆓 **免费访问／注册额度**  | Kiro、Qoder、Qwen、Pollinations、LongCat | **当前列为 $0；各自限制适用** |
 
-**零元免费栈 — 合并为一条坚不可摧的 Combo：**
+**免费访问示例 — 可合并为一条具有多层回退的 Combo：**
 
-| 服务商            | 前缀        | 免费模型                                        | 配额                |
-| ----------------- | ----------- | ----------------------------------------------- | ------------------- |
-| **Kiro**          | `kr/`       | Claude Sonnet 4.5、Haiku 4.5、Opus 4.6          | 50 积分/月          |
-| **Qoder**         | `if/`       | kimi-k2-thinking、qwen3-coder-plus、deepseek-r1 | ♾️ 无限             |
-| **Qwen**          | `qw/`       | qwen3-coder-plus/flash/next                     | ♾️ 无限             |
-| **Pollinations**  | `pol/`      | GPT-5、Claude、Gemini、DeepSeek、Llama 4        | 无需密钥            |
-| **LongCat**       | `lc/`       | LongCat-2.0                                     | 一次性 10M (需 KYC) |
-| **Cloudflare AI** | `cf/`       | 50+ 模型                                        | 10K 神经元/天       |
-| **NVIDIA NIM**    | `nvidia/`   | 129 个模型                                      | ~40 RPM             |
-| **Cerebras**      | `cerebras/` | Qwen3 235B、GPT-OSS 120B                        | 1M Token/天         |
+| 服务商            | 前缀        | 免费模型                                        | 配额                                  |
+| ----------------- | ----------- | ----------------------------------------------- | ------------------------------------- |
+| **Kiro**          | `kr/`       | Claude Sonnet 4.5、Haiku 4.5、Opus 4.6          | 50 积分/月                            |
+| **Qoder**         | `if/`       | kimi-k2-thinking、qwen3-coder-plus、deepseek-r1 | 未公布 Token 上限；账户／速率限制适用 |
+| **Qwen**          | `qw/`       | qwen3-coder-plus/flash/next                     | 未公布 Token 上限；账户／速率限制适用 |
+| **Pollinations**  | `pol/`      | GPT-5、Claude、Gemini、DeepSeek、Llama 4        | 无需密钥                              |
+| **LongCat**       | `lc/`       | LongCat-2.0                                     | 一次性 10M (需 KYC)                   |
+| **Cloudflare AI** | `cf/`       | 50+ 模型                                        | 10K 神经元/天                         |
+| **NVIDIA NIM**    | `nvidia/`   | 129 个模型                                      | ~40 RPM                               |
+| **Cerebras**      | `cerebras/` | Qwen3 235B、GPT-OSS 120B                        | 1M Token/天                           |
 
 > 💡 控制台上的"费用"是**节省追踪器**，而非账单 — OmniRoute 从不向你收费。显示"$290 总费用"意味着你使用免费模型**省下了 $290**。
 
-📖 完整免费服务商目录 → [`docs/reference/FREE_TIERS.md`](../../reference/FREE_TIERS.md) — 25+ 家服务商、配额、Base URL。
+📖 完整免费服务商目录与计算方法 → [`docs/reference/FREE_TIERS.md`](../../reference/FREE_TIERS.md)。
 
 </details>
 
@@ -747,17 +752,17 @@ podman compose --profile base up -d
 
 <br/>
 
-**永久零元：**
+**当前免费访问示例：**
 
 ```
 1. kr/claude-sonnet-4.5   (Kiro — ~50 积分/月/账号)
-2. if/kimi-k2-thinking    (Qoder — 无限)
+2. if/kimi-k2-thinking    (Qoder — 未公布 Token 上限；限制可能适用)
 3. pol/gpt-5              (Pollinations — 无需密钥)
 4. lc/LongCat-2.0         (一次性 10M 备用，需 KYC)
-压缩方案: aggressive (~50%) → 免费额度翻倍 · 成本: $0/月
+压缩方案: aggressive（约 50% 适用内容节省）· 成本取决于所选上游
 ```
 
-**7×24 无中断：** 串联 2 个订阅 → 廉价 → 免费，五层容灾。
+**提高回退覆盖面：** 串联 2 个订阅 → 廉价 → 免费；上游可用性不受保证。
 **地理封锁区：** 免费服务商 + 全局/按服务商代理 → 从任何国家访问 AI。
 **最大化节省：** 订阅 + 廉价备用 + `ultra` 压缩（~75%）→ 重度用户每月节省约 $150–300。
 
@@ -783,13 +788,13 @@ podman compose --profile base up -d
 
 <br/>
 
-**路由：** 15 种策略 · 任务感知智能路由 · 思考预算控制 · 通配符路由 · 系统提示注入。
+**路由：** 19 种策略 · 任务感知智能路由 · 思考预算控制 · 通配符路由 · 系统提示注入。
 **兼容性：** OpenAI ↔ Claude ↔ Gemini ↔ Responses API · 自动 OAuth 刷新（PKCE，8 家服务商）· 多账号轮询 · Batch + Files API · 实时 OpenAPI 3.0。
-**协议：** MCP（87 工具、3 种传输、30 个权限域）· A2A（JSON-RPC 2.0、SSE、6 项技能）· ACP · 云代理（Codex、Devin、Jules）。
+**协议：** MCP（107 工具、3 种传输、32 个权限域）· A2A（JSON-RPC 2.0、SSE、6 项技能）· ACP · 云代理（Codex、Cursor、Devin、Jules）。
 **插件：** 自定义插件市场（系统配置的注册 URL，带 SSRF 防护拉取）· 安装/启用/禁用 · Notion + Obsidian 知识库集成（WebDAV 文件服务器、仓库搜索、笔记 CRUD）。
 **嵌入式服务：** 一键安装与生命周期管理本地边车服务（CLIProxy、NineRouter）。
 **质量与运维：** 内置 **Evals** 评估框架（黄金标准集：精确匹配/包含/正则/自定义）· 安全护栏（PII 脱敏、注入防护、视觉桥接）· 健康监控面板 · p50/p95/p99 遥测 · Webhooks · 合规审计。
-**AI Agent 技能：** 即插即用的 Markdown 技能清单 — 将任意代理指向 `skills/*/SKILL.md` 清单。43 项可用技能。
+**AI Agent 技能：** 即插即用的 Markdown 技能清单 — 将任意代理指向 `skills/*/SKILL.md` 清单。45 项可用技能（23 API、21 CLI、1 配置）。
 
 📖 [MCP 服务器](../../open-sse/mcp-server/README.md) · [A2A 服务器](../../src/lib/a2a/README.md) · [容灾指南](../../architecture/RESILIENCE_GUIDE.md) · [功能画廊](../../guides/FEATURES.md)
 
@@ -807,9 +812,9 @@ podman compose --profile base up -d
 | `DATA_DIR`        | `~/.omniroute` | 数据库与配置存储路径         |
 
 **OmniRoute 会向我收费吗？** 不会 — 它是运行在你本机的免费开源软件。你只直接向付费服务商付款。OmniRoute 不含任何计费系统。
-**免费服务商真的无限使用吗？** 绝大多数是 — Qoder、Pollinations、LongCat 和 Cloudflare 免费且无单账号额度上限。Kiro 也是免费，但每月每账号约 50 积分封顶。在 Combo 中叠加多家免费服务商，自动容灾确保零元持续可用。
+**免费服务商真的无限使用吗？** 不能这样保证。部分服务商没有公布 Token 上限，但仍可能有速率、并发、账户、模型、地区、KYC、隐私或服务条款限制；LongCat 当前记录的是一次性 10M 注册额度，而非循环无限额度。请以 [`FREE_TIERS.md`](../../reference/FREE_TIERS.md) 和上游条款为准。
 **压缩会影响输出质量吗？** 不会 — 它仅压缩**输入**端；代码、URL、JSON 永远保留不损。
-**AI 服务被封锁的地区能用吗？** 能 — 三级代理 + 1proxy 市场可覆盖全部 236 家服务商。
+**AI 服务被封锁的地区能用吗？** 三级代理与 1proxy 可帮助连接受支持的上游，但并不保证每个地区、账户或全部 329 个目录项都可用。
 
 📖 [用户指南](../../guides/USER_GUIDE.md) · [API 参考](../../reference/API_REFERENCE.md) · [环境配置](../../reference/ENVIRONMENT.md)
 
@@ -938,14 +943,14 @@ podman compose --profile base up -d
 
 ### 🤖 协议与 API
 
-| 文档                                              | 说明                                          |
-| ------------------------------------------------- | --------------------------------------------- |
-| [API 参考](../../reference/API_REFERENCE.md)      | 全端点含示例                                  |
-| [OpenAPI 规范](../../openapi.yaml)                | OpenAPI 3.0 规格                              |
-| [MCP 服务器](../../open-sse/mcp-server/README.md) | 87 个 MCP 工具、IDE 配置、Python/TS/Go 客户端 |
-| [MCP 服务器指南](../../frameworks/MCP-SERVER.md)  | MCP 安装、传输与工具参考                      |
-| [A2A 服务器](../../src/lib/a2a/README.md)         | JSON-RPC 2.0 协议、技能、流式传输、任务管理   |
-| [A2A 服务器指南](../../frameworks/A2A-SERVER.md)  | A2A Agent Card、任务、技能与流式传输          |
+| 文档                                              | 说明                                           |
+| ------------------------------------------------- | ---------------------------------------------- |
+| [API 参考](../../reference/API_REFERENCE.md)      | 全端点含示例                                   |
+| [OpenAPI 规范](../../openapi.yaml)                | OpenAPI 3.0 规格                               |
+| [MCP 服务器](../../open-sse/mcp-server/README.md) | 107 个 MCP 工具、IDE 配置、Python/TS/Go 客户端 |
+| [MCP 服务器指南](../../frameworks/MCP-SERVER.md)  | MCP 安装、传输与工具参考                       |
+| [A2A 服务器](../../src/lib/a2a/README.md)         | JSON-RPC 2.0 协议、技能、流式传输、任务管理    |
+| [A2A 服务器指南](../../frameworks/A2A-SERVER.md)  | A2A Agent Card、任务、技能与流式传输           |
 
 ### 📋 项目与质量
 
@@ -954,7 +959,7 @@ podman compose --profile base up -d
 | [贡献指南](../../CONTRIBUTING.md)              | 开发环境设置与规范             |
 | [更新日志](../../CHANGELOG.md)                 | 完整按版本发布历史             |
 | [安全策略](../../SECURITY.md)                  | 漏洞报告与安全实践             |
-| [i18n 指南](../../guides/I18N.md)              | 40+ 语言支持、翻译流程、RTL    |
+| [i18n 指南](../../guides/I18N.md)              | 43 种语言环境、翻译流程、RTL   |
 | [发布检查清单](../../ops/RELEASE_CHECKLIST.md) | 发布前验证步骤                 |
 | [测试覆盖计划](../../ops/COVERAGE_PLAN.md)     | 测试覆盖策略与 14,965 测试套件 |
 

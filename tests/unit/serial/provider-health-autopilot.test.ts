@@ -114,6 +114,59 @@ test("provider health autopilot reports actionable cooldown and model lockout is
   }
 });
 
+test("provider health autopilot canonicalizes alias-keyed signals while preserving raw breaker actions", async () => {
+  const canonicalProvider = "nous-research";
+  const aliasProvider = "nous";
+  const connection = await createCooldownConnection(canonicalProvider);
+  for (let failure = 0; failure < 20; failure += 1) {
+    accountFallback.recordProviderFailure(aliasProvider);
+  }
+  accountFallback.lockModel(
+    aliasProvider,
+    String(connection.id),
+    "alias-locked-model",
+    "quota",
+    60_000,
+    {}
+  );
+
+  try {
+    const report = await autopilot.buildProviderHealthAutopilotReport({
+      provider: aliasProvider,
+      includeHealthy: true,
+    });
+    assert.equal(report.providers.length, 1);
+    const provider = report.providers[0];
+    assert.equal(provider.provider, canonicalProvider);
+    assert.equal(provider.signals.connections.total, 1);
+    assert.equal(provider.signals.modelLockouts, 1);
+
+    const clearBreaker = findAction(report, "clear_provider_breaker");
+    assert.ok(clearBreaker);
+    assert.equal(clearBreaker.target.provider, aliasProvider);
+
+    const applied = await autopilot.executeProviderHealthAutopilotAction({
+      type: clearBreaker.type,
+      target: clearBreaker.target,
+      preconditionsHash: clearBreaker.preconditionsHash,
+      confirm: true,
+    });
+    assert.equal(applied.status, 200);
+
+    const afterReset = await autopilot.buildProviderHealthAutopilotReport({
+      provider: aliasProvider,
+      includeHealthy: true,
+    });
+    assert.equal(
+      afterReset.providers[0].issues.some((issue) => issue.kind === "provider_circuit_open"),
+      false
+    );
+  } finally {
+    accountFallback.clearModelLock(aliasProvider, String(connection.id), "alias-locked-model");
+    accountFallback.clearProviderFailure(aliasProvider);
+  }
+});
+
 test("provider health autopilot action clears cooldown with stale-state protection", async () => {
   await enableManagementAuth();
   const connection = await createCooldownConnection();

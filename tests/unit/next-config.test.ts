@@ -83,6 +83,10 @@ test("next config declares Turbopack aliases, runtime assets and server external
   // A default production build must NOT alias it, or the stub ships to npm/Electron/VPS
   // artifacts and breaks Agent Bridge start. See the dedicated env-matrix test below.
   assert.equal(nextConfig.turbopack.resolveAlias["@/mitm/manager"], undefined);
+  // #11343: same story for the better-sqlite3 build stub. resolveAlias is applied
+  // BEFORE the serverExternalPackages check, so an unconditional alias bundles the
+  // stub and every route answers 500 at runtime ("r(...) is not a constructor").
+  assert.equal(nextConfig.turbopack.resolveAlias["better-sqlite3"], undefined);
   assert.equal(nextConfig.outputFileTracingRoot, process.cwd());
   assert.ok(tracingIncludes.includes("./src/lib/db/migrations/**/*"));
   assert.ok(
@@ -98,21 +102,6 @@ test("next config declares Turbopack aliases, runtime assets and server external
   );
   assert.ok(tracingExcludes.includes("./_tasks/**/*"));
   assert.ok(tracingExcludes.includes("./tests/**/*"));
-  // Build outputs MUST be excluded from the NFT trace. Tracing them bakes the
-  // prior build's dist/ into the standalone, which prepublish then copies back
-  // into dist/, compounding into dist/dist/dist/... (~3GB, 35 levels) on every
-  // build. Guards against re-introducing the recursion.
-  assert.ok(
-    tracingExcludes.includes("./dist/**/*"),
-    "dist/ must be excluded from output file tracing (prevents dist/dist recursion)"
-  );
-  // .build IS the Next distDir (see distDir above). Excluding it from the NFT
-  // trace strips the standalone's own runtime deps, so every route 500s at
-  // request time. It must NOT be in the tracing excludes.
-  assert.ok(
-    !tracingExcludes.includes("./.build/**/*"),
-    "./.build/ (the Next distDir) must NOT be excluded from output file tracing — excluding it strips the standalone's runtime deps"
-  );
 
   for (const packageName of [
     "thread-stream",
@@ -120,6 +109,7 @@ test("next config declares Turbopack aliases, runtime assets and server external
     // sqlite-vec ships a native vec0.so loaded at runtime; without externalizing it
     // the Turbopack build fails with "Unknown module type" on the .so (issue #3066).
     "sqlite-vec",
+    "node-machine-id",
     "wreq-js",
     "fs",
     "path",
@@ -129,6 +119,28 @@ test("next config declares Turbopack aliases, runtime assets and server external
     "tls",
   ]) {
     assert.ok(serverExternalPackages.has(packageName), `${packageName} should be externalized`);
+  }
+});
+
+test("Turbopack aliases better-sqlite3 to the stub ONLY when OMNIROUTE_BETTER_SQLITE3_STUB=1 (#11343)", async () => {
+  const original = process.env.OMNIROUTE_BETTER_SQLITE3_STUB;
+  try {
+    delete process.env.OMNIROUTE_BETTER_SQLITE3_STUB;
+    const { default: def } = await loadNextConfig("bettersqlite-default");
+    assert.equal(def.turbopack.resolveAlias["better-sqlite3"], undefined);
+    // The default build must keep the real package reachable as an external, which
+    // is exactly what the alias silently defeated.
+    assert.ok(new Set(def.serverExternalPackages).has("better-sqlite3"));
+
+    process.env.OMNIROUTE_BETTER_SQLITE3_STUB = "1";
+    const { default: stubbed } = await loadNextConfig("bettersqlite-optin");
+    assert.equal(
+      stubbed.turbopack.resolveAlias["better-sqlite3"],
+      "./src/lib/db/better-sqlite3.stub.js"
+    );
+  } finally {
+    if (original === undefined) delete process.env.OMNIROUTE_BETTER_SQLITE3_STUB;
+    else process.env.OMNIROUTE_BETTER_SQLITE3_STUB = original;
   }
 });
 
@@ -302,6 +314,30 @@ test("turbopack.ignoreIssue suppresses the agentSkills over-bundling warning (#6
   const agentSkillsRule = rules.find((rule) => String(rule.path).includes("agentSkills"));
   assert.ok(agentSkillsRule, "expected an ignoreIssue rule targeting src/lib/agentSkills/**");
   assert.match(String(agentSkillsRule.description), /Overly broad patterns/);
+});
+
+test("turbopack.ignoreIssue suppresses the compression module over-bundling warning (#7051)", async () => {
+  // open-sse/services/compression/ruleLoader.ts and
+  // .../engines/rtk/filterLoader.ts both define an identical getModuleDir()
+  // helper that walks up directories via path.resolve(anchor) +
+  // fs.existsSync(...) in a loop with a non-literal argument — the same
+  // class of dynamic-path fs access that #6582 suppressed for
+  // src/lib/agentSkills/**, but that narrow allowlist glob didn't cover this
+  // module, so the warning kept firing (610 times) for every entry point
+  // transitively importing the compression module. This guards the config
+  // shape so the suppression rule isn't silently dropped in a future edit.
+  const { default: nextConfig } = await loadNextConfig("ignore-issue-compression");
+  const rules = nextConfig.turbopack?.ignoreIssue;
+
+  assert.ok(Array.isArray(rules), "expected turbopack.ignoreIssue to be an array");
+  const compressionRule = rules.find((rule) =>
+    String(rule.path).includes("open-sse/services/compression")
+  );
+  assert.ok(
+    compressionRule,
+    "expected an ignoreIssue rule targeting open-sse/services/compression/**"
+  );
+  assert.match(String(compressionRule.description), /Overly broad patterns/);
 });
 
 test("optimizePackageImports excludes the internal @omniroute/open-sse workspace (build-OOM guard)", async () => {

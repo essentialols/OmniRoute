@@ -13,7 +13,7 @@ const snap: Record<string, string | undefined> = {};
 function req(origin: string | null): Request {
   return new Request(
     "https://gateway.local/api/cloud-agent/tasks",
-    origin ? { headers: { origin } } : undefined
+    origin ? { headers: { origin } } : undefined,
   );
 }
 

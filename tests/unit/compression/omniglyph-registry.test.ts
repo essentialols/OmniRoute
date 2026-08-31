@@ -13,9 +13,7 @@ test("omniglyph registrada nos builtins e no catálogo (single mode, por último
   assert.ok(meta, "entrada no catálogo");
   assert.equal(meta!.isSingleMode, true);
   const maxOther = Math.max(
-    ...Object.values(ENGINE_CATALOG)
-      .filter((m) => m.id !== "omniglyph")
-      .map((m) => m.stackPriority)
+    ...Object.values(ENGINE_CATALOG).filter((m) => m.id !== "omniglyph").map((m) => m.stackPriority)
   );
   assert.ok(meta!.stackPriority > maxOther, "roda por último no stack");
 });

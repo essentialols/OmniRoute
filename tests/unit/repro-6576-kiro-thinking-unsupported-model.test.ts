@@ -23,7 +23,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { buildKiroPayload } = await import("../../open-sse/translator/request/openai-to-kiro.ts");
+const { buildKiroPayload } = await import(
+  "../../open-sse/translator/request/openai-to-kiro.ts"
+);
 
 test("[repro #6576] buildKiroPayload must not attach additionalModelRequestFields for claude-sonnet-4.5 (Kiro rejects it)", () => {
   const body = {

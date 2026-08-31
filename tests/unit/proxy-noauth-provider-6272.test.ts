@@ -11,6 +11,7 @@ delete process.env.INITIAL_PASSWORD;
 
 const core = await import("../../src/lib/db/core.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
+const { safeResolveProxy } = await import("../../src/sse/handlers/chatHelpers.ts");
 
 test.after(async () => {
   core.resetDbInstance();
@@ -19,33 +20,74 @@ test.after(async () => {
   else process.env.INITIAL_PASSWORD = ORIGINAL_INITIAL_PASSWORD;
 });
 
-test("#6272: resolveProxyForConnection('noauth', ...) honors a provider-level proxy assigned to 'mimocode'", async () => {
+test("#6272: resolveProxyForConnection('noauth', ...) honors a provider-level proxy assigned to 'opencode'", async () => {
   core.getDbInstance();
   const proxy = { type: "http", host: "127.0.0.1", port: 8888 };
 
   // Reporter's second symptom: "same thing happen when i set the proxy directly
-  // in the provider menu" -> assign a provider-scoped proxy to the mimocode
-  // provider id, the way Settings -> Providers -> mimocode would persist it.
-  await settingsDb.setProxyForLevel("provider", "mimocode", proxy);
+  // in the provider menu" -> assign a provider-scoped proxy to the opencode
+  // provider id, the way Settings -> Providers -> opencode would persist it.
+  await settingsDb.setProxyForLevel("provider", "opencode", proxy);
 
   const resolved = await settingsDb.resolveProxyForConnection("noauth", undefined);
 
   assert.equal(
     resolved?.proxy?.host,
     "127.0.0.1",
-    `expected the mimocode provider-level proxy to be honored, got level=${resolved?.level} proxy=${JSON.stringify(resolved?.proxy)}`
+    `expected the opencode provider-level proxy to be honored, got level=${resolved?.level} proxy=${JSON.stringify(resolved?.proxy)}`
   );
   assert.equal(resolved?.level, "provider");
-  assert.equal(resolved?.levelId, "mimocode");
+  assert.equal(resolved?.levelId, "opencode");
 });
 
 test("control: resolveProxyForConnection('noauth', ...) still honors the GLOBAL proxy when no no-auth provider proxy is set", async () => {
   core.getDbInstance();
-  await settingsDb.deleteProxyForLevel("provider", "mimocode");
+  await settingsDb.deleteProxyForLevel("provider", "opencode");
   const proxy = { type: "http", host: "10.0.0.1", port: 9999 };
   await settingsDb.setProxyForLevel("global", null, proxy);
 
   const resolved = await settingsDb.resolveProxyForConnection("noauth", undefined);
   assert.equal(resolved?.proxy?.host, "10.0.0.1");
   assert.equal(resolved?.level, "global");
+});
+
+test("resolveProxyForConnection keeps provider-level no-auth proxies isolated", async () => {
+  core.getDbInstance();
+  await settingsDb.deleteProxyForLevel("global", null);
+  await settingsDb.setProxyForLevel("provider", "opencode", {
+    type: "http",
+    host: "127.0.0.2",
+    port: 8889,
+  });
+  await settingsDb.setProxyForLevel("provider", "theoldllm", {
+    type: "http",
+    host: "127.0.0.3",
+    port: 8890,
+  });
+
+  const opencode = await settingsDb.resolveProxyForConnection("noauth", undefined, "opencode");
+  const theOldLlm = await settingsDb.resolveProxyForConnection("noauth", undefined, "theoldllm");
+
+  assert.equal(opencode?.proxy?.host, "127.0.0.2");
+  assert.equal(theOldLlm?.proxy?.host, "127.0.0.3");
+});
+
+test("safeResolveProxy keeps the synthetic no-auth connection provider-specific", async () => {
+  core.getDbInstance();
+  await settingsDb.setProxyForLevel("provider", "opencode", {
+    type: "http",
+    host: "127.0.0.4",
+    port: 8891,
+  });
+  await settingsDb.setProxyForLevel("provider", "theoldllm", {
+    type: "http",
+    host: "127.0.0.5",
+    port: 8892,
+  });
+
+  const opencode = await safeResolveProxy("noauth", undefined, "opencode");
+  const theOldLlm = await safeResolveProxy("noauth", undefined, "theoldllm");
+
+  assert.equal(opencode?.proxy?.host, "127.0.0.4");
+  assert.equal(theOldLlm?.proxy?.host, "127.0.0.5");
 });

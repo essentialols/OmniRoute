@@ -6,9 +6,27 @@ import type { SqliteAdapter, PreparedStatement, RunResult } from "./types";
 const SAVE_DEBOUNCE_MS = 100;
 const CHECKPOINT_INTERVAL_MS = 60_000;
 
+// sql.js's stmt.getAsObject() returns rows whose prototype is `null`
+// (Object.create(null)), whereas better-sqlite3 (the driver we ship and run in
+// production/CI) hands back ordinary Object.prototype rows. That difference is
+// invisible for normal property access but breaks callers that compare rows
+// with structural equality that also checks the prototype (e.g. Node's
+// assert.deepStrictEqual, used by several unit tests written against the
+// better-sqlite3 row shape). Normalize every row to a plain object so the
+// sql.js fallback is behaviourally identical to the native better-sqlite3 path.
+function toPlainRow<T>(row: T): T {
+  if (row === null || typeof row !== "object") return row;
+  return { ...(row as Record<string, unknown>) } as T;
+}
+
 let _sqlJsLib: Awaited<ReturnType<(typeof import("sql.js"))["default"]>> | null = null;
 
 function resolveSqlJsWasmPath(): string {
+  // The standalone assembler copies the complete sql.js package into
+  // <bundle>/node_modules/sql.js. Every packaged server launcher sets cwd to that
+  // bundle directory, so the JavaScript entrypoint and its sibling WASM share one
+  // explicit runtime contract instead of relying on a require.resolve call that
+  // webpack can rewrite. The second path retains direct-source compatibility.
   const candidatePaths = [
     path.join(process.cwd(), "node_modules", "sql.js", "dist", "sql-wasm.wasm"),
     path.join(
@@ -28,7 +46,11 @@ function resolveSqlJsWasmPath(): string {
     }
   }
 
-  return candidatePaths[0];
+  throw new Error(
+    `[sqljsAdapter] Packaged sql.js runtime is incomplete: sql-wasm.wasm was not found. Checked:\n${candidatePaths.join(
+      "\n"
+    )}`
+  );
 }
 
 /**
@@ -84,8 +106,16 @@ function toBindValue(params: unknown[]): unknown[] | Record<string, unknown> | u
 
 async function loadSqlJs(): Promise<typeof _sqlJsLib> {
   if (_sqlJsLib) return _sqlJsLib;
-  const initSqlJs = ((await import("sql.js")) as { default: (typeof import("sql.js"))["default"] })
-    .default;
+  // Use a non-literal specifier so the bundler doesn't try to statically
+  // resolve sql.js (and its package.json) during the build phase.
+  // sql.js is an optional/fallback adapter — only needed at runtime when
+  // better-sqlite3 and node:sqlite are both unavailable.
+  const moduleName = "sql." + "js";
+  const mod = (await import(
+    /* webpackIgnore: true */
+    moduleName
+  )) as { default: (typeof import("sql.js"))["default"] };
+  const initSqlJs = mod.default;
   const wasmPath = resolveSqlJsWasmPath();
 
   _sqlJsLib = await initSqlJs({
@@ -110,10 +140,62 @@ export async function createSqlJsAdapter(filePath: string): Promise<SqliteAdapte
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let _isOpen = true;
 
+  /**
+   * Writes the whole database image out atomically: temp file in the SAME
+   * directory, fsync, then `rename()` over the destination.
+   *
+   * WHY NOT `writeFileSync(filePath, …)` DIRECTLY
+   * ---------------------------------------------
+   * sql.js has no incremental write path — every save rewrites the entire image.
+   * `writeFileSync` opens the destination with `O_TRUNC`, so for the whole
+   * duration of the write the on-disk database is 0 bytes and then partial. The
+   * window scales with the database size and recurs on every save, so on a busy
+   * instance it is open a significant fraction of the time.
+   *
+   * Unlike better-sqlite3 / node:sqlite, that window is not protected by SQLite's
+   * locking protocol, so it is visible to every OTHER process that reads the same
+   * file — a backup job, a metrics exporter, an operator running `sqlite3`. Those
+   * readers get `SQLITE_CORRUPT` ("database disk image is malformed") even though
+   * `PRAGMA integrity_check` passes moments later, which makes the failure look
+   * random and points the blame at the reader.
+   *
+   * `rename()` within a directory is atomic on POSIX and on Windows for a
+   * same-volume replace, so a reader now sees either the previous image or the
+   * new one — never a truncated one. It also removes the total-loss window: a
+   * crash mid-write used to leave the real database truncated, while it now only
+   * leaves a stale temp file behind.
+   */
   function persist(): void {
     if (filePath === ":memory:") return;
     const data = db.export();
-    fs.writeFileSync(filePath, Buffer.from(data));
+    // Same directory, so `rename` stays within one filesystem — a temp file in
+    // os.tmpdir() would make it a cross-device copy, which is not atomic.
+    const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(tmpPath, "w");
+      fs.writeFileSync(fd, Buffer.from(data));
+      // The rename is atomic, but only orders against data that already reached
+      // the disk; without this an unclean shutdown can publish an empty file.
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = null;
+      fs.renameSync(tmpPath, filePath);
+    } catch (err) {
+      if (fd !== null) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          /* already closed */
+        }
+      }
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        /* never created, or already gone */
+      }
+      throw err;
+    }
     dirty = false;
   }
 
@@ -171,7 +253,7 @@ export async function createSqlJsAdapter(filePath: string): Promise<SqliteAdapte
         try {
           const bindValue = toBindValue(params);
           if (bindValue !== undefined) stmt.bind(bindValue);
-          if (stmt.step()) return stmt.getAsObject();
+          if (stmt.step()) return toPlainRow(stmt.getAsObject());
           return undefined;
         } finally {
           stmt.free();
@@ -183,7 +265,7 @@ export async function createSqlJsAdapter(filePath: string): Promise<SqliteAdapte
           const bindValue = toBindValue(params);
           if (bindValue !== undefined) stmt.bind(bindValue);
           const rows: unknown[] = [];
-          while (stmt.step()) rows.push(stmt.getAsObject());
+          while (stmt.step()) rows.push(toPlainRow(stmt.getAsObject()));
           return rows;
         } finally {
           stmt.free();
@@ -200,6 +282,16 @@ export async function createSqlJsAdapter(filePath: string): Promise<SqliteAdapte
   }, CHECKPOINT_INTERVAL_MS);
   (checkpointTimer as unknown as NodeJS.Timeout).unref?.();
 
+  const flush = (): void => {
+    if (dirty)
+      try {
+        persist();
+      } catch {}
+  };
+  process.on("beforeExit", flush);
+  process.on("SIGINT", flush);
+  process.on("SIGTERM", flush);
+
   function gracefulClose(): void {
     clearInterval(checkpointTimer as unknown as NodeJS.Timeout);
     if (saveTimer) clearTimeout(saveTimer);
@@ -211,17 +303,13 @@ export async function createSqlJsAdapter(filePath: string): Promise<SqliteAdapte
       db.close();
     } catch {}
     _isOpen = false;
+    // Without this, a closed adapter's whole closure (raw sql.js Database +
+    // buffers) stays pinned in memory forever by these 3 process-level
+    // listeners, compounding the OOM every failed boot leaves behind (#7494).
+    process.removeListener("beforeExit", flush);
+    process.removeListener("SIGINT", flush);
+    process.removeListener("SIGTERM", flush);
   }
-
-  const flush = (): void => {
-    if (dirty)
-      try {
-        persist();
-      } catch {}
-  };
-  process.on("beforeExit", flush);
-  process.on("SIGINT", flush);
-  process.on("SIGTERM", flush);
 
   return {
     driver: "sql.js",
@@ -265,7 +353,7 @@ export async function createSqlJsAdapter(filePath: string): Promise<SqliteAdapte
 
     async backup(destination: string): Promise<void> {
       if (dirty) persist();
-      if (filePath !== ":memory:") fs.copyFileSync(filePath, destination);
+      if (filePath !== ":memory:") await fs.promises.copyFile(filePath, destination);
     },
 
     checkpoint(_mode = "TRUNCATE"): void {

@@ -17,8 +17,11 @@
  * `fetchAntigravityUserQuotaCached` pattern.
  */
 
+import { ANTIGRAVITY_RUNTIME_BASE_URLS } from "../../config/antigravityUpstream.ts";
 import { toRecord, toNumber } from "./scalars.ts";
 import { type UsageQuota, parseResetTime } from "./quota.ts";
+import { getAntigravityContentHeaders } from "../antigravityHeaders.ts";
+import type { AntigravityClientProfile } from "../antigravityClientProfile.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -43,8 +46,12 @@ const _weeklyQuotaCacheCleanupTimer = setInterval(
 );
 _weeklyQuotaCacheCleanupTimer.unref?.();
 
-function buildCacheKey(accessToken: string, projectId?: string | null): string {
-  return `${accessToken.substring(0, 16)}:${projectId || "default"}`;
+function buildCacheKey(
+  accessToken: string,
+  projectId: string | null | undefined,
+  clientProfile: AntigravityClientProfile
+): string {
+  return `${accessToken.substring(0, 16)}:${projectId || "default"}:${clientProfile}`;
 }
 
 /**
@@ -55,11 +62,12 @@ function buildCacheKey(accessToken: string, projectId?: string | null): string {
 export async function fetchAntigravityUserQuotaSummaryCached(
   accessToken: string,
   projectId?: string | null,
+  clientProfile: AntigravityClientProfile = "ide",
   options: AntigravityWeeklyQuotaOptions = {}
 ): Promise<unknown | null> {
   if (!accessToken || !projectId) return null;
 
-  const cacheKey = buildCacheKey(accessToken, projectId);
+  const cacheKey = buildCacheKey(accessToken, projectId, clientProfile);
   const cached = _weeklyQuotaCache.get(cacheKey);
   if (
     !options.forceRefresh &&
@@ -70,28 +78,28 @@ export async function fetchAntigravityUserQuotaSummaryCached(
   }
 
   const inflight = _weeklyQuotaInflight.get(cacheKey);
-  if (inflight) return inflight;
+  if (inflight !== undefined) return inflight;
 
   const promise = (async () => {
     try {
-      const response = await fetch(
-        "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ project: projectId }),
-          signal: AbortSignal.timeout(10000),
-        }
-      );
+      for (const baseUrl of ANTIGRAVITY_RUNTIME_BASE_URLS) {
+        const response = await fetch(
+          `${baseUrl}/v1internal:retrieveUserQuotaSummary`,
+          {
+            method: "POST",
+            headers: getAntigravityContentHeaders(clientProfile, accessToken),
+            body: JSON.stringify({ project: projectId }),
+            signal: AbortSignal.timeout(10000),
+          }
+        );
 
-      if (!response.ok) return null;
+        if (!response.ok) continue;
 
-      const data = await response.json();
-      _weeklyQuotaCache.set(cacheKey, { data, fetchedAt: Date.now() });
-      return data;
+        const data = await response.json();
+        _weeklyQuotaCache.set(cacheKey, { data, fetchedAt: Date.now() });
+        return data;
+      }
+      return null;
     } catch {
       return null;
     }
@@ -188,8 +196,14 @@ function parseGroupWeeklyQuota(group: JsonRecord): { key: string; quota: UsageQu
 export async function fetchAndParseAntigravityWeeklyQuotas(
   accessToken: string,
   projectId: string | undefined | null,
+  clientProfile: AntigravityClientProfile = "ide",
   options: AntigravityWeeklyQuotaOptions = {}
 ): Promise<Record<string, UsageQuota>> {
-  const data = await fetchAntigravityUserQuotaSummaryCached(accessToken, projectId, options);
+  const data = await fetchAntigravityUserQuotaSummaryCached(
+    accessToken,
+    projectId,
+    clientProfile,
+    options
+  );
   return parseAntigravityWeeklyQuotas(data);
 }

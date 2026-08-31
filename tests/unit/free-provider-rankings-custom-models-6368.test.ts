@@ -2,7 +2,7 @@
  * Regression test for #6368 (follow-up to #6150).
  *
  * Custom models a user adds to a provider (e.g. "Claude Fable 5" added on
- * top of the Puter provider) were invisible in the Free Provider Rankings
+ * top of the OpenRouter provider) were invisible in the Free Provider Rankings
  * once the "Configured only" / "Available only" filters were applied,
  * because `getProviderModels()` only ever walked the static
  * `open-sse/config/providerRegistry.ts` catalog — a provider's user-added
@@ -70,33 +70,33 @@ test("#6368: a provider whose only scored model is a user-added custom model app
     expiresAt: null,
   });
 
-  await modelsDb.addCustomModel("puter", CUSTOM_MODEL_ID, "Claude Fable 5");
+  await modelsDb.addCustomModel("openrouter", CUSTOM_MODEL_ID, "Claude Fable 5");
 
   await providersDb.createProviderConnection({
-    provider: "puter",
+    provider: "openrouter",
     authType: "apikey",
-    name: "puter-main-6368",
+    name: "openrouter-main-6368",
     apiKey: "test-token",
     isActive: true,
   });
 
   const unfiltered = await rankings.computeFreeProviderRankings(undefined, 100, {});
-  const puterUnfiltered = unfiltered.find((r) => r.id === "puter");
-  assert.ok(puterUnfiltered, "puter must appear in the unfiltered ranking");
+  const orUnfiltered = unfiltered.find((r) => r.id === "openrouter");
+  assert.ok(orUnfiltered, "openrouter must appear in the unfiltered ranking");
   assert.ok(
-    puterUnfiltered!.topModel?.modelId === CUSTOM_MODEL_ID ||
-      unfiltered.some((r) => r.id === "puter" && r.modelCount >= 1),
-    "puter ranking must reflect the custom model score"
+    orUnfiltered!.topModel?.modelId === CUSTOM_MODEL_ID ||
+      unfiltered.some((r) => r.id === "openrouter" && r.modelCount >= 1),
+    "openrouter ranking must reflect the custom model score"
   );
 
   const filtered = await rankings.computeFreeProviderRankings(undefined, 100, {
     configuredOnly: true,
     availableOnly: true,
   });
-  const puterFiltered = filtered.find((r) => r.id === "puter");
+  const orFiltered = filtered.find((r) => r.id === "openrouter");
   assert.ok(
-    puterFiltered,
-    "puter (configured + available, ranked only via its custom model) must survive configuredOnly+availableOnly filters"
+    orFiltered,
+    "openrouter (configured + available, ranked only via its custom model) must survive configuredOnly+availableOnly filters"
   );
 });
 

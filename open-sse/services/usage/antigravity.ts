@@ -12,22 +12,23 @@
 
 import { PROVIDERS } from "../../config/constants.ts";
 import {
+  ANTIGRAVITY_BOOTSTRAP_BASE_URLS,
+  ANTIGRAVITY_RUNTIME_BASE_URLS,
   getAntigravityFetchAvailableModelsUrls,
-  ANTIGRAVITY_BASE_URLS,
 } from "../../config/antigravityUpstream.ts";
 import {
-  isUserCallableAntigravityModelId,
+  isDiscoverableAntigravityModelId,
   toClientAntigravityQuotaModelId,
 } from "../../config/antigravityModelAliases.ts";
+import { isUserCallableAgyModelId } from "../../config/agyModels.ts";
 import { getDbInstance } from "@/lib/db/core";
 import {
   applyAntigravityClientProfileHeaders,
-  getAntigravityBootstrapHeaders,
   getAntigravityClientProfile,
+  type AntigravityClientProfile,
 } from "../antigravityClientProfile.ts";
 import {
-  antigravityUserAgent,
-  getAntigravityHeaders,
+  getAntigravityContentHeaders,
   getAntigravityLoadCodeAssistMetadata,
 } from "../antigravityHeaders.ts";
 import {
@@ -52,16 +53,13 @@ type SubscriptionCacheEntry = {
 
 const ANTIGRAVITY_CONFIG = {
   quotaApiUrls: getAntigravityFetchAvailableModelsUrls(),
-  loadProjectApiUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
+  loadProjectApiUrl: `${ANTIGRAVITY_BOOTSTRAP_BASE_URLS[0]}/v1internal:loadCodeAssist`,
   tokenUrl: "https://oauth2.googleapis.com/token",
   get clientId() {
     return PROVIDERS.agy.clientId;
   },
   get clientSecret() {
     return PROVIDERS.agy.clientSecret;
-  },
-  get userAgent() {
-    return antigravityUserAgent();
   },
 };
 
@@ -178,18 +176,23 @@ function applyLocalUsageFallback(
   };
 }
 
-function buildAntigravityUsageCacheKey(accessToken: string, projectId?: string | null): string {
-  return `${accessToken.substring(0, 16)}:${projectId || "default"}`;
+function buildAntigravityUsageCacheKey(
+  accessToken: string,
+  projectId: string | null | undefined,
+  clientProfile: AntigravityClientProfile
+): string {
+  return `${accessToken.substring(0, 16)}:${projectId || "default"}:${clientProfile}`;
 }
 
 async function fetchAntigravityAvailableModelsCached(
   accessToken: string,
   projectId?: string | null,
+  clientProfile: AntigravityClientProfile = "ide",
   options: AntigravityUsageOptions = {}
 ): Promise<unknown> {
   if (!accessToken) throw new Error("Access token is required");
 
-  const cacheKey = buildAntigravityUsageCacheKey(accessToken, projectId);
+  const cacheKey = buildAntigravityUsageCacheKey(accessToken, projectId, clientProfile);
   const cached = _antigravityAvailableModelsCache.get(cacheKey);
   if (
     !options.forceRefresh &&
@@ -210,7 +213,7 @@ async function fetchAntigravityAvailableModelsCached(
       try {
         response = await fetch(quotaApiUrl, {
           method: "POST",
-          headers: getAntigravityHeaders("fetchAvailableModels", accessToken),
+          headers: getAntigravityContentHeaders(clientProfile, accessToken),
           body: JSON.stringify(projectId ? { project: projectId } : {}),
           signal: AbortSignal.timeout(10000),
         });
@@ -249,11 +252,12 @@ async function fetchAntigravityAvailableModelsCached(
 async function fetchAntigravityUserQuotaCached(
   accessToken: string,
   projectId?: string | null,
+  clientProfile: AntigravityClientProfile = "ide",
   options: AntigravityUsageOptions = {}
 ): Promise<unknown | null> {
   if (!accessToken || !projectId) return null;
 
-  const cacheKey = buildAntigravityUsageCacheKey(accessToken, projectId);
+  const cacheKey = buildAntigravityUsageCacheKey(accessToken, projectId, clientProfile);
   const cached = _antigravityUserQuotaCache.get(cacheKey);
   if (
     !options.forceRefresh &&
@@ -268,24 +272,21 @@ async function fetchAntigravityUserQuotaCached(
 
   const promise = (async () => {
     try {
-      const response = await fetch(
-        "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
-        {
+      for (const baseUrl of ANTIGRAVITY_RUNTIME_BASE_URLS) {
+        const response = await fetch(`${baseUrl}/v1internal:retrieveUserQuota`, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
+          headers: getAntigravityContentHeaders(clientProfile, accessToken),
           body: JSON.stringify({ project: projectId }),
           signal: AbortSignal.timeout(10000),
-        }
-      );
+        });
 
-      if (!response.ok) return null;
+        if (!response.ok) continue;
 
-      const data = await response.json();
-      _antigravityUserQuotaCache.set(cacheKey, { data, fetchedAt: Date.now() });
-      return data;
+        const data = await response.json();
+        _antigravityUserQuotaCache.set(cacheKey, { data, fetchedAt: Date.now() });
+        return data;
+      }
+      return null;
     } catch {
       return null;
     }
@@ -418,7 +419,12 @@ async function probeAntigravityCreditBalance(
 ): Promise<number | null> {
   if (!accessToken) return null;
 
-  const cacheKey = buildAntigravityUsageCacheKey(accessToken, projectId || accountId);
+  const clientProfile = getAntigravityClientProfile({ providerSpecificData });
+  const cacheKey = buildAntigravityUsageCacheKey(
+    accessToken,
+    projectId || accountId,
+    clientProfile
+  );
   const cached = _antigravityCreditProbeCache.get(cacheKey);
   if (
     !options.forceRefresh &&
@@ -465,7 +471,7 @@ async function probeAntigravityCreditBalanceUncached(
     if (!projectId) return null;
 
     // Try all base URLs (some accounts only work with specific endpoints)
-    for (const baseUrl of ANTIGRAVITY_BASE_URLS) {
+    for (const baseUrl of ANTIGRAVITY_RUNTIME_BASE_URLS) {
       const url = `${baseUrl}/v1internal:streamGenerateContent?alt=sse`;
 
       const sessionId = getAntigravitySessionId({ connectionId: accountId, projectId });
@@ -565,6 +571,7 @@ export async function getAntigravityUsage(
 
   let subscriptionInfo: unknown = null;
   try {
+    const clientProfile = getAntigravityClientProfile({ providerSpecificData });
     subscriptionInfo = await getAntigravitySubscriptionInfoCached(
       accessToken,
       providerSpecificData,
@@ -591,9 +598,11 @@ export async function getAntigravityUsage(
     // Read cached credit balance (hydrated from DB on first access)
     let creditBalance = getAntigravityRemainingCredits(accountId);
 
-    // If no cached balance and credits mode is enabled, fire a minimal probe
+    // Only an explicit refresh in always mode may proactively spend credits to discover
+    // the balance. Automatic/scheduled refreshes must use the cached balance (if any)
+    // rather than adding credit-bearing inference calls after normal user requests.
     const creditsMode = getCreditsMode();
-    if ((options.forceRefresh || creditBalance === null) && creditsMode !== "off") {
+    if (options.forceRefresh === true && creditsMode === "always") {
       creditBalance = await probeAntigravityCreditBalance(
         accessToken,
         accountId,
@@ -604,9 +613,9 @@ export async function getAntigravityUsage(
     }
 
     const [data, userQuotaData, weeklyQuotas] = await Promise.all([
-      fetchAntigravityAvailableModelsCached(accessToken, projectId, options),
-      fetchAntigravityUserQuotaCached(accessToken, projectId, options),
-      fetchAndParseAntigravityWeeklyQuotas(accessToken, projectId, options), // #4017
+      fetchAntigravityAvailableModelsCached(accessToken, projectId, clientProfile, options),
+      fetchAntigravityUserQuotaCached(accessToken, projectId, clientProfile, options),
+      fetchAndParseAntigravityWeeklyQuotas(accessToken, projectId, clientProfile, options), // #4017
     ]);
     const dataObj = toRecord(data);
     if (dataObj.__antigravityForbidden === true) {
@@ -635,7 +644,9 @@ export async function getAntigravityUsage(
       if (
         !modelKey ||
         info.isInternal === true ||
-        !isUserCallableAntigravityModelId(modelKey) ||
+        !(provider === "agy"
+          ? isUserCallableAgyModelId(modelKey)
+          : isDiscoverableAntigravityModelId(modelKey)) ||
         Object.keys(quotaInfo).length === 0
       ) {
         continue;
@@ -684,7 +695,12 @@ export async function getAntigravityUsage(
     // This keeps Provider Limits honest when Google adds a new Gemini tier before our catalog is
     // updated. Hidden/internal catalog entries above are still filtered by the public pass.
     for (const [modelKey, bucket] of userQuotaEntries) {
-      if (quotas[modelKey] || !isUserCallableAntigravityModelId(modelKey)) {
+      if (
+        quotas[modelKey] ||
+        !(provider === "agy"
+          ? isUserCallableAgyModelId(modelKey)
+          : isDiscoverableAntigravityModelId(modelKey))
+      ) {
         continue;
       }
       const rawFraction = toNumber(bucket.remainingFraction, -1);
@@ -772,10 +788,7 @@ async function getAntigravitySubscriptionInfo(
     const profile = getAntigravityClientProfile({ providerSpecificData });
     const response = await fetch(ANTIGRAVITY_CONFIG.loadProjectApiUrl, {
       method: "POST",
-      headers:
-        profile === "harness"
-          ? getAntigravityBootstrapHeaders(profile, accessToken)
-          : getAntigravityHeaders("loadCodeAssist", accessToken),
+      headers: getAntigravityContentHeaders(profile, accessToken),
       body: JSON.stringify({ metadata: getAntigravityLoadCodeAssistMetadata() }),
     });
 

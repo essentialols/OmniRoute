@@ -15,7 +15,10 @@
 import type { ResolvedComboTarget } from "./types.ts";
 
 /** Providers whose `providerSpecificData.fingerprints` array should be expanded. */
-const FINGERPRINT_PROVIDERS: ReadonlySet<string> = new Set(["mimocode", "mcode", "opencode"]);
+const FINGERPRINT_PROVIDERS: ReadonlySet<string> = new Set(["opencode"]);
+
+/** Separator the combo builder UI uses to encode an account pin (#6087). */
+const FP_PIN_SEPARATOR = "|fp|";
 
 /** Separator the combo builder UI uses to encode an account pin (#6087). */
 const FP_PIN_SEPARATOR = "|fp|";

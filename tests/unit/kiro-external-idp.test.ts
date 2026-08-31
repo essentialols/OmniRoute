@@ -19,8 +19,7 @@ import {
 } from "../../open-sse/services/kiroExternalIdp.ts";
 import { KiroExecutor } from "../../open-sse/executors/kiro.ts";
 
-const MS_ENDPOINT =
-  "https://login.microsoftonline.com/9d769d6d-e03a-442a-8ab1-a7da2037a5d4/oauth2/v2.0/token";
+const MS_ENDPOINT = "https://login.microsoftonline.com/9d769d6d-e03a-442a-8ab1-a7da2037a5d4/oauth2/v2.0/token";
 
 function makeJwt(payload: Record<string, unknown>): string {
   const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
@@ -69,22 +68,19 @@ test("buildExternalIdpRefreshParams builds a public-client form body", () => {
   assert.equal(req.body.get("grant_type"), "refresh_token");
   assert.equal(req.body.get("client_id"), "app-guid");
   assert.equal(req.body.get("refresh_token"), "RT-123");
-  assert.equal(req.body.get("scope"), "api://app-guid/codewhisperer:conversations offline_access");
+  assert.equal(
+    req.body.get("scope"),
+    "api://app-guid/codewhisperer:conversations offline_access"
+  );
   // Public client: never a secret.
   assert.equal(req.body.get("client_secret"), null);
 });
 
 test("buildExternalIdpRefreshParams fails closed on missing fields", () => {
-  assert.throws(() =>
-    buildExternalIdpRefreshParams("", { clientId: "x", tokenEndpoint: MS_ENDPOINT, scopes: "s" })
-  );
-  assert.throws(() =>
-    buildExternalIdpRefreshParams("rt", { tokenEndpoint: MS_ENDPOINT, scopes: "s" })
-  );
+  assert.throws(() => buildExternalIdpRefreshParams("", { clientId: "x", tokenEndpoint: MS_ENDPOINT, scopes: "s" }));
+  assert.throws(() => buildExternalIdpRefreshParams("rt", { tokenEndpoint: MS_ENDPOINT, scopes: "s" }));
   assert.throws(() => buildExternalIdpRefreshParams("rt", { clientId: "x", scopes: "s" }));
-  assert.throws(() =>
-    buildExternalIdpRefreshParams("rt", { clientId: "x", tokenEndpoint: MS_ENDPOINT })
-  );
+  assert.throws(() => buildExternalIdpRefreshParams("rt", { clientId: "x", tokenEndpoint: MS_ENDPOINT }));
 });
 
 test("KiroService.refreshToken uses the org IdP tokenEndpoint for external_idp", async () => {
@@ -93,13 +89,8 @@ test("KiroService.refreshToken uses the org IdP tokenEndpoint for external_idp",
   const calls: { url: string; body: string; contentType: string | null }[] = [];
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
-    const body =
-      init?.body instanceof URLSearchParams ? init.body.toString() : String(init?.body ?? "");
-    calls.push({
-      url: u,
-      body,
-      contentType: (init?.headers as Record<string, string>)?.["Content-Type"] ?? null,
-    });
+    const body = init?.body instanceof URLSearchParams ? init.body.toString() : String(init?.body ?? "");
+    calls.push({ url: u, body, contentType: (init?.headers as Record<string, string>)?.["Content-Type"] ?? null });
     return new Response(
       JSON.stringify({ access_token: "new-at", refresh_token: "rotated-rt", expires_in: 4481 }),
       { status: 200, headers: { "Content-Type": "application/json" } }

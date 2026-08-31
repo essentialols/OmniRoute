@@ -23,6 +23,7 @@ test("modo omniglyph sozinho comprime (selecionar o modo é o enable)", async ()
     model: "claude-fable-5",
     supportsVision: true,
     providerTransport: "direct",
+    imageTransportFidelity: "byte-preserving",
   });
   assert.equal(r.compressed, true);
   assert.ok(JSON.stringify(r.body).includes('"type":"image"'));

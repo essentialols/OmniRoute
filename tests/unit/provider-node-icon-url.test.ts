@@ -129,6 +129,58 @@ test("provider nodes route creates an OpenAI-compatible node with iconUrl", asyn
   assert.equal(body.node.iconUrl, "https://cdn.example.com/icons/custom.png");
 });
 
+const LONG_DATA_ICON_URL = "data:image/png;base64," + "A".repeat(2500);
+
+type ProviderNodeResponse = {
+  node?: { id?: string; iconUrl?: string | null };
+  error?: { message?: string; details?: unknown };
+};
+
+test("provider nodes route creates a node with a data:image iconUrl longer than 2000 chars", async () => {
+  const response = await providerNodesRoute.POST(
+    makeRequest({
+      name: "Data Icon Node",
+      prefix: "data-icon",
+      apiType: "chat",
+      baseUrl: "https://dataicon.example.com/v1",
+      iconUrl: LONG_DATA_ICON_URL,
+    })
+  );
+  const body = (await response.json()) as ProviderNodeResponse;
+
+  assert.equal(response.status, 201, JSON.stringify(body));
+  assert.equal(body.node?.iconUrl, LONG_DATA_ICON_URL);
+});
+
+test("provider nodes route update accepts a data:image iconUrl longer than 2000 chars", async () => {
+  const createResponse = await providerNodesRoute.POST(
+    makeRequest({
+      name: "Data Icon Update Node",
+      prefix: "data-icon-update",
+      apiType: "chat",
+      baseUrl: "https://dataicon-update.example.com/v1",
+    })
+  );
+  const created = (await createResponse.json()) as ProviderNodeResponse;
+  const nodeId = created.node?.id;
+  assert.ok(nodeId);
+
+  const updateResponse = await providerNodesIdRoute.PUT(
+    makeUpdateRequest(nodeId, {
+      name: "Data Icon Update Node",
+      prefix: "data-icon-update",
+      apiType: "chat",
+      baseUrl: "https://dataicon-update.example.com/v1",
+      iconUrl: LONG_DATA_ICON_URL,
+    }),
+    { params: Promise.resolve({ id: nodeId }) }
+  );
+  const updated = (await updateResponse.json()) as ProviderNodeResponse;
+
+  assert.equal(updateResponse.status, 200, JSON.stringify(updated));
+  assert.equal(updated.node?.iconUrl, LONG_DATA_ICON_URL);
+});
+
 test("provider nodes route creates nodes without iconUrl (null)", async () => {
   const response = await providerNodesRoute.POST(
     makeRequest({

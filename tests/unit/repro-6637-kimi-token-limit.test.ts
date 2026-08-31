@@ -27,8 +27,7 @@ test("#6637: Kimi's 'exceeded model token limit' 400 must be classified as conte
   //     -> "stopping combo"
   //
   // For the fallback to proceed to the next target, at least one of these must be true.
-  const isRecognizedAsOverflow =
-    isContextOverflow400(KIMI_ERROR_TEXT) || isParamValidation400(KIMI_ERROR_TEXT);
+  const isRecognizedAsOverflow = isContextOverflow400(KIMI_ERROR_TEXT) || isParamValidation400(KIMI_ERROR_TEXT);
 
   assert.equal(
     isRecognizedAsOverflow,

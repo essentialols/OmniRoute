@@ -1,4 +1,4 @@
-import { describe, it, before, beforeEach, after } from "node:test";
+import { describe, it, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
@@ -28,15 +28,20 @@ const {
   isModelCatalogNamesEnabled,
   isArenaEloSyncEnabled,
   isControlPlaneProxyDirectFallbackEnabled,
+  areContextWindowChecksDisabled,
 } = await import("../../src/shared/utils/featureFlags.ts");
 
-const EXPECTED_FEATURE_FLAG_COUNT = 41;
+// #10889 added OMNIROUTE_OIDC_DISABLE_PASSWORD_LOGIN, bumping the count to 51.
+// The codex-app-server work then added OMNIROUTE_CODEX_APP_SERVER_ENABLED
+// (feature flag gating the opt-in Codex app-server WebSocket transport),
+// bumping it from 51 to 52.
+const EXPECTED_FEATURE_FLAG_COUNT = 52;
 
 // ──────────────────────────────────────────────────────
 // Test group 1 — Flag definitions registry
 // ──────────────────────────────────────────────────────
 describe("featureFlagDefinitions", () => {
-  it("has exactly 41 flag definitions", () => {
+  it(`has exactly ${EXPECTED_FEATURE_FLAG_COUNT} flag definitions`, () => {
     assert.strictEqual(FEATURE_FLAG_DEFINITIONS.length, EXPECTED_FEATURE_FLAG_COUNT);
   });
 
@@ -161,6 +166,38 @@ describe("featureFlagDefinitions", () => {
     assert.strictEqual(def.warningLevel, "danger");
   });
 
+  it("defines network rotation shared-egress guard as a network boolean flag enabled by default", () => {
+    const def = FEATURE_FLAG_DEFINITIONS.find(
+      (d) => d.key === "NETWORK_ROTATION_SHARED_EGRESS_GUARD"
+    );
+    assert.ok(def, "NETWORK_ROTATION_SHARED_EGRESS_GUARD should exist");
+    assert.strictEqual(def.category, "network");
+    assert.strictEqual(def.type, "boolean");
+    assert.strictEqual(def.defaultValue, "true");
+    assert.strictEqual(def.requiresRestart, false);
+    assert.strictEqual(def.warningLevel, "info");
+  });
+
+  it("defines remote audio provider nodes as a network boolean flag disabled by default", () => {
+    // Guards the egress default: with this on, /v1/audio/* may reach a provider node
+    // hosted outside localhost. It must never become an implicit default (cf. #3963).
+    const def = FEATURE_FLAG_DEFINITIONS.find((d) => d.key === "AUDIO_REMOTE_PROVIDER_NODES");
+    assert.ok(def, "AUDIO_REMOTE_PROVIDER_NODES should exist");
+    assert.strictEqual(def.category, "network");
+    assert.strictEqual(def.type, "boolean");
+    assert.strictEqual(def.defaultValue, "false");
+    assert.strictEqual(def.warningLevel, "danger");
+  });
+
+  it("defines CC discovery aliases as a runtime boolean flag disabled by default", () => {
+    const def = FEATURE_FLAG_DEFINITIONS.find((d) => d.key === "EXPOSE_CC_DISCOVERY_ALIASES");
+    assert.ok(def, "EXPOSE_CC_DISCOVERY_ALIASES should exist");
+    assert.strictEqual(def.category, "runtime");
+    assert.strictEqual(def.type, "boolean");
+    assert.strictEqual(def.defaultValue, "false");
+    assert.strictEqual(def.requiresRestart, false);
+  });
+
   it("defines CLI profile auto-sync flags as CLI booleans disabled by default", () => {
     for (const key of [
       "OMNIROUTE_AUTO_SYNC_CODEX_PROFILES",
@@ -174,6 +211,16 @@ describe("featureFlagDefinitions", () => {
       assert.strictEqual(def.requiresRestart, false);
       assert.strictEqual(def.warningLevel, "caution");
     }
+  });
+
+  it("defines context-window check bypass as a dangerous opt-in policy flag", () => {
+    const def = FEATURE_FLAG_DEFINITIONS.find((d) => d.key === "DISABLE_CONTEXT_WINDOW_CHECKS");
+    assert.ok(def, "DISABLE_CONTEXT_WINDOW_CHECKS should exist");
+    assert.strictEqual(def.category, "policies");
+    assert.strictEqual(def.type, "boolean");
+    assert.strictEqual(def.defaultValue, "false");
+    assert.strictEqual(def.requiresRestart, false);
+    assert.strictEqual(def.warningLevel, "danger");
   });
 });
 
@@ -312,7 +359,7 @@ describe("resolveFeatureFlag", () => {
   });
 
   describe("resolveAllFeatureFlags", () => {
-    it("returns all 41 flags", () => {
+    it(`returns all ${EXPECTED_FEATURE_FLAG_COUNT} flags`, () => {
       const all = resolveAllFeatureFlags();
       assert.strictEqual(all.length, EXPECTED_FEATURE_FLAG_COUNT);
     });
@@ -395,6 +442,34 @@ describe("resolveFeatureFlag", () => {
         assert.strictEqual(isControlPlaneProxyDirectFallbackEnabled(), true);
       } finally {
         removeFeatureFlagOverride("OMNIROUTE_CONTROL_PLANE_PROXY_DIRECT_FALLBACK");
+      }
+    });
+
+    it("areContextWindowChecksDisabled defaults off and follows DB overrides", () => {
+      assert.strictEqual(areContextWindowChecksDisabled(), false);
+      try {
+        setFeatureFlagOverride("DISABLE_CONTEXT_WINDOW_CHECKS", "true");
+        assert.strictEqual(areContextWindowChecksDisabled(), true);
+      } finally {
+        removeFeatureFlagOverride("DISABLE_CONTEXT_WINDOW_CHECKS");
+      }
+    });
+
+    it("areContextWindowChecksDisabled keeps checks enabled when the flag store is unreadable", () => {
+      const originalError = console.error;
+      console.error = () => {};
+      try {
+        core.resetDbInstance();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        fs.mkdirSync(tmpDir, { recursive: true });
+        const blockerPath = path.join(tmpDir, "storage.sqlite");
+        fs.mkdirSync(blockerPath, { recursive: true });
+        assert.strictEqual(areContextWindowChecksDisabled(), false);
+      } finally {
+        console.error = originalError;
+        core.resetDbInstance();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        fs.mkdirSync(tmpDir, { recursive: true });
       }
     });
   });

@@ -29,7 +29,9 @@ export function apiRoot(root = process.cwd()) {
 export function toApiUrlPath(routeDir, apiRootAbs) {
   const rel = path.relative(apiRootAbs, routeDir).replace(/\\/g, "/");
   if (!rel || rel === ".") return "/api";
-  const normalized = rel.replace(/\[\.\.\.([^\]]+)\]/g, "{$1}").replace(/\[([^\]]+)\]/g, "{$1}");
+  const normalized = rel
+    .replace(/\[\.\.\.([^\]]+)\]/g, "{$1}")
+    .replace(/\[([^\]]+)\]/g, "{$1}");
   return `/api/${normalized}`;
 }
 

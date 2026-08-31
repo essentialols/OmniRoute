@@ -89,6 +89,21 @@ export function extractCodexAccountInfo(idToken: string): {
   };
 }
 
+/**
+ * Decode a JWT's `exp` claim (seconds since epoch, per RFC 7519) without
+ * verifying the signature. Returns `null` when the token isn't a decodable
+ * JWT or carries no numeric `exp`.
+ *
+ * Exported so sibling Codex import paths (e.g. the session-JSON normalizer
+ * at `codexSessionImport.ts`, #6636) can check expiry without duplicating a
+ * 3rd inline JWT decoder.
+ */
+export function decodeJwtExp(jwt: unknown): number | null {
+  const payload = decodeJwtPayload(jwt);
+  const exp = payload && typeof payload.exp === "number" ? payload.exp : null;
+  return exp !== null && Number.isFinite(exp) ? exp : null;
+}
+
 function pickString(...candidates: (string | undefined)[]): string | undefined {
   for (const c of candidates) {
     if (typeof c === "string" && c.trim()) return c.trim();

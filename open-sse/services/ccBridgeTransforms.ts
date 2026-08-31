@@ -21,6 +21,8 @@
  */
 import { createHash } from "node:crypto";
 
+import { CLAUDE_CODE_CLIENT_BUILD_REVISION } from "@/shared/constants/claudeCodeClient";
+
 // ────────────────────────────────────────────────────────────────────────────
 // DSL types
 // ────────────────────────────────────────────────────────────────────────────
@@ -98,6 +100,8 @@ export interface InjectBillingHeaderOp {
   cchAlgo: "sha256-first-user" | "xxhash64-body" | "static-zero";
   /** Override the embedded `cc_version=` value. Defaults to `2.1.207`. */
   version?: string;
+  /** Override its captured build revision. Defaults to a computed compatibility suffix. */
+  buildRevision?: string;
 }
 
 export interface CcBridgeTransformsConfig {
@@ -176,6 +180,7 @@ export const DEFAULT_CC_BRIDGE_PIPELINE: TransformOp[] = [
     entrypoint: "sdk-cli",
     versionFormat: "ex-machina",
     cchAlgo: "sha256-first-user",
+    buildRevision: CLAUDE_CODE_CLIENT_BUILD_REVISION,
   },
 ];
 
@@ -267,6 +272,7 @@ interface BuildBillingHeaderOptions {
   versionFormat: "ex-machina" | "omniroute-daystamp";
   cchAlgo: "sha256-first-user" | "xxhash64-body" | "static-zero";
   version?: string;
+  buildRevision?: string;
   now?: Date;
 }
 
@@ -287,9 +293,10 @@ export function buildBillingHeaderValue(
   const firstUserText = extractFirstUserMessageText(messages);
 
   const suffix =
-    options.versionFormat === "omniroute-daystamp"
+    options.buildRevision ??
+    (options.versionFormat === "omniroute-daystamp"
       ? computeDaystampVersionSuffix(version, options.now)
-      : computeExMachinaVersionSuffix(firstUserText, version);
+      : computeExMachinaVersionSuffix(firstUserText, version));
 
   let cch: string;
   switch (options.cchAlgo) {
@@ -462,6 +469,7 @@ function applyInjectBillingHeader(
     versionFormat: op.versionFormat,
     cchAlgo: op.cchAlgo,
     version: op.version,
+    buildRevision: op.buildRevision,
   });
 
   // Idempotency: replace any existing billing header block (ex-machina + native

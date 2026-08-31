@@ -28,11 +28,34 @@ process.env.OMNIROUTE_WS_BRIDGE_SECRET = "issue-6564-bridge-secret";
 const coreDb = await import("../../src/lib/db/core.ts");
 const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const combosDb = await import("../../src/lib/db/combos.ts");
+const providersDb = await import("../../src/lib/db/providers.ts");
+const rulesDb = await import("../../src/lib/db/reasoningRoutingRules.ts");
 const costRules = await import("../../src/domain/costRules.ts");
 const rateLimiter = await import("../../src/shared/utils/rateLimiter.ts");
 const route = await import("../../src/app/api/internal/codex-responses-ws/route.ts");
 
 rateLimiter.setRateLimiterTestMode(true);
+
+type CodexWsPrepareBody = {
+  model: string;
+  response: {
+    reasoning: { effort: string };
+    _omnirouteReasoningRule?: unknown;
+    _omnirouteReasoningRouteTrace?: unknown;
+  };
+  reasoningRouting: {
+    ruleId: string;
+    sourceModel: string;
+    targetModel: string;
+  };
+};
+
+type ErrorBody = {
+  error: {
+    code: string;
+    message?: string;
+  };
+};
 
 function getFsErrorCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
@@ -131,6 +154,25 @@ test("WS prepare() allows the requested model when the key's policy permits it (
   assert.equal(body.error?.code, "codex_credentials_unavailable");
 });
 
+test("WS prepare() rejects managed lease keys before credential selection", async () => {
+  const managedKey = await apiKeysDb.createApiKey(
+    "Managed Lease WS Key",
+    "machine-lease-ws",
+    ["lease:exclusive"],
+    { allowedConnections: ["synthetic-managed-connection"] }
+  );
+  await apiKeysDb.updateApiKeyPermissions(managedKey.id, {
+    allowedModels: ["gpt-5.5"],
+  });
+
+  const response = await route.POST(buildPrepareRequest(managedKey.key, "gpt-5.5"));
+  const body = (await response.json()) as ErrorBody;
+
+  assert.equal(response.status, 409);
+  assert.equal(body.error.code, "LEASE_UNSUPPORTED_TRANSPORT");
+  assert.notEqual(body.error.code, "codex_credentials_unavailable");
+});
+
 test("WS prepare() rejects a combo not in the key's allowedCombos policy (403)", async () => {
   await combosDb.createCombo({
     name: "model-1.0",
@@ -158,4 +200,61 @@ test("WS prepare() rejects a combo not in the key's allowedCombos policy (403)",
     `expected a policy rejection (403), got ${response.status}: ${JSON.stringify(body)}`
   );
   assert.notEqual(body.error?.code, "codex_credentials_unavailable");
+});
+
+test("WS reasoning rules apply Codex-to-Codex effort and reject non-Codex targets", async () => {
+  const key = await apiKeysDb.createApiKey("Reasoning WS Key", "machine-reasoning-ws");
+  await apiKeysDb.updateApiKeyPermissions(key.id, {
+    allowedModels: ["gpt-5.5", "codex/gpt-5.6-sol", "openai/gpt-4o"],
+  });
+  await providersDb.createProviderConnection({
+    provider: "codex",
+    authType: "oauth",
+    name: "Codex WS test",
+    accessToken: "test-codex-access-token",
+    refreshToken: "test-codex-refresh-token",
+    expiresAt: Date.now() + 60 * 60 * 1000,
+    isActive: true,
+  });
+
+  const codexRule = await rulesDb.createReasoningRoutingRule({
+    name: "Codex WS high",
+    description: "",
+    scope: "apiKey",
+    apiKeyId: key.id,
+    comboId: null,
+    connectionId: null,
+    modelPattern: "codex/gpt-5.5",
+    sourceEffort: "any",
+    requestTags: [],
+    tagMatchMode: "any",
+    effortMode: "force",
+    targetEffort: "high",
+    targetKind: "model",
+    targetModel: "codex/gpt-5.6-sol",
+    targetComboId: null,
+    budgetAction: "preserve",
+    budgetTokens: null,
+    priority: 10,
+    enabled: true,
+  });
+
+  const allowed = await route.POST(buildPrepareRequest(key.key, "gpt-5.5"));
+  const allowedBody = (await allowed.json()) as CodexWsPrepareBody;
+  assert.equal(allowed.status, 200, JSON.stringify(allowedBody));
+  assert.equal(allowedBody.model, "gpt-5.6-sol");
+  assert.equal(allowedBody.response.reasoning.effort, "high");
+  assert.equal(allowedBody.reasoningRouting.ruleId, codexRule.id);
+  assert.equal(allowedBody.reasoningRouting.sourceModel, "codex/gpt-5.5");
+  assert.equal(allowedBody.reasoningRouting.targetModel, "codex/gpt-5.6-sol");
+  assert.equal(allowedBody.response._omnirouteReasoningRule, undefined);
+  assert.equal(allowedBody.response._omnirouteReasoningRouteTrace, undefined);
+
+  await rulesDb.updateReasoningRoutingRule(codexRule.id, {
+    targetModel: "openai/gpt-4o",
+  });
+  const rejected = await route.POST(buildPrepareRequest(key.key, "gpt-5.5"));
+  const rejectedBody = (await rejected.json()) as ErrorBody;
+  assert.equal(rejected.status, 400);
+  assert.equal(rejectedBody.error.code, "reasoning_route_transport");
 });

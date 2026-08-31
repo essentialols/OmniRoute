@@ -55,7 +55,10 @@ const config = [
     linterOptions: SHARED_LINTER,
     rules: {
       complexity: ["error", 15],
-      "max-lines-per-function": ["error", { max: 80, skipBlankLines: true, skipComments: true }],
+      "max-lines-per-function": [
+        "error",
+        { max: 80, skipBlankLines: true, skipComments: true },
+      ],
     },
   },
   {

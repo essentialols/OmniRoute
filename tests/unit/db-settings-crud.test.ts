@@ -234,6 +234,22 @@ test("LKGP overwrites connectionId when updated without one", async () => {
   assert.deepEqual(record, { provider: "openai" });
 });
 
+test("clearLKGP deletes only the targeted combo/model key", async () => {
+  await settingsDb.setLKGP("combo-f", "model-f", "openai");
+  await settingsDb.setLKGP("combo-f", "model-g", "anthropic");
+
+  await settingsDb.clearLKGP("combo-f", "model-f");
+
+  assert.equal(await settingsDb.getLKGP("combo-f", "model-f"), null);
+  // A sibling key under the same combo must survive.
+  assert.deepEqual(await settingsDb.getLKGP("combo-f", "model-g"), { provider: "anthropic" });
+});
+
+test("clearLKGP on a key with no existing pin does not throw", async () => {
+  await assert.doesNotReject(() => settingsDb.clearLKGP("combo-never-set", "model-never-set"));
+  assert.equal(await settingsDb.getLKGP("combo-never-set", "model-never-set"), null);
+});
+
 test("pricing helpers ignore malformed synced data and LKGP falls back to raw values", async () => {
   const db = core.getDbInstance();
 

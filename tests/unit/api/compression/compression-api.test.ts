@@ -9,6 +9,19 @@ import path from "node:path";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Top-level awaits MUST run before any describe registers: under
+// --test-force-exit (the CI runner flag) the process exits when the already-
+// registered tests finish, so a mid-file `await import` raced the runner and the
+// whole second describe died as "Promise resolution is still pending" on slow
+// CI machines (base-reds round 3, #9985).
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-compression-route-"));
+const ORIGINAL_DATA_DIR = process.env.DATA_DIR;
+process.env.DATA_DIR = TEST_DATA_DIR;
+
+const core = await import("../../../../src/lib/db/core.ts");
+const route = await import("../../../../src/app/api/settings/compression/route.ts");
+
+
 describe("Compression Settings API Schema Validation", () => {
   const compressionModeValues = [
     "off",
@@ -114,13 +127,6 @@ describe("Compression Settings API Schema Validation", () => {
 // ─── Route round-trip: engines map + activeComboId ─────────────────────────
 // Mirrors the mcp-accessibility-config test harness: allocate a temp DATA_DIR,
 // import route + DB modules, tear down in after().
-
-const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-compression-route-"));
-const ORIGINAL_DATA_DIR = process.env.DATA_DIR;
-process.env.DATA_DIR = TEST_DATA_DIR;
-
-const core = await import("../../../../src/lib/db/core.ts");
-const route = await import("../../../../src/app/api/settings/compression/route.ts");
 
 function makeRequest(method: string, body?: unknown): Request {
   return new Request("http://localhost/api/settings/compression", {

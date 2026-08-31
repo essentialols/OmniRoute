@@ -4,6 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { useDecollidedMigrationsDir } from "./helpers/decollidedMigrationsDir.ts";
+
+useDecollidedMigrationsDir();
 /**
  * #5217 — `trimCallLogsToMaxRows()` deleted up to batchSize=5000 ids in a single
  * `DELETE … IN (?, ?, …)` via `deleteCallLogRowsByIds`. SQLite caps a statement at

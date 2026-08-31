@@ -4,8 +4,8 @@
  *
  * Extracted from handleChatCore's execute() closure: prepares the body actually sent upstream for a
  * given target model. Pins the model id, applies the configured payload rules, truncates the tool
- * list to the provider's effective limit, backfills a default `user` for Qwen OAuth requests, and
- * injects an OpenAI `prompt_cache_key` for caching-capable providers. Pure with respect to handler
+ * list to the provider's effective limit and injects an OpenAI `prompt_cache_key` for
+ * caching-capable providers. Pure with respect to handler
  * state (returns a fresh body, only logs as a side effect); behaviour is byte-identical to the
  * previous inline block. Split into small private steps so each stays under the complexity cap.
  */
@@ -15,7 +15,11 @@ import {
   resolvePayloadRuleProtocols,
 } from "../../services/payloadRules.ts";
 import { getEffectiveToolLimit, getKnownToolLimit } from "../../services/toolLimitDetector.ts";
-import { providerSupportsCaching } from "../../utils/cacheControlPolicy.ts";
+import {
+  providerSupportsCaching,
+  resolveConnectionCacheOverride,
+  type ConnectionCacheOverride,
+} from "../../utils/cacheControlPolicy.ts";
 import {
   stripUnsupportedToolFields,
   stripHeavyCodexToolsForBudget,
@@ -24,11 +28,19 @@ import {
 } from "../../config/providerFieldStrips.ts";
 import { normalizeOpenAICompatMessages } from "./openaiCompatMessages.ts";
 import { FORMATS } from "../../translator/formats.ts";
+import { sanitizeRequestForResolvedTarget } from "../../services/targetRequestSanitizer.ts";
 import { isLocalProvider } from "@/shared/constants/providers";
 
 type LoggerLike = { debug?: (...args: unknown[]) => void } | null | undefined;
 type Body = Record<string, unknown>;
-type CredentialsLike = { apiKey?: unknown; accessToken?: unknown } | null | undefined;
+type CredentialsLike =
+  | {
+      apiKey?: unknown;
+      accessToken?: unknown;
+      providerSpecificData?: Record<string, unknown> | null;
+    }
+  | null
+  | undefined;
 
 function buildAppliedRulesSummary(
   applied: Array<{ type: string; path: string; value?: unknown }>
@@ -83,25 +95,74 @@ function truncateToolList(
   return bodyToSend;
 }
 
-// Qwen OAuth rejects requests without a non-empty `user` field. Some minimal OpenAI-compatible
-// clients omit it, so we backfill a stable default only for OAuth mode (API key mode is unaffected).
-function backfillQwenOAuthUser(
-  bodyToSend: Body,
-  provider: string | null | undefined,
-  credentials: CredentialsLike,
-  log?: LoggerLike
-): Body {
-  const hasValidQwenUser = typeof bodyToSend.user === "string" && bodyToSend.user.trim().length > 0;
-  const isQwenOAuthRequest =
-    provider === "qwen" &&
-    !credentials?.apiKey &&
-    typeof credentials?.accessToken === "string" &&
-    credentials.accessToken.trim().length > 0;
-  if (isQwenOAuthRequest && !hasValidQwenUser) {
-    bodyToSend = { ...bodyToSend, user: "omniroute-qwen-oauth" };
-    log?.debug?.("QWEN", "Injected fallback user for OAuth request");
+// OpenCode's AI SDK file-part serializer omits `image_url.detail`, which makes wide, text-dense
+// screenshots fall back to low-detail vision sampling upstream. Gated on `isOpencodeClient` (the
+// request's User-Agent / `x-opencode-*` header signal, not the `provider` field — `provider` is
+// the upstream target and can be anything regardless of which client sent the request) so this
+// override doesn't change the detail default for non-OpenCode callers on any provider.
+function defaultImageDetail(bodyToSend: Body, isOpencodeClient: boolean): Body {
+  if (!isOpencodeClient) return bodyToSend;
+
+  let nextBody = bodyToSend;
+
+  if (Array.isArray(bodyToSend.messages)) {
+    const messages = bodyToSend.messages.map((message) => {
+      if (!message || typeof message !== "object" || Array.isArray(message)) return message;
+      const messageRecord = message as Record<string, unknown>;
+      if (!Array.isArray(messageRecord.content)) return message;
+
+      let changed = false;
+      const content = messageRecord.content.map((part) => {
+        if (!part || typeof part !== "object" || Array.isArray(part)) return part;
+        const partRecord = part as Record<string, unknown>;
+        const imageUrl = partRecord.image_url;
+        if (
+          partRecord.type !== "image_url" ||
+          !imageUrl ||
+          typeof imageUrl !== "object" ||
+          Array.isArray(imageUrl)
+        ) {
+          return part;
+        }
+
+        const imageUrlRecord = imageUrl as Record<string, unknown>;
+        if (imageUrlRecord.detail !== undefined) return part;
+        changed = true;
+        return { ...partRecord, image_url: { ...imageUrlRecord, detail: "high" } };
+      });
+
+      return changed ? { ...messageRecord, content } : message;
+    });
+
+    if (messages.some((message, index) => message !== bodyToSend.messages?.[index])) {
+      nextBody = { ...nextBody, messages };
+    }
   }
-  return bodyToSend;
+
+  if (Array.isArray(bodyToSend.input)) {
+    const input = bodyToSend.input.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const itemRecord = item as Record<string, unknown>;
+      if (!Array.isArray(itemRecord.content)) return item;
+
+      let changed = false;
+      const content = itemRecord.content.map((part) => {
+        if (!part || typeof part !== "object" || Array.isArray(part)) return part;
+        const partRecord = part as Record<string, unknown>;
+        if (partRecord.type !== "input_image" || partRecord.detail !== undefined) return part;
+        changed = true;
+        return { ...partRecord, detail: "high" };
+      });
+
+      return changed ? { ...itemRecord, content } : item;
+    });
+
+    if (input.some((item, index) => item !== bodyToSend.input?.[index])) {
+      nextBody = { ...nextBody, input };
+    }
+  }
+
+  return nextBody;
 }
 
 // Normalize the OpenAI `prompt_cache_key` cache-routing hint per provider capability.
@@ -119,11 +180,12 @@ function backfillQwenOAuthUser(
 async function injectPromptCacheKey(
   bodyToSend: Body,
   provider: string | null | undefined,
-  targetFormat: string
+  targetFormat: string,
+  connectionCacheOverride: ConnectionCacheOverride | null
 ): Promise<Body> {
   if (targetFormat !== FORMATS.OPENAI) return bodyToSend;
 
-  if (!providerSupportsCaching(provider)) {
+  if (!providerSupportsCaching(provider, undefined, connectionCacheOverride)) {
     if (bodyToSend.prompt_cache_key !== undefined || bodyToSend.promptCacheKey !== undefined) {
       const cleaned = { ...bodyToSend };
       delete cleaned.prompt_cache_key;
@@ -136,7 +198,7 @@ async function injectPromptCacheKey(
   if (
     !bodyToSend.prompt_cache_key &&
     Array.isArray(bodyToSend.messages) &&
-    !["nvidia", "codex", "xai"].includes(provider)
+    !["nvidia", "xai"].includes(provider)
   ) {
     const { generatePromptCacheKey } = await import("@/lib/promptCache");
     const cacheKey = generatePromptCacheKey(bodyToSend.messages);
@@ -188,6 +250,7 @@ export async function prepareUpstreamBody(opts: {
   targetFormat: string;
   credentials: CredentialsLike;
   bypassDefaultToolLimit?: boolean;
+  isOpencodeClient?: boolean;
   log?: LoggerLike;
 }): Promise<Body> {
   const {
@@ -197,6 +260,7 @@ export async function prepareUpstreamBody(opts: {
     targetFormat,
     credentials,
     bypassDefaultToolLimit = false,
+    isOpencodeClient = false,
     log,
   } = opts;
 
@@ -223,9 +287,20 @@ export async function prepareUpstreamBody(opts: {
     );
   }
 
+  bodyToSend = sanitizeRequestForResolvedTarget(bodyToSend, {
+    provider,
+    model: payloadRuleModel,
+    log,
+  });
+  bodyToSend = defaultImageDetail(bodyToSend, isOpencodeClient);
   bodyToSend = truncateToolList(bodyToSend, provider, bypassDefaultToolLimit ?? false, log);
-  bodyToSend = backfillQwenOAuthUser(bodyToSend, provider, credentials, log);
-  bodyToSend = await injectPromptCacheKey(bodyToSend, provider, targetFormat);
+  const connectionCacheOverride = resolveConnectionCacheOverride(credentials?.providerSpecificData);
+  bodyToSend = await injectPromptCacheKey(
+    bodyToSend,
+    provider,
+    targetFormat,
+    connectionCacheOverride
+  );
   bodyToSend = normalizeOpenAICompatUpstreamBody(bodyToSend, provider, targetFormat);
 
   return bodyToSend;

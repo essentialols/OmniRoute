@@ -6,7 +6,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { VisionBridgeGuardrail } = await import("../../../src/lib/guardrails/visionBridge.ts");
+const { VisionBridgeGuardrail, resolveVisionComboName } =
+  await import("../../../src/lib/guardrails/visionBridge.ts");
 const { resetGuardrailsForTests } = await import("../../../src/lib/guardrails/registry.ts");
 const { getResolvedModelCapabilities } = await import("../../../src/lib/modelCapabilities.ts");
 import type { GuardrailContext } from "../../../src/lib/guardrails/base.ts";
@@ -38,6 +39,9 @@ function createGuardrail(options?: Parameters<typeof VisionBridgeGuardrail>[0]) 
         }
         return mockVisionResponse;
       },
+      // Fail-open (null) so classic VB-S01/S07/S10 reroute tests keep working without a
+      // live credential DB. Credential-aware cases inject an explicit mock.
+      hasUsableCredentials: async () => null,
       ...(options?.deps ?? {}),
     },
   });
@@ -92,6 +96,14 @@ test("VisionBridgeGuardrail can be disabled via constructor", () => {
   assert.strictEqual(guardrail.enabled, false);
 });
 
+test("resolveVisionComboName accepts only non-empty string mapping names", () => {
+  assert.equal(resolveVisionComboName({ comboName: "vision-fallback" }), "vision-fallback");
+  assert.equal(resolveVisionComboName({ name: "legacy-fallback" }), "legacy-fallback");
+  assert.equal(resolveVisionComboName({ comboName: { nested: true } }), null);
+  assert.equal(resolveVisionComboName({ comboName: 42 }), null);
+  assert.equal(resolveVisionComboName({ comboName: "" }), null);
+});
+
 // ── VB-S05: Vision Bridge disabled via settings ────────────────────────────
 
 test("VB-S05: passthroughs when visionBridgeEnabled is false", async () => {
@@ -104,10 +116,7 @@ test("VB-S05: passthroughs when visionBridgeEnabled is false", async () => {
         role: "user",
         content: [
           { type: "text", text: "What is in this image?" },
-          {
-            type: "image_url",
-            image_url: { url: "https://example.com/image.png" },
-          },
+          { type: "image_url", image_url: { url: "https://example.com/image.png" } },
         ],
       },
     ],
@@ -206,6 +215,69 @@ test("VB-S02b: respects native vision support for GPT-family models", async () =
   }
 });
 
+test("VB-S02c: Conol multimodal models bypass the vision bridge", async () => {
+  const guardrail = createGuardrail();
+  const model = "conol-web/claude-fable-5-xhigh";
+  const payload = createPayload({
+    model,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is this?" },
+          {
+            type: "image_url",
+            image_url: { url: "data:image/png;base64,aW1hZ2U=" },
+          },
+        ],
+      },
+    ],
+  });
+  visionCallCount = 0;
+
+  const result = await guardrail.preCall(payload, createContext({ model }));
+
+  assert.equal(getResolvedModelCapabilities(model).supportsVision, true);
+  assert.strictEqual(result.block, false);
+  assert.strictEqual(result.modifiedPayload, undefined);
+  assert.strictEqual(visionCallCount, 0);
+});
+
+test("VB-S02d: Conol text-only models remain eligible for the vision bridge", async () => {
+  const guardrail = createGuardrail();
+  const model = "conol-web/deepseek/deepseek-v4-pro";
+  const payload = createPayload({
+    model,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is this?" },
+          {
+            type: "image_url",
+            image_url: { url: "data:image/png;base64,aW1hZ2U=" },
+          },
+        ],
+      },
+    ],
+  });
+  visionCallCount = 0;
+
+  const result = await guardrail.preCall(payload, createContext({ model }));
+
+  assert.equal(getResolvedModelCapabilities(model).supportsVision, false);
+  assert.strictEqual(result.block, false);
+  assert.notStrictEqual(result.modifiedPayload, undefined);
+  // #9759: with a configured vision model, individual text-only models REROUTE
+  // to it (images kept) instead of describing through an intermediate vision
+  // call — same contract as VB-S07. The point of this case is unchanged: conol
+  // text-only models must not be skipped by the bridge.
+  const modified = result.modifiedPayload as { model?: string };
+  assert.ok(modified.model, "rerouted model should be set");
+  assert.notStrictEqual(modified.model, model, "model should be different from original");
+  assert.strictEqual(visionCallCount, 0, "reroute keeps images; no describe call");
+});
+
 test("VB-S02: model capabilities returns supportsVision for known models", () => {
   const gpt4oCaps = getResolvedModelCapabilities("openai/gpt-4o");
   // supportsVision may be true (if sync data exists) or null (if not synced)
@@ -234,7 +306,7 @@ test("VB-S04: passthroughs when messages array is empty", async () => {
 
 // ── VB-S12: Auto-prefix skip ────────────────────────────────────────────────
 
-test("VB-S12: skips guardrail for auto/ prefix model (auto/vision)", async () => {
+test("VB-S12: reroutes auto/ prefix model to vision model (auto/vision)", async () => {
   const guardrail = createGuardrail();
 
   const payload = createPayload({
@@ -244,10 +316,7 @@ test("VB-S12: skips guardrail for auto/ prefix model (auto/vision)", async () =>
         role: "user",
         content: [
           { type: "text", text: "What is in this image?" },
-          {
-            type: "image_url",
-            image_url: { url: "https://example.com/image.png" },
-          },
+          { type: "image_url", image_url: { url: "https://example.com/image.png" } },
         ],
       },
     ],
@@ -255,11 +324,17 @@ test("VB-S12: skips guardrail for auto/ prefix model (auto/vision)", async () =>
 
   const result = await guardrail.preCall(payload, createContext({ model: "auto/vision" }));
   assert.strictEqual(result.block, false);
-  assert.strictEqual(result.modifiedPayload, undefined, "auto/vision should passthrough");
-  assert.strictEqual(visionCallCount, 0, "should NOT call vision API for auto prefix");
+  assert.ok(result.modifiedPayload, "auto/vision should reroute to vision model");
+  assert.strictEqual(
+    result.modifiedPayload?.model,
+    "openai/gpt-4o-mini",
+    "should reroute to configured vision model"
+  );
+  assert.strictEqual(result.meta?.rerouted, true, "rerouted meta should be set");
+  assert.strictEqual(visionCallCount, 0, "should NOT call vision API (reroute, not describe)");
 });
 
-test("VB-S12b: skips guardrail for bare auto prefix", async () => {
+test("VB-S12b: reroutes auto prefix to best vision model when images present", async () => {
   const guardrail = createGuardrail();
 
   const payload = createPayload({
@@ -269,10 +344,7 @@ test("VB-S12b: skips guardrail for bare auto prefix", async () => {
         role: "user",
         content: [
           { type: "text", text: "What is in this image?" },
-          {
-            type: "image_url",
-            image_url: { url: "https://example.com/image.png" },
-          },
+          { type: "image_url", image_url: { url: "https://example.com/image.png" } },
         ],
       },
     ],
@@ -280,7 +352,13 @@ test("VB-S12b: skips guardrail for bare auto prefix", async () => {
 
   const result = await guardrail.preCall(payload, createContext({ model: "auto" }));
   assert.strictEqual(result.block, false);
-  assert.strictEqual(result.modifiedPayload, undefined, "auto should passthrough");
+  assert.ok(result.modifiedPayload, "auto should reroute to vision model");
+  assert.strictEqual(
+    result.modifiedPayload?.model,
+    "openai/gpt-4o-mini",
+    "should reroute to configured vision model"
+  );
+  assert.strictEqual(result.meta?.rerouted, true, "rerouted meta should be set");
 });
 
 // ── VB-S01: Single image → reroute (individual non-vision model) ───────────
@@ -295,10 +373,7 @@ test("VB-S01: reroutes non-vision model with images to best vision model", async
         role: "user",
         content: [
           { type: "text", text: "What is in this image?" },
-          {
-            type: "image_url",
-            image_url: { url: "https://example.com/image.png" },
-          },
+          { type: "image_url", image_url: { url: "https://example.com/image.png" } },
         ],
       },
     ],
@@ -425,7 +500,7 @@ test("VB-S07: reroutes base64 image to vision model", async () => {
 
 // ── VB-S03: Fail-open on vision error (via combo mapping path) ────────────
 
-test("VB-S03: preserves the original image when the vision API fails (#4012)", async () => {
+test("VB-S03/#8430: combo-mapping describe failure replaces the image with an error stub (not preserved)", async () => {
   shouldVisionFail = true;
   const guardrail = createGuardrail({
     deps: {
@@ -461,12 +536,22 @@ test("VB-S03: preserves the original image when the vision API fails (#4012)", a
     text?: string;
   }>;
 
-  // #4012: a failed describe must NOT replace the image with an "(unavailable)"
-  // stub — the original image is preserved so a vision-capable upstream can see it.
+  // SEMANTIC CHANGE (#8430): in the combo describe path (forced here via
+  // checkModelHasComboMapping), when EVERY describe call fails, the upstream is
+  // a confirmed non-vision model that cannot handle raw images — the raw
+  // image_url part is now replaced with an "(unavailable)" error stub instead
+  // of being preserved. The original #4012 preserve-raw behavior still applies
+  // to the reroute path, where the upstream model might still be vision-capable
+  // (see tests/unit/vision-bridge-preserve-on-failure-4012.test.ts, updated by
+  // the same #8430 commit).
   const imagePart = content.find((p) => p.type === "image_url");
-  assert.ok(imagePart, "original image_url part must be preserved on describe failure");
+  assert.strictEqual(
+    imagePart,
+    undefined,
+    "raw image_url must be replaced when every describe call fails in the combo path"
+  );
   const unavailPart = content.find((p) => p.type === "text" && p.text?.includes("unavailable"));
-  assert.strictEqual(unavailPart, undefined);
+  assert.ok(unavailPart, "an 'unavailable' error stub should be present when describe fails");
 });
 
 test("VB-S03: logs warning when vision API fails (via combo mapping)", async () => {
@@ -694,4 +779,127 @@ test("VB-S11b: passthroughs when vision-capable model has NO combo mapping", asy
   assert.strictEqual(result.block, false);
   assert.strictEqual(result.modifiedPayload, undefined);
   assert.strictEqual(visionCallCount, 0);
+});
+
+// ── Credential-aware whole-request reroute (combo zai hijack fix) ───────────
+
+test("VB-CRED-01: does NOT whole-request-reroute when original model has usable credentials", async () => {
+  // Repro: OpenCode 94-msg body with images + combo target zai/glm-5.2 was
+  // hijacked to opencode-zen/gpt-5.4 (priority 0, noauth) → 401 Missing API key.
+  const guardrail = createGuardrail({
+    deps: {
+      hasUsableCredentials: async (m: string) =>
+        m.startsWith("zai/") ? true : m.startsWith("opencode-") ? false : null,
+    },
+  });
+
+  const payload = createPayload({
+    model: "zai/glm-5.2",
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is in this screenshot?" },
+          {
+            type: "image_url",
+            image_url: { url: "https://example.com/shot.png" },
+          },
+        ],
+      },
+    ],
+  });
+
+  const result = await guardrail.preCall(payload, createContext({ model: "zai/glm-5.2" }));
+  assert.strictEqual(result.block, false);
+  // Must NOT swap model to opencode-zen / openai vision target
+  if (result.modifiedPayload) {
+    const modified = result.modifiedPayload as { model?: string };
+    assert.strictEqual(
+      modified.model,
+      "zai/glm-5.2",
+      "credentialed original model must not be whole-request-rerouted"
+    );
+  }
+  const meta = result.meta as Record<string, unknown> | undefined;
+  assert.notStrictEqual(meta?.rerouted, true, "must not set rerouted meta for credentialed model");
+});
+
+test("VB-CRED-01A: reroutes a credentialed text-only model when configured to preserve images", async () => {
+  mockSettings.visionBridgeRerouteTextOnly = true;
+  const guardrail = createGuardrail({
+    deps: {
+      hasUsableCredentials: async (m: string) =>
+        m === "zai/glm-5.2" || m === "openai/gpt-4o-mini" ? true : null,
+    },
+  });
+
+  const payload = createPayload({
+    model: "zai/glm-5.2",
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is in this screenshot?" },
+          {
+            type: "image_url",
+            image_url: { url: "https://example.com/shot.png" },
+          },
+        ],
+      },
+    ],
+  });
+
+  const result = await guardrail.preCall(payload, createContext({ model: "zai/glm-5.2" }));
+  assert.strictEqual(result.block, false);
+
+  const modified = result.modifiedPayload as {
+    model?: string;
+    messages: Array<{ content: Array<{ type: string; image_url?: { url: string } }> }>;
+  };
+  assert.strictEqual(modified.model, "openai/gpt-4o-mini");
+  assert.deepStrictEqual(modified.messages[0].content[1], {
+    type: "image_url",
+    image_url: { url: "https://example.com/shot.png" },
+  });
+  assert.strictEqual(visionCallCount, 0, "the bridge must not replace the image with text");
+});
+
+test("VB-CRED-02: does NOT reroute to a vision model known to lack credentials", async () => {
+  mockSettings.visionBridgeModel = "opencode-zen/gpt-5.4";
+  const guardrail = createGuardrail({
+    deps: {
+      // Original unusable, best vision model also unusable
+      hasUsableCredentials: async () => false,
+    },
+  });
+
+  const payload = createPayload({
+    model: "minimax/minimax-01",
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Describe" },
+          { type: "image_url", image_url: { url: "https://example.com/a.png" } },
+        ],
+      },
+    ],
+  });
+
+  const result = await guardrail.preCall(payload, createContext({ model: "minimax/minimax-01" }));
+  assert.strictEqual(result.block, false);
+  const meta = result.meta as Record<string, unknown> | undefined;
+  assert.notStrictEqual(meta?.rerouted, true, "must not reroute to unusable vision model");
+});
+
+test("isProviderConnectionUsable rejects noauth without api key", async () => {
+  const { isProviderConnectionUsable } =
+    await import("../../../src/lib/guardrails/visionBridge.ts");
+  assert.strictEqual(isProviderConnectionUsable({ authType: "noauth", apiKey: null }), false);
+  assert.strictEqual(isProviderConnectionUsable({ authType: "apikey", apiKey: "sk-real" }), true);
+  assert.strictEqual(isProviderConnectionUsable({ authType: "oauth", refreshToken: "rt" }), true);
+  assert.strictEqual(
+    isProviderConnectionUsable({ authType: "apikey", apiKey: "x", testStatus: "banned" }),
+    false
+  );
 });

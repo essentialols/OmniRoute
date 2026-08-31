@@ -1,7 +1,15 @@
 import {
+  CODEX_CLI_RS_ORIGINATOR,
   getCodexClientVersion,
   getCodexDefaultHeaders,
 } from "@omniroute/open-sse/config/codexClient.ts";
+import { isCodexDiscoveryModelExcluded } from "@/shared/services/codexDiscoveryPolicy";
+
+export {
+  CODEX_DISCOVERY_EXCLUDED_IDS,
+  CODEX_DISCOVERY_EXCLUDED_ID_PREFIXES,
+  isCodexDiscoveryModelExcluded,
+} from "@/shared/services/codexDiscoveryPolicy";
 
 export const CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models";
 export const CODEX_GITHUB_MODELS_URL =
@@ -157,14 +165,19 @@ function buildCodexDiscoveryModel(record: JsonRecord): CodexDiscoveryModel | nul
     apiFormat: "responses",
     supportedEndpoints: ["responses"],
   };
+  // The live Codex OAuth catalog reports BOTH `context_window` (the first
+  // pricing tier, ~272K) and `max_context_window` (the real usable window,
+  // ~872K). Requests well past the pricing tier succeed upstream, so the max
+  // window must win whenever it is present; `context_window` is only a
+  // fallback for catalogs that omit the max.
   const inputTokenLimit = firstPositiveNumber(
     record.inputTokenLimit,
     record.maxInputTokens,
     record.max_input_tokens,
     record.contextLength,
     record.context_length,
-    record.context_window,
     record.max_context_window,
+    record.context_window,
     topProvider.context_length,
     limits.input_tokens,
     limits.inputTokenLimit,
@@ -213,8 +226,9 @@ function getFreshCodexGithubCatalogCache(
   now: number,
   cacheTtlMs: number
 ): CodexDiscoveryModel[] | null {
-  if (cacheTtlMs > 0 && codexGithubCatalogCache?.expiresAt > now) {
-    return codexGithubCatalogCache.models;
+  const cache = codexGithubCatalogCache;
+  if (cacheTtlMs > 0 && cache && cache.expiresAt > now) {
+    return cache.models;
   }
   return null;
 }
@@ -284,6 +298,64 @@ function localCatalogModelToCodexDiscoveryModel(
   };
 }
 
+/**
+ * Capacity limits (input/output token caps) merge CONSERVATIVELY: the smaller
+ * of the pinned local-catalog value and the live-discovery value wins, never
+ * the larger. Overpromising context lets a request run past what the account
+ * can actually serve — the upstream truncates mid-conversation and can burn a
+ * combo fallback. Underpromising only leaves capacity on the table, which is
+ * a performance loss, not a broken request. When only one side has a value,
+ * that value passes through unchanged (nothing to reconcile).
+ *
+ * This is the ONE deliberate exception to "live wins on overlapping fields"
+ * below — name/apiFormat/supportedEndpoints/supportsThinking/supportsVision
+ * etc. still take the live value unconditionally. Don't extend this
+ * conservative rule to other fields without updating the policy comment on
+ * mergeCodexLiveModelsWithLocalCatalog (#7012).
+ */
+function mergeCapacityLimitConservatively(
+  pinnedValue: number | undefined,
+  liveValue: number | undefined
+): number | undefined {
+  if (typeof pinnedValue === "number" && typeof liveValue === "number") {
+    return Math.min(pinnedValue, liveValue);
+  }
+  return typeof liveValue === "number" ? liveValue : pinnedValue;
+}
+
+function mergeLiveAndLocalCodexModel(
+  liveModel: CodexDiscoveryModel,
+  localModel: CodexDiscoveryModel
+): CodexDiscoveryModel {
+  const merged: CodexDiscoveryModel = { ...localModel, ...liveModel };
+  const inputTokenLimit = mergeCapacityLimitConservatively(
+    localModel.inputTokenLimit,
+    liveModel.inputTokenLimit
+  );
+  const outputTokenLimit = mergeCapacityLimitConservatively(
+    localModel.outputTokenLimit,
+    liveModel.outputTokenLimit
+  );
+  if (typeof inputTokenLimit === "number") {
+    merged.inputTokenLimit = inputTokenLimit;
+  } else {
+    delete merged.inputTokenLimit;
+  }
+  if (typeof outputTokenLimit === "number") {
+    merged.outputTokenLimit = outputTokenLimit;
+  } else {
+    delete merged.outputTokenLimit;
+  }
+  return merged;
+}
+
+/**
+ * Live/GitHub discovery is the source of truth for "what exists".
+ * Explicit filters (denylist / predicates) are the policy layer for "what we show".
+ * Live wins on overlapping fields, EXCEPT capacity limits (input/output token
+ * caps) — those merge conservatively, see mergeCapacityLimitConservatively.
+ * Do NOT reintroduce curated-only allowlisting as the default path (#6862 / #6859).
+ */
 export function mergeCodexLiveModelsWithLocalCatalog(
   liveModels: CodexDiscoveryModel[],
   localCatalogModels: CodexLocalCatalogModel[]
@@ -291,6 +363,7 @@ export function mergeCodexLiveModelsWithLocalCatalog(
   const merged = new Map<string, CodexDiscoveryModel>();
 
   for (const liveModel of liveModels) {
+    if (!liveModel?.id) continue;
     merged.set(liveModel.id, liveModel);
   }
 
@@ -298,10 +371,71 @@ export function mergeCodexLiveModelsWithLocalCatalog(
     if (!localModel.id) continue;
     const normalizedLocal = localCatalogModelToCodexDiscoveryModel(localModel);
     const existing = merged.get(localModel.id);
-    merged.set(localModel.id, existing ? { ...normalizedLocal, ...existing } : normalizedLocal);
+    merged.set(
+      localModel.id,
+      existing ? mergeLiveAndLocalCodexModel(existing, normalizedLocal) : normalizedLocal
+    );
   }
 
   return Array.from(merged.values());
+}
+
+/** Return true to KEEP the model. */
+export type CodexDiscoveryModelFilter = (model: CodexDiscoveryModel) => boolean;
+
+/**
+ * Apply policy filters after discovery merge. Default denylist runs first;
+ * extraFilters are additional keep-predicates (all must pass).
+ */
+export function applyCodexDiscoveryFilters(
+  models: CodexDiscoveryModel[],
+  extraFilters: readonly CodexDiscoveryModelFilter[] = []
+): CodexDiscoveryModel[] {
+  return models.filter((model) => {
+    if (isCodexDiscoveryModelExcluded(model)) return false;
+    return extraFilters.every((keep) => keep(model));
+  });
+}
+
+/** Convenience: merge live/local then apply default (+ optional) filters. */
+export function buildCodexDiscoveryCatalog(
+  remoteModels: CodexDiscoveryModel[],
+  localCatalogModels: CodexLocalCatalogModel[],
+  extraFilters: readonly CodexDiscoveryModelFilter[] = []
+): CodexDiscoveryModel[] {
+  return applyCodexDiscoveryFilters(
+    mergeCodexLiveModelsWithLocalCatalog(remoteModels, localCatalogModels),
+    extraFilters
+  );
+}
+
+export type CuratedCodexCatalogResult = {
+  models: CodexDiscoveryModel[];
+  candidateModels: CodexDiscoveryModel[];
+};
+
+/**
+ * Optional curated-only view (allowlist). NOT used by the default Codex
+ * discovery route — kept for diagnostics / explicit call sites only.
+ */
+export function reconcileCuratedCodexCatalog(
+  remoteModels: CodexDiscoveryModel[],
+  curatedModels: CodexLocalCatalogModel[]
+): CuratedCodexCatalogResult {
+  const remoteById = new Map(remoteModels.map((model) => [model.id, model]));
+  const curatedIds = new Set<string>();
+  const models: CodexDiscoveryModel[] = [];
+
+  for (const localModel of curatedModels) {
+    if (!localModel.id) continue;
+    curatedIds.add(localModel.id);
+    const normalizedLocal = localCatalogModelToCodexDiscoveryModel(localModel);
+    const remoteModel = remoteById.get(localModel.id);
+    models.push(remoteModel ? { ...remoteModel, ...normalizedLocal } : normalizedLocal);
+  }
+
+  const candidateModels = remoteModels.filter((model) => !curatedIds.has(model.id));
+  return { models, candidateModels };
 }
 
 export function enrichCodexModelsFromGithubCatalog(
@@ -336,7 +470,7 @@ export async function fetchCodexDiscoveryModels({
       Accept: "application/json",
       "Content-Type": "application/json",
       Authorization: `Bearer ${accessToken}`,
-      originator: "codex_cli_rs",
+      originator: CODEX_CLI_RS_ORIGINATOR,
     };
     if (workspaceId) headers["chatgpt-account-id"] = workspaceId;
 

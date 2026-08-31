@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import {
+  ANTIGRAVITY_MODEL_ALIASES,
+  ANTIGRAVITY_PUBLIC_MODELS,
+} from "../../open-sse/config/antigravityModelAliases.ts";
+import { AGY_PUBLIC_MODELS } from "../../open-sse/config/agyModels.ts";
 import { createChatPipelineHarness } from "../integration/_chatPipelineHarness.ts";
 
 // Regression tests for #6402 — schema-invalid `messages` fields fell through
@@ -120,5 +125,81 @@ test("#6402: Responses-API input passes the guard (messages discriminator preser
       /messages.*Expected array/i,
       "Responses-API request must not be caught by the messages guard"
     );
+  }
+});
+
+const ANTIGRAVITY_GEMINI_MODELS = Array.from(
+  new Set(
+    [
+      ...ANTIGRAVITY_PUBLIC_MODELS.map((model) => model.id),
+      ...AGY_PUBLIC_MODELS.map((model) => model.id),
+      ...Object.keys(ANTIGRAVITY_MODEL_ALIASES),
+      ...Object.values(ANTIGRAVITY_MODEL_ALIASES),
+    ].filter((model) => /^(gemini(?!-claude)|rev19)/.test(model))
+  )
+).sort();
+
+for (const model of ANTIGRAVITY_GEMINI_MODELS) {
+  test(`Antigravity cloudcode envelope routes without the missing-messages 400: ${model}`, async () => {
+    await seedConnection("antigravity", {
+      accessToken: "ag-access",
+      providerSpecificData: { projectId: "test-project" },
+    });
+
+    let upstreamCalled = false;
+    globalThis.fetch = async () => {
+      upstreamCalled = true;
+      return new Response(
+        'data: {"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}}\n\n',
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+    };
+
+    const response = await handleChat(
+      buildRequest({
+        url: "http://localhost/v1/antigravity",
+        body: {
+          model: `antigravity/${model}`,
+          project: "projects/test",
+          request: {
+            contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+          },
+        },
+      })
+    );
+
+    assert.equal(upstreamCalled, true, "Antigravity request should reach the upstream executor");
+    assert.equal(response.status, 200, "Antigravity cloudcode envelopes must not return 400");
+
+    // This assertion is the guard the test is named for: a cloudcode envelope has no
+    // `messages` key, so it must not be rejected by the #6402 validator.
+    //
+    // It used to read `assert.match(body, /ok/)`, aimed at the mocked upstream's
+    // "ok" text — but that text never reached this layer. The match only ever
+    // succeeded on the "ok" inside `: x-omniroute-tokens-in=0`, an SSE *comment*
+    // trailer. When #10539 flipped OMNIROUTE_SSE_COMMENTS to off-by-default the
+    // trailers stopped being emitted, the body went empty, and the coincidence —
+    // not the behavior — broke. Content relay for this provider is covered for
+    // real, at the executor level, by antigravity-streaming-passthrough.test.ts.
+    const body = await response.text();
+    assert.doesNotMatch(
+      body,
+      /messages.*Expected array/i,
+      "cloudcode envelope must not be caught by the missing-messages guard"
+    );
+  });
+}
+
+test("Antigravity Gemini-family regression covers every current callable tier", () => {
+  const coveredModels = new Set(ANTIGRAVITY_GEMINI_MODELS);
+  for (const model of [
+    "gemini-pro-agent",
+    "gemini-3.1-pro-low",
+    "gemini-3.7-flash-high",
+    "gemini-3.7-flash-medium",
+    "gemini-3.7-flash-low",
+    "gemini-3.1-flash-lite",
+  ]) {
+    assert.ok(coveredModels.has(model), `expected regression coverage for ${model}`);
   }
 });

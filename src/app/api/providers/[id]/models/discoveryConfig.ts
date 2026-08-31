@@ -1,6 +1,18 @@
 import { getRegistryEntry } from "@omniroute/open-sse/config/providerRegistry.ts";
 import type { ProviderModelsConfigEntry } from "./discovery/providerModelsConfig";
 
+function parseRegistryModelsResponse(data: unknown): unknown[] {
+  const response = data as { data?: unknown; models?: unknown } | null;
+  const models = Array.isArray(data)
+    ? data
+    : Array.isArray(response?.data)
+      ? response.data
+      : Array.isArray(response?.models)
+        ? response.models
+        : [];
+  return models;
+}
+
 /**
  * Derive a models-discovery config from the provider's registry `modelsUrl`
  * when the provider is absent from the hardcoded PROVIDER_MODELS_CONFIG.
@@ -20,7 +32,7 @@ export function deriveConfigFromRegistryModelsUrl(
       authHeader: "Authorization",
       authPrefix: "Bearer ",
       headers: { "Content-Type": "application/json" },
-      parseResponse: (data) => data.data || data.models || [],
+      parseResponse: parseRegistryModelsResponse,
     };
   }
   return undefined;

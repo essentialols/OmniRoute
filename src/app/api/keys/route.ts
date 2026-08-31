@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { getApiKeys, createApiKey, isCloudEnabled, updateApiKeyPermissions } from "@/lib/localDb";
+import {
+  getApiKeys,
+  getApiKeysCount,
+  createApiKey,
+  isCloudEnabled,
+  updateApiKeyPermissions,
+} from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { syncToCloud } from "@/lib/cloudSync";
 import { createKeySchema } from "@/shared/validation/schemas";
@@ -30,18 +36,18 @@ export async function GET(request: Request) {
   if (authError) return authError;
 
   try {
-    const keys = await getApiKeys();
+    const { limit, offset } = parsePagination(request);
+    const dbLimit = limit ?? undefined;
+    const total = getApiKeysCount();
+    const keys = await getApiKeys(dbLimit, offset);
     const maskedKeys = keys.map((k) => ({
       ...k,
       key: maskStoredApiKey(k.key),
     }));
-    const { limit, offset } = parsePagination(request);
-    const pagedKeys =
-      limit === null ? maskedKeys.slice(offset) : maskedKeys.slice(offset, offset + limit);
 
     return NextResponse.json({
-      keys: pagedKeys,
-      total: maskedKeys.length,
+      keys: maskedKeys,
+      total,
       allowKeyReveal: isApiKeyRevealEnabled(),
     });
   } catch (error) {
@@ -67,6 +73,7 @@ export async function POST(request) {
       name,
       noLog,
       scopes,
+      allowedConnections,
       allowUsageCommand,
       usageLimitEnabled,
       dailyUsageLimitUsd,
@@ -77,7 +84,7 @@ export async function POST(request) {
     // Always get machineId from server
     const machineId = await getConsistentMachineId();
     const normalizedScopes = normalizeSelfServiceScopesForCreate(scopes);
-    const apiKey = await createApiKey(name, machineId, normalizedScopes);
+    const apiKey = await createApiKey(name, machineId, normalizedScopes, { allowedConnections });
     if (
       noLog === true ||
       allowUsageCommand === true ||
@@ -112,6 +119,7 @@ export async function POST(request) {
         name: apiKey.name,
         id: apiKey.id,
         machineId: apiKey.machineId,
+        allowedConnections: apiKey.allowedConnections,
         noLog: noLog === true,
         allowUsageCommand: allowUsageCommand === true,
         usageLimitEnabled: usageLimitEnabled === true,
@@ -119,6 +127,8 @@ export async function POST(request) {
         weeklyUsageLimitUsd: weeklyUsageLimitUsd ?? null,
         chaosModeEnabled: chaosModeEnabled === true,
         streamDefaultMode: "legacy",
+        compressionEnabled: true,
+        cacheDefaultMode: "legacy",
       },
       { status: 201 }
     );

@@ -98,9 +98,6 @@ describe("#6479/#6491 — null-stats step no longer silently dropped from the pi
 
     const result = applyStackedCompression(bigBody, [{ engine: "ccr" }]);
     const engines = result.stats?.engineBreakdown?.map((e) => e.engine) ?? [];
-    assert.ok(
-      engines.includes("ccr"),
-      `expected 'ccr' in engineBreakdown (control), got ${JSON.stringify(engines)}`
-    );
+    assert.ok(engines.includes("ccr"), `expected 'ccr' in engineBreakdown (control), got ${JSON.stringify(engines)}`);
   });
 });

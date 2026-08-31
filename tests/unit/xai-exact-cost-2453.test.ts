@@ -38,7 +38,10 @@ test("computeCostFromPricing: xAI exact cost_in_usd_ticks overrides the token-ba
     ...TOKENS_1M_EACH,
     cost_in_usd_ticks: DOC_EXAMPLE_TICKS,
   });
-  assert.ok(Math.abs(cost - DOC_EXAMPLE_USD) < 1e-9, `expected ${DOC_EXAMPLE_USD}, got ${cost}`);
+  assert.ok(
+    Math.abs(cost - DOC_EXAMPLE_USD) < 1e-9,
+    `expected ${DOC_EXAMPLE_USD}, got ${cost}`
+  );
   assert.notEqual(cost, 3, "must not fall back to the $3 token-based estimate");
 });
 
@@ -86,6 +89,32 @@ test("normalizeUsage: passes through a finite cost_in_usd_ticks", () => {
 test("normalizeUsage: drops a non-finite cost_in_usd_ticks", () => {
   const normalized = normalizeUsage({ prompt_tokens: 10, cost_in_usd_ticks: "not-a-number" });
   assert.equal(normalized.cost_in_usd_ticks, undefined);
+});
+
+test("normalizeUsage: rejects null, empty, and negative exact costs", () => {
+  for (const value of [null, "", -1]) {
+    const normalized = normalizeUsage({ prompt_tokens: 10, cost_in_usd_ticks: value });
+    assert.equal(normalized.cost_in_usd_ticks, undefined, `unexpected exact cost for ${value}`);
+  }
+});
+
+test("extractUsageFromResponse: rejects malformed exact cost values", () => {
+  for (const value of [null, "", -1]) {
+    const usage = extractUsageFromResponse(
+      {
+        usage: {
+          prompt_tokens: 12,
+          completion_tokens: 8,
+          cost_in_usd_ticks: value,
+        },
+      },
+      "xai"
+    );
+    assert.ok(
+      !("cost_in_usd_ticks" in usage),
+      `must not add cost_in_usd_ticks for malformed value ${value}`
+    );
+  }
 });
 
 test("extractUsageFromResponse: xAI OpenAI-shaped usage carries cost_in_usd_ticks through", () => {

@@ -11,8 +11,11 @@ import assert from "node:assert/strict";
 import { createChatPipelineHarness } from "../integration/_chatPipelineHarness.ts";
 
 const harness = await createChatPipelineHarness("chat-rejects-image-only-model");
-const { buildRequest, handleChat, resetStorage } = harness as {
+const { buildRequest, combosDb, handleChat, resetStorage } = harness as {
   buildRequest: (opts: { body: unknown }) => Request;
+  combosDb: {
+    createCombo: (data: Record<string, unknown>) => Promise<unknown>;
+  };
   handleChat: (req: Request) => Promise<Response>;
   resetStorage: () => void | Promise<void>;
 };
@@ -92,6 +95,52 @@ test("POST /v1/chat/completions with a dual-purpose model (codex/gpt-5.5) is NOT
       msg,
       /image-generation model/i,
       "dual-purpose codex/gpt-5.5 must not trip the image guard on chat"
+    );
+  }
+});
+
+test("POST /v1/chat/completions routes a stored chat combo whose name is an image alias (#8986)", async () => {
+  await combosDb.createCombo({
+    name: "fast",
+    strategy: "priority",
+    models: ["openai/gpt-4o"],
+  });
+
+  const request = buildRequest({
+    body: {
+      model: "fast",
+      messages: [{ role: "user", content: "hi" }],
+    },
+  });
+
+  const res = await handleChat(request);
+  if (res.status === 400) {
+    const body = (await res.json()) as { error?: { message?: string } };
+    const msg = body?.error?.message || JSON.stringify(body);
+    assert.doesNotMatch(
+      msg,
+      /image-generation model/i,
+      "a stored chat combo must take precedence over a colliding image alias"
+    );
+  }
+});
+
+test("POST /v1/chat/completions allows a model registered for both chat and image generation", async () => {
+  const request = buildRequest({
+    body: {
+      model: "codex/gpt-5.6-sol",
+      messages: [{ role: "user", content: "hi" }],
+    },
+  });
+
+  const res = await handleChat(request);
+  if (res.status === 400) {
+    const body = (await res.json()) as { error?: { message?: string } };
+    const msg = body?.error?.message || JSON.stringify(body);
+    assert.doesNotMatch(
+      msg,
+      /image-generation model/i,
+      "a model present in the chat catalog must not trip the image-only guard"
     );
   }
 });

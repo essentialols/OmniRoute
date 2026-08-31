@@ -16,13 +16,14 @@ test("#6328 export filter drops paid model steps but keeps combo-ref steps", () 
   const combos = [
     {
       id: "c1",
-      models: [{ kind: "combo-ref", ref: "other-combo" }, { model: "openai/gpt-4o" }],
+      models: [
+        { kind: "combo-ref", ref: "other-combo" },
+        { model: "openai/gpt-4o" },
+      ],
     },
   ];
   const [out] = filterPaidComboSteps(combos);
-  const kinds = out.models.map(
-    (m) => (m as { kind?: string; model?: string }).kind ?? (m as { model?: string }).model
-  );
+  const kinds = out.models.map((m) => (m as { kind?: string; model?: string }).kind ?? (m as { model?: string }).model);
   assert.deepEqual(kinds, ["combo-ref"], "paid model dropped, combo-ref kept");
 });
 

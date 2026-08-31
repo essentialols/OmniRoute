@@ -9,8 +9,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { openaiToGeminiRequest } =
-  await import("../../open-sse/translator/request/openai-to-gemini.ts");
+const { openaiToGeminiRequest } = await import(
+  "../../open-sse/translator/request/openai-to-gemini.ts"
+);
 
 test("thinking.budget_tokens: 0 is honored as thinkingBudget 0 (not dropped) (#6813)", () => {
   const result = openaiToGeminiRequest(
@@ -20,9 +21,7 @@ test("thinking.budget_tokens: 0 is honored as thinkingBudget 0 (not dropped) (#6
       thinking: { type: "enabled", budget_tokens: 0 },
     },
     false
-  ) as {
-    generationConfig: { thinkingConfig?: { thinkingBudget: number; includeThoughts: boolean } };
-  };
+  ) as { generationConfig: { thinkingConfig?: { thinkingBudget: number; includeThoughts: boolean } } };
 
   assert.equal(
     result.generationConfig.thinkingConfig?.thinkingBudget,
@@ -44,9 +43,7 @@ test("thinking.budget_tokens: positive value still maps through with includeThou
       thinking: { type: "enabled", budget_tokens: 2048 },
     },
     false
-  ) as {
-    generationConfig: { thinkingConfig?: { thinkingBudget: number; includeThoughts: boolean } };
-  };
+  ) as { generationConfig: { thinkingConfig?: { thinkingBudget: number; includeThoughts: boolean } } };
 
   assert.equal(result.generationConfig.thinkingConfig?.thinkingBudget, 2048);
   assert.equal(result.generationConfig.thinkingConfig?.includeThoughts, true);

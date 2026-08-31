@@ -251,15 +251,27 @@ export function findReimplementedConditions(prodSources, testSource, testImports
  * (filtro D do git diff --diff-filter=MDR).
  *
  * `deletionAllowlist` (`_deletedWithReplacement` no test-masking-allowlist.json)
- * isenta uma deleção SOMENTE quando o substituto declarado existe no HEAD e é
- * ele próprio um arquivo de teste — o caso "reescrito em outro path sem rename
- * detectável" (conteúdo novo demais para o -M do git). Qualquer entrada cujo
- * substituto não exista ou não seja teste continua flagada.
+ * isenta uma deleção de três formas, cada uma com sua própria verificação:
+ *   1. `replacement` (path string) — o substituto declarado existe no HEAD e é
+ *      ele próprio um arquivo de teste — o caso "reescrito em outro path sem
+ *      rename detectável" (conteúdo novo demais para o -M do git).
+ *   2. `sourceRemoved` (array de paths) — feature removida por completo: TODOS
+ *      os arquivos de produção listados precisam estar ausentes no HEAD (sem
+ *      substituto porque não há mais código a testar). Usar apenas quando a
+ *      remoção do código-fonte está confirmada na mesma commit/PR.
+ *   3. `strayFromCommit` (hash) + `reason` (não-vazio) — o arquivo entrou no
+ *      repositório POR ACIDENTE no commit declarado (ex.: um commit de docs
+ *      que varreu artefatos de worktree de outra sessão, caso f4e93f339d) e a
+ *      deleção devolve o arquivo ao seu fluxo dono (um PR/issue aberto). O
+ *      gate verifica via git que o commit declarado é exatamente o que ADICIONOU
+ *      o arquivo; o `reason` deve nomear o PR/issue dono para a revisão humana.
+ * Qualquer entrada cuja condição declarada não se verifique continua flagada.
  */
 export function evaluateDeletedFiles(
   deletedPaths,
   deletionAllowlist = {},
-  fileExists = fs.existsSync
+  fileExists = fs.existsSync,
+  addedByCommit = lookupAddedByCommit
 ) {
   const flags = [];
   for (const f of deletedPaths) {
@@ -272,11 +284,54 @@ export function evaluateDeletedFiles(
       );
       continue;
     }
+    if (entry && Array.isArray(entry.sourceRemoved) && entry.sourceRemoved.length > 0) {
+      const stillPresent = entry.sourceRemoved.filter((p) => fileExists(p));
+      if (stillPresent.length === 0) continue;
+      flags.push(
+        `${f}: deleção allowlistada como feature removida mas ${stillPresent.join(", ")} ainda existe(m) no HEAD`
+      );
+      continue;
+    }
+    if (entry && typeof entry.strayFromCommit === "string" && entry.strayFromCommit.trim()) {
+      if (typeof entry.reason !== "string" || !entry.reason.trim()) {
+        flags.push(
+          `${f}: deleção allowlistada como stray mas sem \`reason\` — nomeie o PR/issue dono do arquivo`
+        );
+        continue;
+      }
+      const actual = addedByCommit(f);
+      const declared = entry.strayFromCommit.trim();
+      if (actual && (actual === declared || actual.startsWith(declared))) continue;
+      flags.push(
+        `${f}: deleção allowlistada como stray de ${declared} mas o commit que adicionou o arquivo é ${actual ?? "desconhecido"}`
+      );
+      continue;
+    }
     flags.push(
       `${f}: arquivo de teste deletado — revisão humana obrigatória (mascaramento alto-sinal)`
     );
   }
   return flags;
+}
+
+/**
+ * (subcheck 1, forma 3) Hash COMPLETO do commit que adicionou `path` (o add
+ * mais recente — cobre o caso deletado-e-readicionado). `null` quando o git
+ * não conhece o path.
+ */
+function lookupAddedByCommit(path) {
+  try {
+    const out = execFileSync("git", ["log", "--diff-filter=A", "--format=%H", "--", path], {
+      encoding: "utf8",
+    });
+    const hashes = out
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return hashes.length ? hashes[0] : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -319,6 +374,26 @@ export function partitionDeletedRenamed(nameStatusOutput) {
  * Os campos de skip e extTaut são opcionais (default 0) para compatibilidade
  * com chamadas legadas que só passam baseAsserts/headAsserts/baseTaut/headTaut.
  */
+/**
+ * (#6634) `check-test-masking.test.ts` legitimately embeds tautology-pattern string
+ * literals (`assert.ok(true)`, `expect(true).toBe(true)`, `assert.equal(1,1)`) as
+ * FIXTURES to exercise `countBareTautologies()`/`scanBareTautologies()` (#6404). The
+ * diff-based tautology counters (`countTautologies()`/`countExtendedTautologies()`)
+ * are dumb regex scans of raw source text with no awareness that a literal sits
+ * inside a fixture string rather than real assertion code, so any new fixture line
+ * self-trips a HARD "new tautology" flag on the gate's own regression-test file.
+ * Mirrors the exclusion `scanBareTautologies()` already applies for the same reason.
+ *
+ * The exclusion covers the whole `check-test-masking*` gate self-test family — not
+ * just `check-test-masking.test.ts` but sibling regression files such as
+ * `check-test-masking-selfref-6634.test.ts`, which likewise embed tautology-pattern
+ * literals as fixtures/documentation to prove this gate's own behavior.
+ */
+const SELF_TEST_FIXTURE_RE = /(^|\/)check-test-masking(-[\w-]+)?\.test\.tsx?$/;
+function isSelfTestFixtureFile(file) {
+  return SELF_TEST_FIXTURE_RE.test(file);
+}
+
 export function evaluateMasking(perFile, assertReductionAllowlist = new Set()) {
   const flags = [];
   for (const f of perFile) {
@@ -326,6 +401,7 @@ export function evaluateMasking(perFile, assertReductionAllowlist = new Set()) {
     const headSkips = f.headSkips ?? 0;
     const baseExtTaut = f.baseExtTaut ?? 0;
     const headExtTaut = f.headExtTaut ?? 0;
+    const isSelfTestFixture = isSelfTestFixtureFile(f.file);
 
     // The net-assert-REDUCTION signal can be allowlisted per file when the reduction is a
     // verified-legitimate refactor/field-removal (config/quality/test-masking-allowlist.json).
@@ -334,13 +410,13 @@ export function evaluateMasking(perFile, assertReductionAllowlist = new Set()) {
       flags.push(
         `${f.file}: asserts ${f.baseAsserts} → ${f.headAsserts} (REMOÇÃO de ${f.baseAsserts - f.headAsserts} — enfraquecimento?)`
       );
-    if (f.headTaut > f.baseTaut)
+    if (!isSelfTestFixture && f.headTaut > f.baseTaut)
       flags.push(`${f.file}: nova(s) ${f.headTaut - f.baseTaut} tautologia(s) assert.ok(true)`);
     if (headSkips > baseSkips)
       flags.push(
         `${f.file}: ${headSkips - baseSkips} novo(s) .skip/.todo/.only (asserts silenciados sem remoção)`
       );
-    if (headExtTaut > baseExtTaut)
+    if (!isSelfTestFixture && headExtTaut > baseExtTaut)
       flags.push(
         `${f.file}: nova(s) ${headExtTaut - baseExtTaut} tautologia(s) estendida(s) (expect(true).toBe(true) / assert.equal(1,1))`
       );
@@ -374,7 +450,7 @@ export function scanBareTautologies(testFiles, readFile) {
   const read = readFile || ((f) => fs.readFileSync(f, "utf8"));
   const flags = [];
   for (const file of testFiles || []) {
-    if (file.endsWith("check-test-masking.test.ts")) continue;
+    if (isSelfTestFixtureFile(file)) continue;
     let src;
     try {
       src = read(file);
@@ -413,6 +489,22 @@ function resolveBase() {
   if (process.env.GITHUB_BASE_SHA) return process.env.GITHUB_BASE_SHA;
   if (process.env.GITHUB_BASE_REF) return `origin/${process.env.GITHUB_BASE_REF}`;
   return null;
+}
+
+/**
+ * Whether the per-file diff subchecks should be skipped for being too large to be a
+ * reviewable unit. Exported so the threshold behavior is testable without a repo: the
+ * boundary is what matters, and an off-by-one here either blocks a release or silently
+ * disables the check on a big-but-legitimate PR.
+ *
+ * `max <= 0` disables the skip entirely (always analyze) — a deliberate escape hatch.
+ */
+export function shouldSkipDiffSubchecks(changedCount, max) {
+  const n = Number(changedCount);
+  const cap = Number(max);
+  if (!Number.isFinite(n) || n < 0) return false;
+  if (!Number.isFinite(cap) || cap <= 0) return false;
+  return n > cap;
 }
 
 function main() {
@@ -485,6 +577,34 @@ function main() {
     .split("\n")
     .map((s) => s.trim())
     .filter((f) => TEST_RE.test(f) && fs.existsSync(f));
+
+  // (gap 6) A release PR is not a reviewable unit, and this is where that stops being free.
+  // Releases squash-merge into `main`, so a release PR's merge-base is the PREVIOUS cycle's
+  // fork point and the diff spans the whole cycle. In the v3.8.49 run that was ~1277 changed
+  // test files, each costing a `git show base:file` process plus a full regex pass — the check
+  // ran twice without finishing, >30 min pegged on one core, and the release waited on it.
+  //
+  // Every one of those files was already gated by this same check on its own PR during the
+  // cycle. Re-analyzing the aggregate buys nothing and blocks the release, so above the
+  // threshold the per-file diff subchecks are skipped — LOUDLY, naming the count, because a
+  // silent skip is how a gate becomes indistinguishable from a passing one (that is gap 12,
+  // and it cost two production bugs this cycle).
+  //
+  // The floor is untouched: scanBareTautologies() above already ran unconditionally over all
+  // tracked test files (3977 files, ~1 s), so nothing here lowers absolute coverage.
+  const maxChangedTests = Number(process.env.TEST_MASKING_MAX_CHANGED_TESTS || 300);
+  if (shouldSkipDiffSubchecks(changed.length + renamePerFile.length, maxChangedTests)) {
+    console.log(
+      `[test-masking] ${changed.length} teste(s) modificado(s) + ${renamePerFile.length} ` +
+        `renomeado(s) excede o teto de ${maxChangedTests} — pulando os subchecks de diff.\n` +
+        `  Um diff desse tamanho é um PR de release (base = main, merge-base = fork do ciclo ` +
+        `anterior por causa do squash), não uma unidade revisável.\n` +
+        `  Cada um desses arquivos já passou por este mesmo gate no PR de origem.\n` +
+        `  O scan absoluto de tautologias rodou sobre TODOS os testes rastreados e está OK.\n` +
+        `  Para forçar a análise completa: TEST_MASKING_MAX_CHANGED_TESTS=999999`
+    );
+    return;
+  }
 
   const perFile = [...renamePerFile];
   for (const file of changed) {

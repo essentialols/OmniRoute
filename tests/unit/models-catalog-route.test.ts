@@ -679,30 +679,46 @@ test("v1 models catalog exposes bare Codex-preferred IDs for native Codex client
   assert.equal(providerModel.parent, aliasModel.id);
 });
 
-test("v1 models catalog exposes agy client-visible preview aliases instead of upstream internal IDs", async () => {
+test("v1 models catalog exposes agy client-visible aliases without retired model IDs", async () => {
+  // `alias: "agy"` is what the catalog advertises (fix(antigravity): keep agy as
+  // the advertised model prefix, verified live: 275 entries, 19 under agy/, 0
+  // under antigravity/). The retired `antigravity/<model>` ids still route via
+  // LEGACY_PROVIDER_ID_MAP but are not themselves catalog entries.
   await seedConnection("agy", {
     authType: "oauth",
     name: "agy-preview",
     apiKey: null,
     accessToken: "agy-access",
   });
-
   const response = await v1ModelsCatalog.getUnifiedModelsResponse(
     new Request("http://localhost/api/v1/models")
   );
   const body = (await response.json()) as any;
   const ids = new Set(body.data.map((item) => item.id));
-
   assert.equal(response.status, 200);
-  assert.ok(ids.has("agy/gemini-3-pro-preview"));
-  assert.ok(ids.has("agy/gemini-3.5-flash-low"));
-  assert.ok(ids.has("agy/gemini-3.5-flash-medium"));
-  assert.ok(ids.has("agy/gemini-3.5-flash-high"));
-  assert.equal(ids.has("agy/gemini-3-flash-preview"), false);
+  // Retired as of v3.8.50's live catalog.
+  assert.equal(ids.has("agy/gemini-3-pro-preview"), false);
+  assert.equal(ids.has("agy/gemini-3.1-pro"), false);
+  assert.equal(ids.has("agy/gemini-2.5-computer-use-preview-10-2025"), false);
+  assert.equal(ids.has("agy/rev19-uic3-1p"), false);
+  assert.ok(ids.has("agy/gemini-3.7-flash-high"));
+  assert.ok(ids.has("agy/gemini-3.7-flash-medium"));
+  assert.ok(ids.has("agy/gemini-3.7-flash-low"));
+  assert.equal(ids.has("agy/gemini-3.6-flash-high"), false);
+  assert.equal(ids.has("agy/gemini-3.6-flash-medium"), false);
+  assert.equal(ids.has("agy/gemini-3.6-flash-low"), false);
+  assert.equal(ids.has("agy/gemini-3.5-flash"), false);
+  assert.equal(ids.has("agy/gemini-3.5-flash-extra-low"), false);
+  assert.equal(ids.has("agy/gemini-3.5-flash-low"), false);
   assert.equal(ids.has("agy/gemini-3-flash-agent"), false);
-  // Gemini 3.1 Pro budget tiers remain client-visible aliases for the plain
-  // `gemini-3.1-pro` upstream id — see ANTIGRAVITY_MODEL_ALIASES.
-  assert.ok(ids.has("agy/gemini-3.1-pro-high"));
+  assert.equal(ids.has("agy/gemini-3.5-flash-medium"), false);
+  assert.equal(ids.has("agy/gemini-3.5-flash-high"), false);
+  assert.equal(ids.has("agy/gemini-3.5-flash-preview"), false);
+  assert.equal(ids.has("agy/gemini-3-flash-preview"), false);
+  // Gemini 3.1 Pro High is not itself a public catalog entry (the discovery slot
+  // 400s); it resolves via ANTIGRAVITY_MODEL_ALIASES to the callable gemini-pro-agent.
+  assert.equal(ids.has("agy/gemini-3.1-pro-high"), false);
+  assert.ok(ids.has("agy/gemini-pro-agent"));
   // The legacy `gemini-claude-*` ids are alias KEYS (remapped to live upstream
   // ids), not public catalog entries, so they stay unexposed.
   assert.equal(ids.has("agy/gemini-claude-sonnet-4-5"), false);
@@ -848,6 +864,34 @@ test("v1 models catalog includes synced non-Gemini provider models from discover
   assert.equal(syncedModel.context_length, 262144);
 });
 
+test("v1 models catalog retains registered effort aliases beside synced OpenCode Go bases", async () => {
+  const connection = await seedConnection("opencode-go", {
+    name: "opencode-go-effort-aliases",
+    apiKey: "go-key",
+  });
+
+  await modelsDb.replaceSyncedAvailableModelsForConnection("opencode-go", connection.id, [
+    {
+      id: "hy3",
+      name: "Hunyuan3",
+      source: "imported",
+      supportedEndpoints: ["chat"],
+    },
+  ]);
+
+  const response = await v1ModelsCatalog.getUnifiedModelsResponse(
+    new Request("http://localhost/api/v1/models")
+  );
+  const body = (await response.json()) as { data: Array<{ id: string }> };
+  const ids = body.data.map((item: { id: string }) => item.id);
+
+  assert.equal(response.status, 200);
+  assert.ok(ids.includes("opencode-go/hy3"));
+  assert.ok(ids.includes("opencode-go/hy3-none"));
+  assert.ok(ids.includes("opencode-go/hy3-low"));
+  assert.ok(ids.includes("opencode-go/hy3-high"));
+});
+
 test("v1 models catalog advertises GLM-5.2 provider aliases with hosted context limits", async () => {
   const hfConnection = await seedConnection("huggingface", {
     name: "huggingface-glm52",
@@ -925,16 +969,15 @@ test("v1 models catalog advertises GLM-5.2 provider aliases with hosted context 
     const byId = new Map(body.data.map((item) => [item.id, item]));
 
     for (const [id, expectedContext] of [
-      ["huggingface/zai-org/GLM-5.2", 262144],
-      ["cloudflare-ai/@cf/zai-org/glm-5.2", 262144],
+      ["huggingface/zai-org/GLM-5.2", 128000],
+      ["cloudflare-ai/@cf/zai-org/glm-5.2", 128000],
       ["opencode-go/glm-5.2", 1000000],
-      ["zenmux/z-ai/glm-5.2", 1000000],
+      ["zenmux/z-ai/glm-5.2", 128000],
     ] as const) {
       const model = byId.get(id) as any;
       assert.ok(model, `expected ${id} in catalog`);
       assert.equal(model.context_length, expectedContext, id);
       assert.equal(model.max_input_tokens, expectedContext, id);
-      assert.notEqual(model.context_length, 128000, id);
     }
   } finally {
     modelsDevSync.saveModelsDevCapabilities({});
@@ -1309,18 +1352,24 @@ test("v1 models catalog returns 500 when model compatibility lookup crashes", as
 
   db.prepare = (sql) => {
     const statement = originalPrepare(sql);
-    if (String(sql) !== "SELECT value FROM key_value WHERE namespace = ? AND key = ?") {
+    // #9147: the catalog builder now resolves hidden models via a single bulk
+    // read (`getHiddenModelsByProvider()`, src/lib/db/models.ts) instead of the
+    // old per-provider `SELECT value FROM key_value WHERE namespace = ? AND
+    // key = ?` / readCompatList() lookup — intercept the bulk query's `.all()`
+    // call so this test still exercises "DB read for model visibility crashes
+    // -> catalog endpoint surfaces 500" against the current implementation.
+    if (
+      String(sql) !==
+      "SELECT namespace, key, value FROM key_value WHERE namespace IN ('modelCompatOverrides', 'customModels')"
+    ) {
       return statement;
     }
 
     return new Proxy(statement, {
       get(target, prop, receiver) {
-        if (prop === "get") {
+        if (prop === "all") {
           return (...args) => {
-            if (args[0] === "modelCompatOverrides") {
-              throw new Error("compat lookup boom");
-            }
-            return target.get(...args);
+            throw new Error("compat lookup boom");
           };
         }
         return Reflect.get(target, prop, receiver);
@@ -1367,8 +1416,15 @@ test("v1 models catalog skips duplicate built-ins and custom models from inactiv
   const duplicateBuiltins = body.data.filter((item) => item.id === "openai/gpt-4o-2024-11-20");
 
   assert.equal(response.status, 200);
+  // Still exactly one entry: the custom row overlays the built-in, it does not duplicate it.
   assert.equal(duplicateBuiltins.length, 1);
-  assert.equal(duplicateBuiltins[0].custom === true, false);
+  // #10248 changed the contract: a custom row for an id that already exists is the
+  // operator-owned overlay for that model (catalog.ts:1330) — its explicitly stored
+  // fields win over the discovered metadata, and the merged entry is flagged `custom`.
+  // Before #10248 the duplicate was skipped outright, so this asserted `false`.
+  assert.equal(duplicateBuiltins[0].custom, true);
+  // The overlay must keep the catalog identity rather than becoming a detached entry.
+  assert.equal(duplicateBuiltins[0].id, "openai/gpt-4o-2024-11-20");
   assert.equal(
     body.data.some((item) => item.id === "cl/inactive-only" || item.id === "cline/inactive-only"),
     false
@@ -1419,7 +1475,7 @@ test("v1 models catalog auto-calculates combo context_length from targets when n
   });
 
   // Create a combo with targets having different context limits.
-  // openai/gpt-4o context = 128000, claude/claude-sonnet-4-6 = 200000.
+  // openai/gpt-4o context = 128000, claude/claude-sonnet-4-6 = 1000000 (#7129: 1M GA).
   // The combo should expose context_length = min = 128000.
   const combo = await combosDb.createCombo({
     name: "auto-context-combo",

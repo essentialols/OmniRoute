@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeBootError, ensureDbReadyForBoot } from "../../src/instrumentation-node";
+import {
+  normalizeBootError,
+  ensureDbReadyForBoot,
+} from "../../src/instrumentation-node";
 
 // Regression guard for #6560: during an update/restart, sql.js's WASM adapter
 // can throw the bare string `"Database closed"` (not an Error instance) when a
@@ -20,7 +23,7 @@ test("normalizeBootError wraps a raw thrown string into a real Error", () => {
   // string throws; on the normalized Error it must be a no-op assignment.
   assert.throws(() => {
     // @ts-expect-error - deliberately mutating a primitive to reproduce the bug
-    "Database closed".message = "mutated";
+    ("Database closed").message = "mutated";
   }, TypeError);
   assert.doesNotThrow(() => {
     normalized.message = `An error occurred while loading instrumentation hook: ${normalized.message}`;
@@ -65,11 +68,14 @@ test("ensureDbReadyForBoot re-throws (normalized) when the retry also fails", as
     throw "Database closed";
   };
 
-  await assert.rejects(ensureDbReadyForBoot(fakeEnsureDbInitialized), (err: unknown) => {
-    assert.ok(err instanceof Error, "rejection must be a real Error, never a raw string");
-    assert.equal((err as Error).message, "Database closed");
-    return true;
-  });
+  await assert.rejects(
+    ensureDbReadyForBoot(fakeEnsureDbInitialized),
+    (err: unknown) => {
+      assert.ok(err instanceof Error, "rejection must be a real Error, never a raw string");
+      assert.equal((err as Error).message, "Database closed");
+      return true;
+    }
+  );
   assert.equal(calls, 2);
 });
 
@@ -80,11 +86,14 @@ test("ensureDbReadyForBoot does not retry and re-throws (normalized) unrelated f
     throw new Error("disk full");
   };
 
-  await assert.rejects(ensureDbReadyForBoot(fakeEnsureDbInitialized), (err: unknown) => {
-    assert.ok(err instanceof Error);
-    assert.equal((err as Error).message, "disk full");
-    return true;
-  });
+  await assert.rejects(
+    ensureDbReadyForBoot(fakeEnsureDbInitialized),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.equal((err as Error).message, "disk full");
+      return true;
+    }
+  );
   assert.equal(calls, 1, "unrelated errors must not trigger the closed-DB retry");
 });
 

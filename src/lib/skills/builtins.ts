@@ -1,17 +1,12 @@
 import { SkillHandler } from "./types";
 import { executeWebSearch } from "@/lib/search/executeWebSearch";
+import { executeWebFetch } from "./webFetchExecution";
 import { resolveDataDir } from "@/lib/dataPaths";
 import { safeOutboundFetch } from "@/shared/network/safeOutboundFetch";
 import { sandboxRunner, type SandboxConfig } from "./sandbox";
-import { handleWebFetch, type WebFetchFormat } from "@omniroute/open-sse/handlers/webFetch.ts";
-import { getProviderCredentialsWithQuotaPreflight } from "@/sse/services/auth";
 import { createHash } from "crypto";
 import fs from "fs/promises";
 import path from "path";
-
-// Web-fetch provider priority (task #17). Mirrors the /v1/web/fetch route's provider order.
-const WEB_FETCH_PROVIDER_ORDER = ["firecrawl", "jina-reader", "tavily-search", "tinyfish"] as const;
-type WebFetchProviderId = (typeof WEB_FETCH_PROVIDER_ORDER)[number];
 
 const MAX_FILE_BYTES = Number.parseInt(process.env.SKILLS_MAX_FILE_BYTES || "", 10) || 1_048_576;
 const MAX_HTTP_RESPONSE_BYTES =
@@ -153,7 +148,7 @@ async function readResponseText(response: Response, maxBytes: number) {
 function normalizeBody(body: unknown, headers?: Record<string, string>) {
   if (body === undefined || body === null) return undefined;
   if (typeof body === "string") return body;
-  if (body instanceof Uint8Array) return body;
+  if (body instanceof Uint8Array) return new Uint8Array(body);
   if (typeof body === "object") {
     if (headers && !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
       headers["Content-Type"] = "application/json";
@@ -392,63 +387,41 @@ export const builtinSkills: Record<string, SkillHandler> = {
     };
   },
 
-  // Web fetch builtin (task #17): powers the bridged WebFetch/web_fetch tool. Resolves credentials
-  // for a configured web-fetch provider (mirrors the /v1/web/fetch route) and extracts page content
-  // via handleWebFetch. Claude Code sends { url, prompt }; we fetch by url (the model uses prompt).
-  web_fetch: async (input, _context) => {
-    const { url, format, provider, depth, wait_for_selector } = input as {
-      url?: string;
-      format?: WebFetchFormat;
-      provider?: WebFetchProviderId;
+  // Web fetch builtin (task #17): powers the bridged WebFetch/web_fetch tool. Provider selection
+  // and credential resolution (mirroring the /v1/web/fetch route) live in executeWebFetch.
+  // Claude Code sends { url, prompt }; we fetch by url (the model uses prompt).
+  web_fetch: async (input, context) => {
+    const { url, format, depth, wait_for_selector, include_metadata, provider } = input as {
+      url: string;
+      format?: "markdown" | "html" | "links" | "screenshot";
       depth?: 0 | 1 | 2;
       wait_for_selector?: string;
+      include_metadata?: boolean;
+      provider?: string;
       prompt?: string;
     };
     if (!url || typeof url !== "string") {
       throw new Error("Missing required field: url");
     }
-    const providerOrder: readonly WebFetchProviderId[] = provider
-      ? [provider]
-      : WEB_FETCH_PROVIDER_ORDER;
-    let credentials: { apiKey?: string } = {};
-    let resolvedProvider: WebFetchProviderId | undefined = provider;
-    for (const candidate of providerOrder) {
-      try {
-        const creds = await getProviderCredentialsWithQuotaPreflight(candidate);
-        if (creds) {
-          credentials = creds;
-          resolvedProvider = candidate;
-          break;
-        }
-      } catch {
-        // try the next provider
-      }
-    }
-    // Fall back to the keyless jina-reader when nothing is configured, so local setups still work.
-    if (!resolvedProvider && Object.keys(credentials).length === 0) {
-      resolvedProvider = "jina-reader";
-    }
-    const result = await handleWebFetch(
-      {
-        url,
-        format: format ?? "markdown",
-        depth,
-        wait_for_selector,
-        include_metadata: true,
-      },
-      credentials,
-      resolvedProvider
-    );
-    if (!result.success || !result.data) {
-      return { success: false, url, error: result.error || "web fetch failed" };
-    }
+    const fetched = await executeWebFetch({
+      url,
+      format,
+      depth,
+      wait_for_selector,
+      include_metadata,
+      provider,
+      ruleProvider: context.provider ?? null,
+      ruleModel: context.model ?? null,
+    });
     return {
       success: true,
-      provider: result.data.provider,
-      url: result.data.url,
-      content: result.data.content,
-      links: result.data.links,
-      metadata: result.data.metadata,
+      provider: fetched.provider,
+      url: fetched.url,
+      content: fetched.content,
+      links: fetched.links,
+      metadata: fetched.metadata,
+      screenshot_url: fetched.screenshot_url,
+      context: context.apiKeyId,
     };
   },
 

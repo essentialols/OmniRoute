@@ -7,8 +7,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { requireJsonContentType } =
-  await import("../../src/shared/middleware/requireJsonContentType.ts");
+const { requireJsonContentType } = await import(
+  "../../src/shared/middleware/requireJsonContentType.ts"
+);
 
 function makeRequest(method: string, contentType: string | null): Request {
   const headers = new Headers();

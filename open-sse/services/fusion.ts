@@ -20,19 +20,28 @@
  */
 import { errorResponse, sanitizeErrorMessage } from "../utils/error.ts";
 import { extractTextContent } from "../translator/helpers/geminiHelper.ts";
-import type { ComboLogger, HandleSingleModel } from "./combo/types.ts";
+import type { PerTargetAdmissionHook } from "./admission/types.ts";
+import type { ComboLogger, HandleSingleModel, ResolvedComboTarget } from "./combo/types.ts";
 
 // Fusion tuning. Overridable per-combo via combo.config.fusionTuning.
 export const FUSION_DEFAULTS = {
   minPanel: 2, // answers needed before stragglers get a grace window
   stragglerGraceMs: 8000, // wait this long for laggards once quorum is reached
   panelHardTimeoutMs: 90000, // absolute cap so one hung model can't stall forever
+  // Hard cap on panel size (issue #1905). Every panel member is fanned out in
+  // parallel and its full response text buffered in memory simultaneously —
+  // with the runtime heap capped (Dockerfile OMNIROUTE_MEMORY_MB, default
+  // 1024MB), a large panel (reported: ~73 models) with sizable concurrent
+  // responses can exceed the heap ceiling and OOM-crash the whole process.
+  // Reject oversized panels up front with a clean 400 instead.
+  maxPanel: 40,
 } as const;
 
 export type FusionTuning = {
   minPanel?: number;
   stragglerGraceMs?: number;
   panelHardTimeoutMs?: number;
+  maxPanel?: number;
 };
 
 type Body = Record<string, unknown>;
@@ -132,6 +141,18 @@ export function buildJudgePrompt(answers: Array<{ text: string }>): string {
   ].join("\n");
 }
 
+/**
+ * A request is "tool-bearing" when the client supplied tools AND did not
+ * explicitly opt out of tool use this turn (tool_choice: "none" is a valid
+ * way to declare available tools while opting out — that must NOT trigger
+ * the bypass, see issue #6771).
+ */
+export function isToolBearingRequest(body: Body): boolean {
+  const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+  if (!hasTools) return false;
+  return body.tool_choice !== "none";
+}
+
 type Sentinel = { __timeout?: true; __error?: unknown };
 
 // Resolve a Response (or sentinel) within ms; the loser keeps running but is ignored.
@@ -197,15 +218,34 @@ export function collectPanel(
   });
 }
 
+export type FusionModel = ResolvedComboTarget | string;
+
 export type HandleFusionChatOptions = {
   body: Body;
-  models: string[];
+  models: FusionModel[];
   handleSingleModel: HandleSingleModel;
   log: ComboLogger;
   comboName?: string;
   judgeModel?: string | null;
+  judgeTarget?: ResolvedComboTarget | null;
   tuning?: FusionTuning | null;
+  /** #9654 Wave 2: per-target lane-aware admission probe (see HandleComboChatOptions). */
+  perTargetAdmission?: PerTargetAdmissionHook | null;
 };
+
+function getFusionModelString(model: FusionModel): string {
+  return typeof model === "string" ? model : model.modelStr;
+}
+
+function dispatchFusionModel(
+  handleSingleModel: HandleSingleModel,
+  body: Body,
+  model: FusionModel
+): Promise<Response> {
+  return typeof model === "string"
+    ? handleSingleModel(body, model)
+    : handleSingleModel(body, model.modelStr, model);
+}
 
 /**
  * Handle a fusion combo: fan the prompt out to every panel model in parallel,
@@ -214,6 +254,12 @@ export type HandleFusionChatOptions = {
  * Panel calls are forced non-streaming with tools stripped (the judge needs
  * complete prose to synthesize). The judge call keeps the client's original
  * stream flag + tools, so streaming and downstream tool use still work.
+ *
+ * Tool-bearing requests (non-empty `tools` with `tool_choice` not "none")
+ * skip panel synthesis entirely and route straight to a single model (the
+ * configured judge, or panel[0]) with tools/tool_choice intact — panel
+ * members have no tool access and the judge's synthesis directive steers
+ * even a tools-capable judge away from emitting a tool call (#6771).
  *
  * Speed: quorum-grace collection caps the straggler penalty. Quality: the judge
  * runs the consensus/contradiction/blind-spot analysis before writing.
@@ -227,7 +273,9 @@ export async function handleFusionChat({
   log,
   comboName,
   judgeModel,
+  judgeTarget,
   tuning,
+  perTargetAdmission,
 }: HandleFusionChatOptions): Promise<Response> {
   const panel = Array.isArray(models) ? models.filter(Boolean) : [];
   if (panel.length === 0) {
@@ -236,7 +284,22 @@ export async function handleFusionChat({
 
   // A single-model fusion has nothing to fuse — just answer directly.
   if (panel.length === 1) {
-    return handleSingleModel(body, panel[0]);
+    return dispatchFusionModel(handleSingleModel, body, panel[0]);
+  }
+
+  // Reject an oversized panel BEFORE fan-out (issue #1905): fanning out N
+  // parallel calls and buffering N full response bodies at once is what
+  // drives the process into an OOM crash, not any one call in isolation.
+  const maxPanel = tuning?.maxPanel ?? FUSION_DEFAULTS.maxPanel;
+  if (panel.length > maxPanel) {
+    log.warn(
+      "FUSION",
+      `Combo "${comboName ?? ""}" panel=${panel.length} exceeds maxPanel=${maxPanel} — rejecting before fan-out (#1905)`
+    );
+    return errorResponse(
+      400,
+      `Fusion panel too large (${panel.length} models, max ${maxPanel}) — reduce the combo's target count or raise fusionTuning.maxPanel`
+    );
   }
 
   const cfg = {
@@ -244,24 +307,76 @@ export async function handleFusionChat({
     stragglerGraceMs: tuning?.stragglerGraceMs ?? FUSION_DEFAULTS.stragglerGraceMs,
     panelHardTimeoutMs: tuning?.panelHardTimeoutMs ?? FUSION_DEFAULTS.panelHardTimeoutMs,
   };
-  // Honor user-supplied minPanel down to 1: with 1 survivor we still degrade
-  // gracefully via the answers.length===1 branch below (issue #6454).
-  const minPanel = Math.min(Math.max(1, cfg.minPanel), panel.length);
-  const hasExplicitJudge = Boolean(judgeModel && judgeModel.trim());
-  const judge = hasExplicitJudge ? (judgeModel as string).trim() : panel[0];
-  log.info(
-    "FUSION",
-    `Combo "${comboName ?? ""}" | panel=${panel.length} [${panel.join(", ")}] | judge=${judge} | quorum=${minPanel}`
-  );
-
-  // 1. Fan out to the panel in parallel: non-streaming, tools stripped (we want prose).
+  // Tools-stripped panel body (we want prose from panel members) — computed
+  // early so the per-target probe can estimate cost from the real fan-out body.
   const { tools: _tools, tool_choice: _tc, ...rest } = body;
   void _tools;
   void _tc;
   const panelBody: Body = { ...rest, stream: false };
+  // #9654 Wave 2: per-target lane-aware admission probe — drop lane-full panel
+  // members before fan-out (strictly non-blocking; no-op when lanes off). See
+  // createPerTargetAdmissionHook for the full contract. Runs BEFORE minPanel /
+  // judge selection so quorum and the judge fallback only consider survivors.
+  let panelToDispatch = panel;
+  if (perTargetAdmission) {
+    const gates = await Promise.all(
+      panel.map(async (target) => ({
+        target,
+        ok: await perTargetAdmission({
+          modelStr: getFusionModelString(target),
+          executionKey: typeof target === "string" ? target : target.executionKey,
+          body: panelBody,
+        }),
+      }))
+    );
+    const dropped = gates.filter((g) => !g.ok);
+    if (dropped.length > 0) {
+      log.info(
+        "FUSION",
+        `Skipping ${dropped.length} panel member(s) — admission lane full: ${dropped
+          .map((g) => getFusionModelString(g.target))
+          .join(", ")}`
+      );
+    }
+    panelToDispatch = gates.filter((g) => g.ok).map((g) => g.target);
+    if (panelToDispatch.length === 0) {
+      log.warn("FUSION", "All panel members skipped by admission lanes — nothing to fan out");
+      return errorResponse(503, "All fusion panel members were skipped by admission lanes");
+    }
+  }
+  // Honor user-supplied minPanel down to 1: with 1 survivor we still degrade
+  // gracefully via the answers.length===1 branch below (issue #6454).
+  const minPanel = Math.min(Math.max(1, cfg.minPanel), panelToDispatch.length);
+  const hasExplicitJudge = Boolean(judgeModel && judgeModel.trim());
+  // Judge fallback prefers the first SURVIVING panel member — a lane-full
+  // member dropped by the probe is never selected as the synthesis judge.
+  const judge = hasExplicitJudge
+    ? (judgeModel as string).trim()
+    : getFusionModelString(panelToDispatch[0]);
+  log.info(
+    "FUSION",
+    `Combo "${comboName ?? ""}" | panel=${panelToDispatch.length} [${panelToDispatch
+      .map(getFusionModelString)
+      .join(", ")}] | judge=${judge} | quorum=${minPanel}`
+  );
+
+  // Tool-bearing requests get no value from panel synthesis — panel members
+  // would answer with no tool access (degraded prose), and the judge's
+  // synthesis directive steers it away from emitting a tool call even though
+  // it technically still receives `tools`. Skip straight to a single model
+  // with the full, unmodified body (tools/tool_choice intact) so agentic
+  // clients get a real tool-call decision (#6771).
+  if (isToolBearingRequest(body)) {
+    log.info(
+      "FUSION",
+      `Combo "${comboName ?? ""}" received a tool-bearing request — bypassing panel synthesis, routing directly to ${judge} with tools intact`
+    );
+    return handleSingleModel(body, judge);
+  }
+
   const t0 = Date.now();
-  const calls = panel.map((m) =>
-    withTimeout(handleSingleModel(panelBody, m), cfg.panelHardTimeoutMs)
+  const calls = panelToDispatch.map((target) =>
+    withTimeout(dispatchFusionModel(handleSingleModel, panelBody, target), cfg.panelHardTimeoutMs)
   );
   const settled = await collectPanel(calls, { ...cfg, minPanel });
   log.info("FUSION", `fan-out collected in ${Date.now() - t0}ms`);
@@ -271,7 +386,7 @@ export async function handleFusionChat({
   const failures: Array<{ model: string; reason: string }> = [];
   for (let i = 0; i < settled.length; i++) {
     const res = settled[i];
-    const model = panel[i];
+    const model = getFusionModelString(panelToDispatch[i]);
     if (!res) {
       log.warn("FUSION", `Panel ${model} dropped (straggler/timeout)`);
       failures.push({ model, reason: "straggler_dropped" });
@@ -344,11 +459,33 @@ export async function handleFusionChat({
     // surviving panel answer, rather than silently substituting the panel
     // member for the configured judge (issue #6455). The judge still adds
     // value reviewing/polishing a lone source per its documented contract.
-    log.info("FUSION", `Only ${answers[0].model} succeeded — judging single answer with ${judge}`);
+  }
+
+  // Resolve the judge that ACTUALLY runs synthesis. An explicit judgeModel is
+  // honored as configured (operator intent — kept even if it was down during
+  // fan-out; that's the operator's choice). With NO explicit judge the judge
+  // defaulted to panel[0] — but panel[0] may have FAILED fan-out (timeout /
+  // rate-limit / dropped straggler → it lands in `failures`, not `answers`).
+  // Handing synthesis to a dead panel[0] sinks the whole request despite a
+  // healthy quorum — exactly the case fusion exists to tolerate. So pick a
+  // SURVIVOR: prefer panel[0] when it survived, otherwise the first survivor.
+  const effectiveJudge = hasExplicitJudge
+    ? judge
+    : answers.some((a) => a.model === getFusionModelString(panel[0]))
+      ? getFusionModelString(panel[0])
+      : answers[0].model;
+
+  if (answers.length === 1) {
+    log.info(
+      "FUSION",
+      `Only ${answers[0].model} succeeded — judging single answer with ${effectiveJudge}`
+    );
   }
 
   // 4. Judge analyzes + writes one final answer (streams to client if requested).
   const judgeBody = appendUserTurn(body, buildJudgePrompt(answers));
-  log.info("FUSION", `Judging ${answers.length} answers with ${judge}`);
-  return handleSingleModel(judgeBody, judge);
+  log.info("FUSION", `Judging ${answers.length} answers with ${effectiveJudge}`);
+  return judgeTarget
+    ? handleSingleModel(judgeBody, judgeTarget.modelStr, judgeTarget)
+    : handleSingleModel(judgeBody, effectiveJudge);
 }

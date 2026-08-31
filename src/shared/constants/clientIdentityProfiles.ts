@@ -14,6 +14,9 @@
  * header) tries to set — no new precedence logic is needed here.
  */
 
+import { getClaudeCodeUserAgent } from "./claudeCodeClient";
+import { getCodexCliRsHeaders } from "./codexClient";
+
 export interface ClientIdentityProfile {
   readonly id: string;
   readonly label: string;
@@ -30,7 +33,7 @@ const CLAUDE_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
   id: "claude-cli",
   label: "Claude CLI",
   headers: Object.freeze({
-    "User-Agent": "claude-cli/2.1.207 (external, sdk-cli)",
+    "User-Agent": getClaudeCodeUserAgent("sdk-cli"),
     "X-App": "cli",
   }),
 });
@@ -38,10 +41,7 @@ const CLAUDE_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
 const CODEX_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
   id: "codex-cli",
   label: "Codex CLI",
-  headers: Object.freeze({
-    "User-Agent": "codex_cli_rs/0.136.0",
-    originator: "codex_cli_rs",
-  }),
+  headers: Object.freeze(getCodexCliRsHeaders()),
 });
 
 const GEMINI_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
@@ -49,6 +49,13 @@ const GEMINI_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
   label: "Gemini CLI",
   headers: Object.freeze({
     "User-Agent": "GeminiCLI/0.1.0 (linux; x64)",
+  }),
+});
+const MUSE_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
+  id: "muse-cli",
+  label: "Muse Code CLI",
+  headers: Object.freeze({
+    "User-Agent": "MuseCodeCLI/0.1.0 (linux; x64)",
   }),
 });
 
@@ -59,6 +66,7 @@ export const CLIENT_IDENTITY_PROFILES: Readonly<Record<string, ClientIdentityPro
     "claude-cli": CLAUDE_CLI_PROFILE,
     "codex-cli": CODEX_CLI_PROFILE,
     "gemini-cli": GEMINI_CLI_PROFILE,
+    "muse-cli": MUSE_CLI_PROFILE,
   });
 
 export const CLIENT_IDENTITY_PROFILE_IDS: readonly string[] = Object.keys(CLIENT_IDENTITY_PROFILES);

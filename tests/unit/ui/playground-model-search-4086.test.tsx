@@ -35,10 +35,12 @@ vi.mock("@/app/(dashboard)/dashboard/translator/hooks/useProviderOptions", () =>
   }),
 }));
 
-const { default: StudioConfigPane } =
-  await import("../../../src/app/(dashboard)/dashboard/playground/components/StudioConfigPane");
-const { DEFAULT_PARAMS } =
-  await import("../../../src/app/(dashboard)/dashboard/playground/components/ParamSliders");
+const { default: StudioConfigPane } = await import(
+  "../../../src/app/(dashboard)/dashboard/playground/components/StudioConfigPane"
+);
+const { DEFAULT_PARAMS } = await import(
+  "../../../src/app/(dashboard)/dashboard/playground/components/ParamSliders"
+);
 
 const containers: Array<{ root: ReturnType<typeof createRoot>; el: HTMLDivElement }> = [];
 
@@ -82,9 +84,8 @@ function setInputValue(input: HTMLInputElement, value: string) {
 
 describe("StudioConfigPane model search (#4086)", () => {
   beforeEach(() => {
-    (
-      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
-    ).IS_REACT_ACT_ENVIRONMENT = true;
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+      .IS_REACT_ACT_ENVIRONMENT = true;
   });
 
   afterEach(() => {

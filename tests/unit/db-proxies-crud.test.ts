@@ -63,7 +63,7 @@ test("proxy CRUD redacts secrets by default and preserves stored credentials whe
     notes: "updated",
   });
   const updatedWithSecrets = await proxiesDb.getProxyById(created.id, { includeSecrets: true });
-  const listed = await proxiesDb.listProxies();
+  const { items: listed } = await proxiesDb.listProxies();
 
   assert.equal(withSecrets.username, "user-a");
   assert.equal(withSecrets.password, "pass-a");
@@ -93,7 +93,7 @@ test("proxy CRUD clears stored credentials when blanks are explicitly provided",
     password: "",
   });
   const updatedWithSecrets = await proxiesDb.getProxyById(created.id, { includeSecrets: true });
-  const listed = await proxiesDb.listProxies();
+  const { items: listed } = await proxiesDb.listProxies();
 
   assert.equal(updated.username, "");
   assert.equal(updated.password, "");
@@ -223,6 +223,7 @@ test("proxy health stats aggregate proxy_logs and force delete removes assignmen
     type: "http",
     host: "stats.local",
     port: 8080,
+    status: "active",
     totalRequests: 3,
     successCount: 1,
     errorCount: 1,
@@ -309,7 +310,7 @@ test("legacy proxy config migrates into the registry and subsequent runs can be 
 
   const migrated = await proxiesDb.migrateLegacyProxyConfigToRegistry();
   const assignments = await proxiesDb.getProxyAssignments();
-  const proxies = await proxiesDb.listProxies({ includeSecrets: true });
+  const { items: proxies } = await proxiesDb.listProxies({ includeSecrets: true });
   const skipped = await proxiesDb.migrateLegacyProxyConfigToRegistry();
 
   assert.equal(migrated.skipped, false);

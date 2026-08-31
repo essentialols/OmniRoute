@@ -140,11 +140,14 @@ test("parseAntigravityWeeklyQuotas returns {} for missing/malformed data (best-e
   );
 });
 
-test("getUsageForProvider(antigravity) merges weekly group quotas alongside per-model 5h quotas", async () => {
+test("getUsageForProvider(antigravity) merges weekly quotas with the selected CLI identity", async () => {
   core.resetDbInstance();
 
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = requestUrl(input);
+    const headers = new Headers(init?.headers);
+    assert.match(headers.get("User-Agent") ?? "", /^antigravity\/cli\/1\.1\.5 /);
+    assert.equal(headers.get("X-Goog-Api-Client"), null);
 
     if (url.includes("retrieveUserQuotaSummary")) {
       return {
@@ -173,7 +176,7 @@ test("getUsageForProvider(antigravity) merges weekly group quotas alongside per-
         json: async () => ({
           buckets: [
             {
-              modelId: "gemini-3.5-flash-high",
+              modelId: "gemini-3.7-flash-high",
               remainingFraction: 0.4,
               resetTime: RESET_IN_2_HOURS,
             },
@@ -187,7 +190,7 @@ test("getUsageForProvider(antigravity) merges weekly group quotas alongside per-
       ok: true,
       json: async () => ({
         models: {
-          "gemini-3.5-flash-high": {
+          "gemini-3.7-flash-high": {
             quotaInfo: { remainingFraction: 1.0, resetTime: RESET_IN_2_HOURS },
           },
         },
@@ -199,7 +202,7 @@ test("getUsageForProvider(antigravity) merges weekly group quotas alongside per-
     id: "conn-weekly-1",
     provider: "antigravity",
     accessToken: "fake-token-weekly-unique",
-    providerSpecificData: {},
+    providerSpecificData: { clientProfile: "cli" },
     projectId: "test-project",
   };
 
@@ -208,8 +211,8 @@ test("getUsageForProvider(antigravity) merges weekly group quotas alongside per-
   const quotas = (result as UsageResult).quotas;
 
   // Existing per-model 5h quota is untouched.
-  assert.ok(quotas["gemini-3.5-flash-high"], "per-model 5h quota still present");
-  assert.equal(quotas["gemini-3.5-flash-high"].quotaSource, "retrieveUserQuota");
+  assert.ok(quotas["gemini-3.7-flash-high"], "per-model 5h quota still present");
+  assert.equal(quotas["gemini-3.7-flash-high"].quotaSource, "retrieveUserQuota");
 
   // New weekly group quota is merged in alongside it.
   assert.ok(quotas.gemini_weekly, "weekly group quota merged in");
@@ -232,7 +235,7 @@ test("getUsageForProvider(antigravity) is unaffected when retrieveUserQuotaSumma
       ok: true,
       json: async () => ({
         models: {
-          "gemini-3.5-flash-high": {
+          "gemini-3.7-flash-high": {
             quotaInfo: { remainingFraction: 1.0, resetTime: RESET_IN_2_HOURS },
           },
         },
@@ -250,6 +253,6 @@ test("getUsageForProvider(antigravity) is unaffected when retrieveUserQuotaSumma
 
   const result = await getUsageForProvider(connection, { forceRefresh: true });
   const quotas = (result as UsageResult).quotas;
-  assert.ok(quotas["gemini-3.5-flash-high"], "per-model quota still present without weekly data");
+  assert.ok(quotas["gemini-3.7-flash-high"], "per-model quota still present without weekly data");
   assert.equal(quotas.gemini_weekly, undefined, "no weekly key when the RPC is unavailable");
 });

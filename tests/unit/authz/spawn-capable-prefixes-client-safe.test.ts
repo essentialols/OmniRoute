@@ -80,11 +80,15 @@ test("SPAWN_CAPABLE_PREFIXES is defined in the server-free constants leaf with t
     "/api/skills/collect/",
     "/api/headroom/start",
     "/api/headroom/stop",
+    "/api/vnc-session",
+    "/api/modality-bridge/video/",
+    "/api/settings/mitm",
+    "/api/cli-tools/antigravity-mitm",
   ]) {
     assert.ok(
       SPAWN_CAPABLE_PREFIXES.includes(prefix),
       `SPAWN_CAPABLE_PREFIXES lost the spawn-capable prefix "${prefix}" during extraction`
     );
   }
-  assert.equal(SPAWN_CAPABLE_PREFIXES.length, 9);
+  assert.equal(SPAWN_CAPABLE_PREFIXES.length, 14);
 });

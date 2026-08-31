@@ -109,10 +109,7 @@ function AccountRoundRobinSection({ t, busy, settings, setSettings, run }: Secti
             run(async () => {
               const next = accountRoundRobin ? "fill-first" : "round-robin";
               const updated = await patchSettings({ fallbackStrategy: next });
-              setSettings((prev) => ({
-                ...prev,
-                fallbackStrategy: updated.fallbackStrategy || next,
-              }));
+              setSettings((prev) => ({ ...prev, fallbackStrategy: updated.fallbackStrategy || next }));
             })
           }
         />
@@ -131,9 +128,7 @@ function AccountRoundRobinSection({ t, busy, settings, setSettings, run }: Secti
             disabled={busy}
             className="w-16 sm:w-20 text-center shrink-0"
             value={settings.stickyRoundRobinLimit ?? 3}
-            onChange={(e) =>
-              setSettings((prev) => ({ ...prev, stickyRoundRobinLimit: e.target.value }))
-            }
+            onChange={(e) => setSettings((prev) => ({ ...prev, stickyRoundRobinLimit: e.target.value }))}
             onBlur={() =>
               run(async () => {
                 const limit = Math.min(
@@ -271,20 +266,8 @@ export default function RoutingStrategyCard() {
         <p className="text-sm text-text-muted">{tc("loading")}</p>
       ) : (
         <div className="flex flex-col gap-4">
-          <AccountRoundRobinSection
-            t={t}
-            busy={busy}
-            settings={settings}
-            setSettings={setSettings}
-            run={run}
-          />
-          <ComboRoundRobinSection
-            t={t}
-            busy={busy}
-            settings={settings}
-            setSettings={setSettings}
-            run={run}
-          />
+          <AccountRoundRobinSection t={t} busy={busy} settings={settings} setSettings={setSettings} run={run} />
+          <ComboRoundRobinSection t={t} busy={busy} settings={settings} setSettings={setSettings} run={run} />
           <RoutingSummaryFooter
             t={t}
             accountRoundRobin={accountRoundRobin}

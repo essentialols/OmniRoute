@@ -7,8 +7,9 @@ import {
   echoModelInSseLine,
 } from "../../open-sse/services/responseModelEcho.ts";
 
-const { openaiToOpenAIResponsesResponse } =
-  await import("../../open-sse/translator/response/openai-responses.ts");
+const { openaiToOpenAIResponsesResponse } = await import(
+  "../../open-sse/translator/response/openai-responses.ts"
+);
 const { initState } = await import("../../open-sse/translator/index.ts");
 const { FORMATS } = await import("../../open-sse/translator/formats.ts");
 

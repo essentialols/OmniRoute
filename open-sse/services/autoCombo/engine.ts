@@ -11,8 +11,8 @@
 
 import {
   scorePool,
-  validateWeights,
   DEFAULT_WEIGHTS,
+  normalizeScoringWeights,
   type ScoringWeights,
   type ProviderCandidate,
   type ScoredProvider,
@@ -251,7 +251,7 @@ export function selectProvider(
     const pack = getModePack(config.modePack);
     if (pack) weights = pack;
   }
-  if (!validateWeights(weights)) weights = DEFAULT_WEIGHTS;
+  weights = normalizeScoringWeights(weights);
 
   // Filter out excluded providers
   const excluded: string[] = [];

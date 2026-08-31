@@ -7,7 +7,16 @@ import {
   DEFAULT_RTK_CONFIG,
   DEFAULT_COMPRESSION_LANGUAGE_CONFIG,
 } from "./types.ts";
-import { anthropicImageTokens, ANTHROPIC_IMAGE_BLOCK_OVERHEAD_TOKENS } from "omniglyph";
+import {
+  countTextTokens,
+  isCodexTokenizerContext,
+  tokenizerContextFromBody,
+} from "../../../src/shared/utils/tiktokenCounter.ts";
+import {
+  anthropicImageTokens,
+  ANTHROPIC_IMAGE_BLOCK_OVERHEAD_TOKENS,
+  openAIVisionTokens,
+} from "omniglyph";
 
 const CHARS_PER_TOKEN = 4;
 
@@ -22,6 +31,17 @@ interface AnthropicImageBlock {
   source: { type: "base64"; media_type: string; data: string };
 }
 
+interface OpenAIChatImagePart {
+  type: "image_url";
+  image_url: { url: string; detail?: string };
+}
+
+interface OpenAIResponsesImagePart {
+  type: "input_image";
+  image_url: string;
+  detail?: string;
+}
+
 function isAnthropicPngImageBlock(value: unknown): value is AnthropicImageBlock {
   if (!value || typeof value !== "object") return false;
   const block = value as Record<string, unknown>;
@@ -31,6 +51,36 @@ function isAnthropicPngImageBlock(value: unknown): value is AnthropicImageBlock 
   return (
     source.type === "base64" && source.media_type === "image/png" && typeof source.data === "string"
   );
+}
+
+function isOpenAIChatPngImagePart(value: unknown): value is OpenAIChatImagePart {
+  if (!value || typeof value !== "object") return false;
+  const part = value as Record<string, unknown>;
+  const image = part.image_url as Record<string, unknown> | undefined;
+  return (
+    part.type === "image_url" &&
+    !!image &&
+    typeof image === "object" &&
+    typeof image.url === "string" &&
+    image.url.startsWith("data:image/png;base64,")
+  );
+}
+
+function isOpenAIResponsesPngImagePart(value: unknown): value is OpenAIResponsesImagePart {
+  const part = value as Record<string, unknown> | null;
+  return (
+    !!part &&
+    part.type === "input_image" &&
+    typeof part.image_url === "string" &&
+    part.image_url.startsWith("data:image/png;base64,")
+  );
+}
+
+function pngDimensionsFromDataUrl(value: string): { width: number; height: number } | null {
+  const marker = ";base64,";
+  const markerIndex = value.indexOf(marker);
+  if (markerIndex < 0) return null;
+  return decodePngDimensions(value.slice(markerIndex + marker.length));
 }
 
 /**
@@ -84,17 +134,32 @@ function blankImageBlocksAndSumImageTokens(body: Record<string, unknown>): {
   imageTokens: number;
 } {
   let imageTokens = 0;
+  const model = typeof body.model === "string" ? body.model : "";
   const clone: Record<string, unknown> = { ...body };
 
   const processContentArray = (content: unknown): unknown => {
     if (!Array.isArray(content)) return content;
     return content.map((block) => {
-      if (!isAnthropicPngImageBlock(block)) return block;
-      const dims = decodePngDimensions(block.source.data);
-      if (!dims) return block; // fall back to char-counting this block as-is
-      imageTokens += anthropicImageTokens(dims.width, dims.height, "standard");
-      imageTokens += ANTHROPIC_IMAGE_BLOCK_OVERHEAD_TOKENS;
-      return { ...block, source: { ...block.source, data: "" } };
+      if (isAnthropicPngImageBlock(block)) {
+        const dims = decodePngDimensions(block.source.data);
+        if (!dims) return block; // fall back to char-counting this block as-is
+        imageTokens += anthropicImageTokens(dims.width, dims.height, "standard");
+        imageTokens += ANTHROPIC_IMAGE_BLOCK_OVERHEAD_TOKENS;
+        return { ...block, source: { ...block.source, data: "" } };
+      }
+      if (isOpenAIChatPngImagePart(block)) {
+        const dims = pngDimensionsFromDataUrl(block.image_url.url);
+        if (!dims) return block;
+        imageTokens += openAIVisionTokens(model, dims.width, dims.height);
+        return { ...block, image_url: { ...block.image_url, url: "" } };
+      }
+      if (isOpenAIResponsesPngImagePart(block)) {
+        const dims = pngDimensionsFromDataUrl(block.image_url);
+        if (!dims) return block;
+        imageTokens += openAIVisionTokens(model, dims.width, dims.height);
+        return { ...block, image_url: "" };
+      }
+      return block;
     });
   };
 
@@ -111,23 +176,40 @@ function blankImageBlocksAndSumImageTokens(body: Record<string, unknown>): {
     clone.system = processContentArray(clone.system);
   }
 
+  if (Array.isArray(clone.input)) {
+    clone.input = clone.input.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      const record = item as Record<string, unknown>;
+      return Array.isArray(record.content)
+        ? { ...record, content: processContentArray(record.content) }
+        : record;
+    });
+  }
+
   return { clone, imageTokens };
 }
 
 export function estimateCompressionTokens(text: string | object | null | undefined): number {
   if (!text) return 0;
   if (typeof text === "string") {
-    return Math.ceil(text.length / CHARS_PER_TOKEN);
+    return charTokensOf(text);
   }
   try {
+    const tokenizerContext = tokenizerContextFromBody(text);
+    const useExactTokenizer = isCodexTokenizerContext(tokenizerContext);
     const { clone, imageTokens } = blankImageBlocksAndSumImageTokens(
       text as Record<string, unknown>
     );
     if (imageTokens === 0) {
-      // No recognized image blocks — byte-identical to the legacy behavior.
-      return Math.ceil(JSON.stringify(text).length / CHARS_PER_TOKEN);
+      // Keep the legacy character estimate for generic payloads. Codex payloads use
+      // the model-appropriate tokenizer so their compression stats match hard budgets.
+      return useExactTokenizer
+        ? countTextTokens(JSON.stringify(text), tokenizerContext)
+        : charTokensOf(text);
     }
-    return Math.ceil(JSON.stringify(clone).length / CHARS_PER_TOKEN) + imageTokens;
+    return useExactTokenizer
+      ? countTextTokens(JSON.stringify(clone), tokenizerContext) + imageTokens
+      : charTokensOf(clone) + imageTokens;
   } catch {
     // Non-serializable/unexpected shape → fall back to the legacy char-count,
     // never throw out of an estimator.

@@ -1,342 +1,688 @@
-// Tests for the Z.ai web executor (chat.z.ai, free guest/session cookie auth).
-//
-// Pins: token extraction, X-FE-Version header, the live v2 endpoint, guest-token
-// auto-mint when no cookie is supplied, dual-shape SSE frame parsing (internal
-// `{type:"chat:completion",data:{delta_content,phase}}` envelope + pass-through
-// OpenAI `choices[].delta`), upstream-error-frame surfacing (403 / CAPTCHA / 426),
-// and streaming + non-streaming aggregation.
-//
-// Endpoint/version/guest facts were confirmed by direct probe of chat.z.ai:
-//   - GET /api/v1/auths/            → anonymous role:guest JWT (no account)
-//   - POST /api/v2/chat/completions → live endpoint (v1 /api/chat/completions 404s)
-//   - X-FE-Version required         → omitting it yields a 426 "outdated" frame
-//   - guest reaches glm-4.7 only    → other models return a 403 user-level frame
-//   - every completion CAPTCHA-gated → FRONTEND_CAPTCHA_REQUIRED without a param
-
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
+import type { BrowserBackedChatRequest } from "../../open-sse/services/browserBackedChat.ts";
 
 const mod = await import("../../open-sse/executors/zai-web.ts");
+const browserChat = await import("../../open-sse/services/browserBackedChat.ts");
 
-const sse = (obj: unknown) => `data: ${JSON.stringify(obj)}\n\n`;
-const streamOf = (chunks: string[]) =>
-  new ReadableStream<Uint8Array>({
-    start(c) {
-      const enc = new TextEncoder();
-      for (const ch of chunks) c.enqueue(enc.encode(ch));
-      c.close();
-    },
-  });
+const ZAI_HOME_URL = "https://chat.z.ai/";
+const ZAI_NEW_CHAT_URL = "https://chat.z.ai/api/v1/chats/new";
+const ZAI_COMPLETION_PATH = "/api/v2/chat/completions";
+const TEST_TOKEN = `e30.${Buffer.from(JSON.stringify({ id: "user-123" })).toString("base64url")}.sig`;
+const TEST_CREDENTIAL = JSON.stringify({
+  token: TEST_TOKEN,
+  captcha_verify_param: "captcha-proof",
+});
 
-async function readSse(resp: Response): Promise<string> {
-  return await resp.text();
+interface ZaiFetchCapture {
+  completionInit?: RequestInit;
+  completionUrl?: string;
+  newChatInit?: RequestInit;
 }
 
-describe("extractZaiToken", () => {
-  it("pulls token= from a full Cookie header", () => {
-    assert.equal(mod.extractZaiToken("a=1; token=abc.def.ghi; other=2"), "abc.def.ghi");
-  });
-  it("strips a leading Cookie: prefix", () => {
-    assert.equal(mod.extractZaiToken("Cookie: token=xyz"), "xyz");
-  });
-  it("accepts a bare JWT with no token= prefix", () => {
-    assert.equal(mod.extractZaiToken("eyJhbGciOiJFUzI1NiJ9.payload.sig"), "eyJhbGciOiJFUzI1NiJ9.payload.sig");
-  });
-  it("returns empty for a cookie header without token=", () => {
-    assert.equal(mod.extractZaiToken("a=1; b=2"), "");
-  });
-});
+function installZaiFetch(
+  completionResponse: () => Response,
+  capture: ZaiFetchCapture = {}
+): typeof globalThis.fetch {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const value = String(url);
+    if (value === ZAI_HOME_URL) {
+      return new Response(
+        '<script src="https://z-cdn.chatglm.cn/z-ai/frontend/prod-fe-1.1.79/assets/index.js"></script>'
+      );
+    }
+    if (value === ZAI_NEW_CHAT_URL) {
+      capture.newChatInit = init;
+      return Response.json({ id: "chat-123" });
+    }
+    if (new URL(value).pathname === ZAI_COMPLETION_PATH) {
+      capture.completionUrl = value;
+      capture.completionInit = init;
+      return completionResponse();
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof globalThis.fetch;
+  return originalFetch;
+}
 
-describe("resolveFeVersion", () => {
-  afterEach(() => {
-    delete process.env.ZAI_WEB_FE_VERSION;
-  });
-  it("defaults to 1.0.91", () => {
-    delete process.env.ZAI_WEB_FE_VERSION;
-    assert.equal(mod.resolveFeVersion(), "1.0.91");
-  });
-  it("honors the ZAI_WEB_FE_VERSION override", () => {
-    process.env.ZAI_WEB_FE_VERSION = "prod-fe-1.1.75";
-    assert.equal(mod.resolveFeVersion(), "prod-fe-1.1.75");
-  });
-});
+function makeBrowserResult(content: string) {
+  return {
+    status: 200,
+    contentType: "text/event-stream",
+    body: Buffer.from(
+      [
+        `data: ${JSON.stringify({ type: "chat:completion", data: { delta_content: content, phase: "answer", done: false } })}`,
+        `data: ${JSON.stringify({ type: "chat:completion", data: { phase: "done", done: true } })}`,
+        "",
+        "",
+      ].join("\n")
+    ),
+    isStealth: true,
+    timing: {
+      acquireContextMs: 1,
+      navigateMs: 1,
+      submitMs: 1,
+      captureResponseMs: 1,
+      totalMs: 4,
+    },
+  };
+}
 
-describe("parseZaiFrame", () => {
-  it("parses the internal delta_content/answer envelope", () => {
-    const d = mod.parseZaiFrame({
-      type: "chat:completion",
-      data: { delta_content: "hello", phase: "answer", done: false },
-    });
-    assert.deepEqual(d, { content: "hello", reasoning: "", done: false });
+describe("ZaiWebExecutor", () => {
+  it("can be instantiated", () => {
+    const executor = new mod.ZaiWebExecutor();
+    assert.ok(executor);
   });
-  it("routes thinking-phase text to reasoning", () => {
-    const d = mod.parseZaiFrame({
-      type: "chat:completion",
-      data: { delta_content: "thinking...", phase: "thinking", done: false },
-    });
-    assert.deepEqual(d, { content: "", reasoning: "thinking...", done: false });
-  });
-  it("marks done on phase:done", () => {
-    const d = mod.parseZaiFrame({ type: "chat:completion", data: { phase: "done", done: true } });
-    assert.deepEqual(d, { content: "", reasoning: "", done: true });
-  });
-  it("parses a pass-through OpenAI-shaped frame", () => {
-    const d = mod.parseZaiFrame({ choices: [{ delta: { content: "hi" }, finish_reason: null }] });
-    assert.deepEqual(d, { content: "hi", reasoning: "", done: false });
-  });
-  it("marks done on an OpenAI finish_reason", () => {
-    const d = mod.parseZaiFrame({ choices: [{ delta: {}, finish_reason: "stop" }] });
-    assert.equal(d?.done, true);
-  });
-  it("returns null for junk", () => {
-    assert.equal(mod.parseZaiFrame("nope"), null);
-    assert.equal(mod.parseZaiFrame(null), null);
-  });
-});
 
-describe("extractZaiError", () => {
-  it("surfaces a user-level 403 error frame", () => {
-    const e = mod.extractZaiError({
-      type: "chat:completion",
-      data: { data: { error: { detail: "Model not available for current user level", code: 403 }, done: true } },
-    });
-    assert.match(String(e), /current user level/);
-  });
-  it("surfaces a FRONTEND_CAPTCHA_REQUIRED frame", () => {
-    const e = mod.extractZaiError({
-      data: { data: { error: { code: "FRONTEND_CAPTCHA_REQUIRED" }, done: true } },
-    });
-    assert.match(String(e), /CAPTCHA/i);
-  });
-  it("returns null for a normal content frame", () => {
+  it("preserves browser transport failure details and timing", () => {
     assert.equal(
-      mod.extractZaiError({ type: "chat:completion", data: { delta_content: "hi", phase: "answer" } }),
-      null
+      mod.describeZaiBrowserFailure({
+        status: 502,
+        body: Buffer.from(
+          JSON.stringify({
+            error: { message: "browserBackedChat failed: response.body unavailable" },
+          })
+        ),
+        timing: { captureResponseMs: 30_001, totalMs: 33_412 },
+      }),
+      "Z.ai browser transport failed (502; capture 30001ms, total 33412ms): " +
+        "browserBackedChat failed: response.body unavailable"
+    );
+    assert.match(
+      mod.describeZaiBrowserFailure({
+        status: 0,
+        body: Buffer.alloc(0),
+        timing: { captureResponseMs: 30_000, totalMs: 33_000 },
+      }),
+      /no matching response.*did not issue the expected authenticated chat completion request/
     );
   });
-});
 
-describe("foldMessages", () => {
-  it("stringifies non-string content", () => {
-    const out = mod.foldMessages([
-      { role: "user", content: "plain" },
-      { role: "user", content: [{ type: "text", text: "x" }] },
+  it("extracts the token cookie value from a full Cookie header", () => {
+    assert.equal(mod.extractZaiToken("token=abc123; other=xyz"), "abc123");
+    assert.equal(mod.extractZaiToken("Cookie: other=xyz; token=abc123"), "abc123");
+  });
+
+  it("extracts the current localStorage Bearer token and JSON credential", () => {
+    assert.equal(mod.extractZaiToken("Bearer abc123"), "abc123");
+    assert.equal(mod.extractZaiToken("Authorization: Bearer abc123"), "abc123");
+    assert.equal(mod.extractZaiToken(TEST_CREDENTIAL), TEST_TOKEN);
+    assert.equal(mod.extractZaiCaptchaVerifyParam(TEST_CREDENTIAL), "captcha-proof");
+    assert.equal(mod.extractZaiUserId(TEST_TOKEN), "user-123");
+  });
+
+  it("reproduces the live frontend HMAC signature algorithm", () => {
+    assert.equal(
+      mod.buildZaiSignature({
+        prompt: "Reply with exactly: OMNIROUTE_ZAI_WEB_TEST",
+        requestId: "3b907de9-793c-41d1-8b8e-6ed6a714ee08",
+        timestamp: 1784855934807,
+        userId: "user-123",
+      }),
+      "14f17673ccd4ec86476549ebe60f181529572f7a0cfe8ba179206cf2d37cf442"
+    );
+  });
+
+  it("parses the deployed frontend version from the homepage asset path", () => {
+    assert.equal(
+      mod.parseZaiFrontendVersion(
+        "https://z-cdn.chatglm.cn/z-ai/frontend/prod-fe-1.1.79/assets/index.js"
+      ),
+      "prod-fe-1.1.79"
+    );
+    assert.equal(mod.parseZaiFrontendVersion("<html></html>"), null);
+  });
+
+  it("accepts a bare JWT/token with no cookie name prefix", () => {
+    // a bare token with no '=' and no ';' falls through to the raw string
+    assert.equal(
+      mod.extractZaiToken("eyJhbGciOiJIUzI1NiJ9.payload.sig"),
+      "eyJhbGciOiJIUzI1NiJ9.payload.sig"
+    );
+    assert.equal(mod.extractZaiToken("plainsessiontoken"), "plainsessiontoken");
+  });
+
+  it("returns empty string when no cookie is provided", () => {
+    assert.equal(mod.extractZaiToken(""), "");
+  });
+
+  it("parses the internal z.ai delta_content/phase SSE envelope", () => {
+    const delta = mod.parseZaiFrame({
+      type: "chat:completion",
+      data: { delta_content: "Hello", phase: "answer", done: false },
+    });
+    assert.deepEqual(delta, { content: "Hello", reasoning: "", done: false });
+  });
+
+  it("routes thinking-phase content into the reasoning field", () => {
+    const delta = mod.parseZaiFrame({
+      type: "chat:completion",
+      data: { delta_content: "pondering...", phase: "thinking", done: false },
+    });
+    assert.deepEqual(delta, { content: "", reasoning: "pondering...", done: false });
+  });
+
+  it("detects end-of-stream from the internal envelope", () => {
+    const delta = mod.parseZaiFrame({
+      type: "chat:completion",
+      data: { phase: "done", done: true },
+    });
+    assert.equal(delta?.done, true);
+  });
+
+  it("parses an OpenAI-shaped pass-through frame", () => {
+    const delta = mod.parseZaiFrame({
+      choices: [{ delta: { content: "Hi there" }, finish_reason: null }],
+    });
+    assert.deepEqual(delta, { content: "Hi there", reasoning: "", done: false });
+  });
+
+  it("detects end-of-stream from an OpenAI-shaped finish_reason", () => {
+    const delta = mod.parseZaiFrame({
+      choices: [{ delta: {}, finish_reason: "stop" }],
+    });
+    assert.equal(delta?.done, true);
+  });
+
+  it("returns null for frames with no usable delta", () => {
+    assert.equal(mod.parseZaiFrame(null), null);
+    assert.equal(mod.parseZaiFrame({}), null);
+    assert.equal(mod.parseZaiFrame({ data: { phase: "answer" } }), null);
+  });
+
+  it("folds multimodal message content into text without leaking image payloads", () => {
+    const folded = mod.foldMessages([
+      { role: "user", content: "hi" },
+      { role: "user", content: { foo: "bar" } },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "inspect this" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2U=" } },
+        ],
+      },
     ]);
-    assert.equal(out[0].content, "plain");
-    assert.equal(out[1].content, JSON.stringify([{ type: "text", text: "x" }]));
-  });
-});
-
-describe("mintGuestToken", () => {
-  let origFetch: typeof fetch;
-  beforeEach(() => {
-    origFetch = globalThis.fetch;
-  });
-  afterEach(() => {
-    globalThis.fetch = origFetch;
-  });
-  it("mints a token from GET /api/v1/auths/", async () => {
-    let calledUrl = "";
-    globalThis.fetch = (async (url: unknown) => {
-      calledUrl = String(url);
-      return new Response(JSON.stringify({ token: "guest.jwt.tok", role: "guest" }), { status: 200 });
-    }) as typeof fetch;
-    const tok = await mod.mintGuestToken(null);
-    assert.equal(tok, "guest.jwt.tok");
-    assert.ok(calledUrl.endsWith("/api/v1/auths/"), calledUrl);
-  });
-  it("returns empty string on failure", async () => {
-    globalThis.fetch = (async () => new Response("nope", { status: 429 })) as typeof fetch;
-    assert.equal(await mod.mintGuestToken(null), "");
-  });
-});
-
-describe("ZaiWebExecutor.execute", () => {
-  let origFetch: typeof fetch;
-  beforeEach(() => {
-    origFetch = globalThis.fetch;
-  });
-  afterEach(() => {
-    globalThis.fetch = origFetch;
-    delete process.env.ZAI_WEB_FE_VERSION;
-    delete process.env.ZAI_WEB_CAPTCHA_PARAM;
+    assert.deepEqual(folded, [
+      { role: "user", content: "hi" },
+      { role: "user", content: "" },
+      { role: "user", content: "inspect this" },
+    ]);
   });
 
-  it("targets /api/v2/chat/completions with the X-FE-Version header and Bearer auth", async () => {
-    let capturedUrl = "";
-    let capturedHeaders: Record<string, string> = {};
-    let capturedBody: Record<string, unknown> = {};
-    globalThis.fetch = (async (url: unknown, init: RequestInit) => {
-      capturedUrl = String(url);
-      capturedHeaders = (init.headers as Record<string, string>) || {};
-      capturedBody = JSON.parse(String(init.body));
-      return new Response(streamOf([sse({ data: { phase: "done", done: true } })]), { status: 200 });
-    }) as typeof fetch;
-
-    const executor = new mod.ZaiWebExecutor();
-    await executor.execute({
-      model: "GLM-5.1",
-      body: { model: "GLM-5.1", messages: [{ role: "user", content: "hi" }] },
-      stream: true,
-      credentials: { apiKey: "token=real.session.jwt" },
-      signal: null,
-    } as never);
-
-    assert.equal(capturedUrl, "https://chat.z.ai/api/v2/chat/completions");
-    assert.equal(capturedHeaders["X-FE-Version"], "1.0.91");
-    assert.equal(capturedHeaders.Authorization, "Bearer real.session.jwt");
-    assert.equal(capturedHeaders.Cookie, "token=real.session.jwt");
-    assert.equal(capturedBody.model, "GLM-5.1");
-    assert.equal(capturedBody.stream, true);
+  it("enables Deep Think for every public model and limits effort to GLM-5.2", () => {
+    assert.deepEqual(mod.resolveZaiThinkingConfig("glm-5.2", {}), {
+      supported: true,
+      enabled: true,
+      effort: "max",
+      effortSupported: true,
+    });
+    assert.deepEqual(mod.resolveZaiThinkingConfig("zw/glm-5.2", { reasoning_effort: "medium" }), {
+      supported: true,
+      enabled: true,
+      effort: "high",
+      effortSupported: true,
+    });
+    assert.deepEqual(mod.resolveZaiThinkingConfig("glm-5.2", { reasoning: { effort: "high" } }), {
+      supported: true,
+      enabled: true,
+      effort: "high",
+      effortSupported: true,
+    });
+    assert.deepEqual(mod.resolveZaiThinkingConfig("glm-5.2", { reasoning_effort: "off" }), {
+      supported: true,
+      enabled: false,
+      effort: "max",
+      effortSupported: true,
+    });
+    assert.deepEqual(mod.resolveZaiThinkingConfig("GLM-5.1", { reasoning_effort: "max" }), {
+      supported: true,
+      enabled: true,
+      effort: "max",
+      effortSupported: false,
+    });
   });
 
-  it("auto-mints a guest token when no cookie is supplied", async () => {
-    const urls: string[] = [];
-    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
-      urls.push(String(url));
-      if (String(url).endsWith("/api/v1/auths/")) {
-        return new Response(JSON.stringify({ token: "guest.tok", role: "guest" }), { status: 200 });
+  it("maps GLM-5V-Turbo vision and internal VLM controls from live capabilities", () => {
+    assert.deepEqual(mod.getZaiModelCapabilities("zw/GLM-5v-Turbo"), {
+      mcp: false,
+      reasoningEffort: false,
+      returnFc: true,
+      thinking: true,
+      vision: true,
+      vlmTools: true,
+      vlmWebSearch: true,
+      vlmWebsiteMode: true,
+      webSearch: true,
+    });
+    assert.deepEqual(mod.resolveZaiVlmConfig("GLM-5v-Turbo", {}), {
+      toolsEnabled: true,
+      webSearchEnabled: true,
+      websiteModeEnabled: true,
+    });
+    assert.deepEqual(
+      mod.resolveZaiVlmConfig("GLM-5v-Turbo", {
+        features: {
+          vlm_tools_enable: false,
+          vlm_web_search_enable: false,
+          vlm_website_mode: false,
+        },
+      }),
+      {
+        toolsEnabled: false,
+        webSearchEnabled: false,
+        websiteModeEnabled: true,
       }
-      const hdrs = (init?.headers as Record<string, string>) || {};
-      assert.equal(hdrs.Authorization, "Bearer guest.tok");
-      return new Response(streamOf([sse({ data: { delta_content: "ok", phase: "answer" } }), sse({ data: { done: true } })]), {
-        status: 200,
-      });
-    }) as typeof fetch;
-
-    const executor = new mod.ZaiWebExecutor();
-    const res = await executor.execute({
-      model: "glm-4.7",
-      body: { messages: [{ role: "user", content: "hi" }] },
-      stream: false,
-      credentials: { apiKey: "" },
-      signal: null,
-    } as never);
-
-    assert.ok(urls[0].endsWith("/api/v1/auths/"));
-    assert.ok(urls[1].endsWith("/api/v2/chat/completions"));
-    const body = (await res.response.json()) as { choices: { message: { content: string } }[] };
-    assert.equal(body.choices[0].message.content, "ok");
+    );
+    assert.deepEqual(mod.resolveZaiVlmConfig("GLM-5.1", {}), {
+      toolsEnabled: false,
+      webSearchEnabled: false,
+      websiteModeEnabled: false,
+    });
+    assert.deepEqual(mod.resolveZaiVlmConfig("GLM-5.1", { web_search: true }), {
+      toolsEnabled: false,
+      webSearchEnabled: true,
+      websiteModeEnabled: false,
+    });
   });
 
-  it("returns a 502 error when guest mint fails and no cookie given", async () => {
-    globalThis.fetch = (async () => new Response("blocked", { status: 429 })) as typeof fetch;
+  it("returns a credential error when no session credential is provided", async () => {
     const executor = new mod.ZaiWebExecutor();
-    const res = await executor.execute({
-      model: "glm-4.7",
-      body: { messages: [{ role: "user", content: "hi" }] },
-      stream: false,
-      credentials: { apiKey: "" },
-      signal: null,
-    } as never);
-    assert.equal(res.response.status, 502);
-    const body = (await res.response.json()) as { error: { message: string } };
-    assert.match(body.error.message, /guest-token mint failed|Cookie/i);
-  });
-
-  it("forwards a CAPTCHA param from ZAI_WEB_CAPTCHA_PARAM into params + header", async () => {
-    process.env.ZAI_WEB_CAPTCHA_PARAM = "captcha-abc-123";
-    let capturedBody: Record<string, unknown> = {};
-    let capturedHeaders: Record<string, string> = {};
-    globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
-      capturedBody = JSON.parse(String(init.body));
-      capturedHeaders = (init.headers as Record<string, string>) || {};
-      return new Response(streamOf([sse({ data: { done: true } })]), { status: 200 });
-    }) as typeof fetch;
-    const executor = new mod.ZaiWebExecutor();
-    await executor.execute({
-      model: "glm-4.7",
-      body: { messages: [{ role: "user", content: "hi" }] },
-      stream: true,
-      credentials: { apiKey: "token=t" },
-      signal: null,
-    } as never);
-    assert.equal((capturedBody.params as Record<string, unknown>).captcha_verify_param, "captcha-abc-123");
-    assert.equal(capturedHeaders["x-signature"], "captcha-abc-123");
-  });
-
-  it("streams OpenAI-shaped chunks from the internal envelope", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        streamOf([
-          sse({ type: "chat:completion", data: { delta_content: "Hel", phase: "answer" } }),
-          sse({ type: "chat:completion", data: { delta_content: "lo", phase: "answer" } }),
-          sse({ type: "chat:completion", data: { phase: "done", done: true } }),
-        ]),
-        { status: 200 }
-      )) as typeof fetch;
-    const executor = new mod.ZaiWebExecutor();
-    const res = await executor.execute({
-      model: "glm-4.7",
-      body: { messages: [{ role: "user", content: "hi" }] },
-      stream: true,
-      credentials: { apiKey: "token=t" },
-      signal: null,
-    } as never);
-    const text = await readSse(res.response);
-    assert.match(text, /"role":"assistant"/);
-    assert.match(text, /"content":"Hel"/);
-    assert.match(text, /"content":"lo"/);
-    assert.match(text, /"finish_reason":"stop"/);
-    assert.match(text, /data: \[DONE\]/);
-  });
-
-  it("aggregates non-streaming answer + reasoning", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        streamOf([
-          sse({ data: { delta_content: "think", phase: "thinking" } }),
-          sse({ data: { delta_content: "Answer", phase: "answer" } }),
-          sse({ data: { done: true } }),
-        ]),
-        { status: 200 }
-      )) as typeof fetch;
-    const executor = new mod.ZaiWebExecutor();
-    const res = await executor.execute({
-      model: "glm-4.7",
-      body: { messages: [{ role: "user", content: "hi" }] },
-      stream: false,
-      credentials: { apiKey: "token=t" },
-      signal: null,
-    } as never);
-    const body = (await res.response.json()) as {
-      choices: { message: { content: string; reasoning_content?: string } }[];
-    };
-    assert.equal(body.choices[0].message.content, "Answer");
-    assert.equal(body.choices[0].message.reasoning_content, "think");
-  });
-
-  it("surfaces an upstream 403 user-level error frame as a 502 (non-streaming)", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        streamOf([
-          sse({ data: { data: { error: { detail: "Model not available for current user level", code: 403 }, done: true } } }),
-        ]),
-        { status: 200 }
-      )) as typeof fetch;
-    const executor = new mod.ZaiWebExecutor();
-    const res = await executor.execute({
+    const result = await executor.execute({
       model: "GLM-5.1",
       body: { messages: [{ role: "user", content: "hi" }] },
       stream: false,
-      credentials: { apiKey: "token=t" },
+      credentials: { apiKey: "" },
       signal: null,
-    } as never);
-    assert.equal(res.response.status, 502);
-    const body = (await res.response.json()) as { error: { message: string } };
-    assert.match(body.error.message, /current user level|rejected/i);
+    });
+
+    assert.equal(result.response.status, 400);
+    assert.equal(new URL(result.url).hostname, "chat.z.ai");
+    const parsed = await result.response.json();
+    assert.match(parsed.error.message, /web-session credential/);
   });
 
-  it("propagates a non-2xx upstream status", async () => {
-    globalThis.fetch = (async () => new Response("boom", { status: 500 })) as typeof fetch;
+  it("uses the browser transport with only the Local Storage token", async () => {
+    let capturedRequest: BrowserBackedChatRequest | null = null;
+    browserChat.__setBrowserBackedChatOverrideForTesting(async (request) => {
+      capturedRequest = request;
+      return makeBrowserResult("Browser");
+    });
+
+    try {
+      const executor = new mod.ZaiWebExecutor();
+      const result = await executor.execute({
+        model: "glm-5.2",
+        body: { messages: [{ role: "user", content: "hi" }] },
+        stream: false,
+        credentials: { apiKey: TEST_TOKEN },
+        signal: null,
+      });
+
+      const completion = await result.response.json();
+      assert.equal(completion.choices[0].message.content, "Browser");
+      assert.equal(capturedRequest?.localStorage?.token, TEST_TOKEN);
+      assert.equal(capturedRequest?.localStorageOrigin, "https://chat.z.ai");
+      assert.equal(capturedRequest?.inputSelector, "#chat-input");
+      assert.equal(
+        capturedRequest?.submitButtonSelector,
+        '[aria-label="Send Message"] button:not([disabled])'
+      );
+      assert.equal(capturedRequest?.submitButtonMode, "dom");
+      assert.equal(capturedRequest?.userMessage, "hi");
+      assert.match(capturedRequest?.chatPageUrl ?? "", /model=GLM-5\.2/);
+      assert.equal(typeof capturedRequest?.beforeSubmit, "function");
+      assert.equal(result.headers["X-OmniRoute-Transport"], "browser");
+      assert.equal(result.transformedBody.browser_backed, true);
+      assert.equal(result.transformedBody.enable_thinking, true);
+      assert.equal(result.transformedBody.reasoning_effort, "max");
+    } finally {
+      browserChat.__resetBrowserBackedChatOverrideForTesting();
+    }
+  });
+
+  it("configures GLM-5V-Turbo controls on the browser transport", async () => {
+    let capturedRequest: BrowserBackedChatRequest | null = null;
+    browserChat.__setBrowserBackedChatOverrideForTesting(async (request) => {
+      capturedRequest = request;
+      return makeBrowserResult("VLM");
+    });
+
+    try {
+      const executor = new mod.ZaiWebExecutor();
+      const result = await executor.execute({
+        model: "GLM-5v-Turbo",
+        body: { messages: [{ role: "user", content: "use the model tools" }] },
+        stream: false,
+        credentials: { apiKey: TEST_TOKEN },
+        signal: null,
+      });
+
+      const completion = await result.response.json();
+      assert.equal(completion.choices[0].message.content, "VLM");
+      assert.match(capturedRequest?.chatPageUrl ?? "", /model=GLM-5V-Turbo/);
+      assert.equal(typeof capturedRequest?.beforeSubmit, "function");
+      assert.equal(result.transformedBody.enable_thinking, true);
+      assert.equal(result.transformedBody.vlm_tools_enable, true);
+      assert.equal(result.transformedBody.vlm_web_search_enable, true);
+      assert.equal(result.transformedBody.vlm_website_mode, true);
+      assert.equal("reasoning_effort" in result.transformedBody, false);
+    } finally {
+      browserChat.__resetBrowserBackedChatOverrideForTesting();
+    }
+  });
+
+  it("uploads GLM-5V-Turbo image input through the authenticated browser page", async () => {
+    let capturedRequest: BrowserBackedChatRequest | null = null;
+    browserChat.__setBrowserBackedChatOverrideForTesting(async (request) => {
+      capturedRequest = request;
+      return makeBrowserResult("The image says OMNIROUTE.");
+    });
+
+    try {
+      const executor = new mod.ZaiWebExecutor();
+      const result = await executor.execute({
+        model: "GLM-5v-Turbo",
+        body: {
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "What word is in this image?" },
+                {
+                  type: "image_url",
+                  image_url: { url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
+                },
+              ],
+            },
+          ],
+        },
+        stream: false,
+        // Supplying a CAPTCHA proof must not select the direct path for image
+        // requests because the browser page owns Z.ai's authenticated upload.
+        credentials: { apiKey: TEST_CREDENTIAL },
+        signal: null,
+      });
+
+      assert.equal(result.response.status, 200);
+      assert.equal(capturedRequest?.userMessage, "What word is in this image?");
+      assert.equal(capturedRequest?.attachments?.length, 1);
+      assert.equal(capturedRequest?.attachments?.[0]?.name, "omniroute-image-1.png");
+      assert.equal(capturedRequest?.attachments?.[0]?.mimeType, "image/png");
+      assert.equal(capturedRequest?.attachments?.[0]?.buffer.toString("utf8"), "image-bytes");
+      assert.equal(result.transformedBody.image_count, 1);
+      assert.deepEqual(result.transformedBody.messages, [
+        { role: "user", content: "What word is in this image?" },
+      ]);
+    } finally {
+      browserChat.__resetBrowserBackedChatOverrideForTesting();
+    }
+  });
+
+  it("rejects image input on Z.ai text-only models", async () => {
     const executor = new mod.ZaiWebExecutor();
-    const res = await executor.execute({
-      model: "glm-4.7",
-      body: { messages: [{ role: "user", content: "hi" }] },
+    const result = await executor.execute({
+      model: "glm-5.2",
+      body: {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "inspect" },
+              {
+                type: "image_url",
+                image_url: { url: "data:image/png;base64,aW1hZ2U=" },
+              },
+            ],
+          },
+        ],
+      },
       stream: false,
-      credentials: { apiKey: "token=t" },
+      credentials: { apiKey: TEST_TOKEN },
       signal: null,
-    } as never);
-    assert.equal(res.response.status, 500);
+    });
+
+    assert.equal(result.response.status, 400);
+    const parsed = await result.response.json();
+    assert.match(parsed.error.message, /use GLM-5V-Turbo/);
+  });
+
+  it("creates a chat, signs the v2 request, and forwards the CAPTCHA proof", async () => {
+    const capture: ZaiFetchCapture = {};
+    const originalFetch = installZaiFetch(
+      () =>
+        new Response("data: [DONE]\n\n", {
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      capture
+    );
+
+    try {
+      const executor = new mod.ZaiWebExecutor();
+      const result = await executor.execute({
+        model: "GLM-5.1",
+        body: {
+          model: "GLM-5.1",
+          messages: [{ role: "user", content: "hello" }],
+          temperature: 0.4,
+          web_search: true,
+        },
+        stream: false,
+        credentials: { apiKey: TEST_CREDENTIAL },
+        signal: null,
+      });
+
+      assert.ok(capture.newChatInit);
+      const newChatHeaders = capture.newChatInit?.headers as Record<string, string>;
+      assert.equal(newChatHeaders.Authorization, `Bearer ${TEST_TOKEN}`);
+      const newChatBody = JSON.parse(String(capture.newChatInit?.body));
+      assert.deepEqual(newChatBody.chat.models, ["GLM-5.1"]);
+      assert.equal(newChatBody.chat.history.currentId.length, 36);
+      assert.equal(newChatBody.chat.enable_thinking, true);
+      assert.equal(newChatBody.chat.auto_web_search, true);
+
+      const completionUrl = new URL(String(capture.completionUrl));
+      assert.equal(completionUrl.pathname, ZAI_COMPLETION_PATH);
+      assert.equal(completionUrl.searchParams.get("token"), TEST_TOKEN);
+      assert.equal(completionUrl.searchParams.get("user_id"), "user-123");
+      assert.equal(completionUrl.searchParams.get("version"), "0.0.1");
+      assert.equal(
+        completionUrl.searchParams.get("signature_timestamp"),
+        completionUrl.searchParams.get("timestamp")
+      );
+
+      const headers = capture.completionInit?.headers as Record<string, string>;
+      assert.equal(headers.Authorization, `Bearer ${TEST_TOKEN}`);
+      assert.equal(headers["X-FE-Version"], "prod-fe-1.1.79");
+      assert.match(headers["X-Signature"], /^[a-f0-9]{64}$/);
+
+      const parsedBody = JSON.parse(String(capture.completionInit?.body));
+      assert.equal(parsedBody.model, "GLM-5.1");
+      assert.equal(parsedBody.stream, true);
+      assert.deepEqual(parsedBody.messages, [{ role: "user", content: "hello" }]);
+      assert.equal(parsedBody.signature_prompt, "hello");
+      assert.equal(parsedBody.captcha_verify_param, "captcha-proof");
+      assert.equal(parsedBody.chat_id, "chat-123");
+      assert.equal(parsedBody.params.temperature, 0.4);
+      assert.equal(parsedBody.features.web_search, false);
+      assert.equal(parsedBody.features.auto_web_search, true);
+      assert.equal(parsedBody.features.enable_thinking, true);
+      assert.equal("reasoning_effort" in parsedBody.features, false);
+      assert.equal(result.headers.Authorization, "Bearer [REDACTED]");
+      assert.equal(result.transformedBody.captcha_verify_param, "[REDACTED]");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("sends GLM-5.2 Deep Think High through the direct request path", async () => {
+    const capture: ZaiFetchCapture = {};
+    const originalFetch = installZaiFetch(
+      () =>
+        new Response("data: [DONE]\n\n", {
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      capture
+    );
+
+    try {
+      const executor = new mod.ZaiWebExecutor();
+      await executor.execute({
+        model: "glm-5.2",
+        body: {
+          model: "glm-5.2",
+          messages: [{ role: "user", content: "think carefully" }],
+          reasoning_effort: "high",
+        },
+        stream: false,
+        credentials: { apiKey: TEST_CREDENTIAL },
+        signal: null,
+      });
+
+      // #8014: completions must target the versioned v2 path. The query string
+      // carries the per-request signature payload, so match the endpoint prefix.
+      assert.ok(
+        String(capture.completionUrl).startsWith("https://chat.z.ai/api/v2/chat/completions?"),
+        `expected the v2 completions endpoint, got ${capture.completionUrl}`
+      );
+      const newChatBody = JSON.parse(String(capture.newChatInit?.body));
+      assert.equal(newChatBody.chat.enable_thinking, true);
+      assert.equal(newChatBody.chat.reasoning_effort, "high");
+
+      const completionBody = JSON.parse(String(capture.completionInit?.body));
+      assert.equal(completionBody.features.enable_thinking, true);
+      assert.equal(completionBody.features.reasoning_effort, "high");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("sends GLM-5V-Turbo VLM tools and web-search flags through the direct path", async () => {
+    const capture: ZaiFetchCapture = {};
+    const originalFetch = installZaiFetch(
+      () =>
+        new Response("data: [DONE]\n\n", {
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      capture
+    );
+
+    try {
+      const executor = new mod.ZaiWebExecutor();
+      await executor.execute({
+        model: "GLM-5v-Turbo",
+        body: {
+          model: "GLM-5v-Turbo",
+          messages: [{ role: "user", content: "inspect this image" }],
+        },
+        stream: false,
+        credentials: { apiKey: TEST_CREDENTIAL },
+        signal: null,
+      });
+
+      const newChatBody = JSON.parse(String(capture.newChatInit?.body));
+      assert.equal(newChatBody.chat.enable_thinking, true);
+      assert.equal(newChatBody.chat.auto_web_search, true);
+      assert.equal(newChatBody.chat.extra.vlm_tools_enable, true);
+      assert.equal(newChatBody.chat.extra.vlm_web_search_enable, true);
+      assert.equal(newChatBody.chat.extra.vlm_website_mode, true);
+
+      const completionBody = JSON.parse(String(capture.completionInit?.body));
+      assert.equal(completionBody.features.enable_thinking, true);
+      assert.equal(completionBody.features.auto_web_search, false);
+      assert.equal(completionBody.features.vlm_tools_enable, true);
+      assert.equal(completionBody.features.vlm_web_search_enable, true);
+      assert.equal(completionBody.features.vlm_website_mode, true);
+      assert.equal("reasoning_effort" in completionBody.features, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("aggregates streamed internal-envelope deltas into a non-streaming completion", async () => {
+    const originalFetch = installZaiFetch(
+      () =>
+        new Response(
+          [
+            `data: ${JSON.stringify({ type: "chat:completion", data: { delta_content: "Hel", phase: "answer", done: false } })}`,
+            `data: ${JSON.stringify({ type: "chat:completion", data: { delta_content: "lo", phase: "answer", done: false } })}`,
+            `data: ${JSON.stringify({ type: "chat:completion", data: { phase: "done", done: true } })}`,
+            "data: [DONE]",
+            "",
+            "",
+          ].join("\n"),
+          { headers: { "Content-Type": "text/event-stream" } }
+        )
+    );
+
+    try {
+      const executor = new mod.ZaiWebExecutor();
+      const result = await executor.execute({
+        model: "GLM-5.1",
+        body: { messages: [{ role: "user", content: "hi" }] },
+        stream: false,
+        credentials: { apiKey: TEST_CREDENTIAL },
+        signal: null,
+      });
+
+      const completion = await result.response.json();
+      assert.equal(completion.choices[0].message.content, "Hello");
+      assert.equal(completion.choices[0].finish_reason, "stop");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("streams internal-envelope deltas as OpenAI-shaped SSE chunks", async () => {
+    const originalFetch = installZaiFetch(
+      () =>
+        new Response(
+          [
+            `data: ${JSON.stringify({ type: "chat:completion", data: { delta_content: "Hi", phase: "answer", done: false } })}`,
+            `data: ${JSON.stringify({ type: "chat:completion", data: { phase: "done", done: true } })}`,
+            "",
+            "",
+          ].join("\n"),
+          { headers: { "Content-Type": "text/event-stream" } }
+        )
+    );
+
+    try {
+      const executor = new mod.ZaiWebExecutor();
+      const result = await executor.execute({
+        model: "GLM-5.1",
+        body: { messages: [{ role: "user", content: "hi" }] },
+        stream: true,
+        credentials: { apiKey: TEST_CREDENTIAL },
+        signal: null,
+      });
+
+      const text = await result.response.text();
+      assert.match(text, /"content":"Hi"/);
+      assert.match(text, /"finish_reason":"stop"/);
+      assert.match(text, /data: \[DONE\]/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("propagates upstream HTTP errors", async () => {
+    const originalFetch = installZaiFetch(() => new Response("session expired", { status: 401 }));
+
+    try {
+      const executor = new mod.ZaiWebExecutor();
+      const result = await executor.execute({
+        model: "GLM-5.1",
+        body: { messages: [{ role: "user", content: "hi" }] },
+        stream: false,
+        credentials: { apiKey: TEST_CREDENTIAL },
+        signal: null,
+      });
+
+      assert.equal(result.response.status, 401);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

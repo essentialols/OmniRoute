@@ -10,7 +10,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const dnsRoute = await import("../../src/app/api/tools/agent-bridge/agents/[id]/dns/route.ts");
+const dnsRoute = await import(
+  "../../src/app/api/tools/agent-bridge/agents/[id]/dns/route.ts"
+);
 
 function makeRequest(body: unknown): Request {
   return new Request("http://127.0.0.1/api/tools/agent-bridge/agents/x/dns", {

@@ -1,37 +1,37 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+@AGENTS.md
 
-## Quick Start
+**All project rules live in [`AGENTS.md`](AGENTS.md)** — the single source of truth for every AI
+assistant (architecture, conventions, testing, quality gates, git workflow, the 23 Hard Rules,
+PII learnings). Read it in full; do not re-add project rules here. Everything below applies ONLY
+to Claude Code — operational refinements of rules already defined in `AGENTS.md`.
 
-```bash
-npm install                    # Install deps (auto-generates .env from .env.example)
-npm run dev                    # Dev server at http://localhost:20128
-npm run build                  # Production build (Next.js 16 standalone)
-npm run lint                   # ESLint (0 errors expected; warnings are pre-existing)
-npm run typecheck:core         # TypeScript check (should be clean)
-npm run typecheck:noimplicit:core  # Strict check (no implicit any)
-npm run test:coverage          # Unit tests + coverage gate (60/60/60/60 — statements/lines/functions/branches)
-npm run check                  # lint + test combined
-npm run check:cycles           # Detect circular dependencies
-```
+## Worktree isolation — Claude Code specifics
 
-### Running Tests
+The full mandatory worktree protocol (base-branch confirmation, `.claude/worktrees/` canonical
+path, `cp -al` node_modules, teardown rules) is in `AGENTS.md` → Git Workflow → "Worktree
+isolation". Claude-Code-specific points:
 
-```bash
-# Single test file (Node.js native test runner — most tests)
-node --import tsx/esm --test tests/unit/your-file.test.ts
+- Confirm the base branch with the operator via `AskUserQuestion` (Hard Rule #19) unless they
+  already told you.
+- Prefer the native `EnterWorktree` tool — it already creates worktrees under
+  `.claude/worktrees/` (the canonical path). Create the worktree with the documented `git
+worktree add` command, then call `EnterWorktree` with its `path`.
 
-# Vitest (MCP server, autoCombo, cache)
-npm run test:vitest
+## Cross-session safety — Claude Code specifics
 
-# All suites
-npm run test:all
-```
+Hard Rules #19/#21/#22 (in `AGENTS.md`) govern parallel sessions. Operational reminders for this
+harness:
 
-For full test matrix, see `CONTRIBUTING.md` → "Running Tests". For deep architecture, see `AGENTS.md`.
+- **Replicate the `git stash` ban verbatim in the prompt of every subagent that touches git**
+  (Agent tool / Workflow scripts) — subagents do not inherit this file, and the recorded
+  recurrence of the stash incident came through a subagent.
+- Before merging or pushing to any PR you did not create _this session_, run `git worktree list`
+  and re-check `gh pr view <N> --json state,headRefOid` (Hard Rule #22b).
+- End every session with the main checkout on the branch it started on.
 
----
+## Superpowers / planning artifacts — path overrides
 
 ## Project at a Glance
 
@@ -401,6 +401,10 @@ the repo root.** The superpowers skills ship with defaults that point at `docs/�
 Those defaults are **overridden here**. Whenever you invoke superpowers (or any
 plan/spec/research generator) in this project, save to `_tasks/` instead, using the
 same filename convention:
+The `_tasks/` convention is defined in `AGENTS.md` → "Planning & Research Artifacts". The
+superpowers skills ship with defaults that point at `docs/…` — those defaults are **overridden
+here**. When a superpowers skill announces a path like "saved to `docs/superpowers/plans/…`",
+rewrite it to the `_tasks/…` equivalent before writing:
 
 | Artifact (skill)                   | Default (do NOT use)      | Save here instead                                             |
 | ---------------------------------- | ------------------------- | ------------------------------------------------------------- |
@@ -409,22 +413,24 @@ same filename convention:
 | Research (`deep-research`, ad-hoc) | `docs/research/`          | `_tasks/research/…`                                           |
 | Hand-offs (`/handoff`)             | —                         | `_tasks/hands-off/<YYYY-MM-DD>_<branch>_v<versão>_sess-<id>/` |
 
-When a superpowers skill announces a path like "saved to `docs/superpowers/plans/…`",
-rewrite it to the `_tasks/…` equivalent before writing. Commit those artifacts inside
-the `_tasks/` repo (`git -C _tasks …`), never in the main repo.
+Commit those artifacts inside the `_tasks/` repo (`git -C _tasks …`), never in the main repo.
 
-## Git Workflow
+## Scratch / temporary files — use `_artifacts/`, not `/tmp`
 
-```bash
-# Never commit directly to main
-git checkout -b feat/your-feature
-git commit -m "feat: describe your change"
-git push -u origin feat/your-feature
-```
+This project overrides the harness's default session scratchpad (`/tmp/claude-*/…`). Write
+temporary/working files — exports, generated zips, one-off intermediate outputs, anything you'd
+otherwise put in `/tmp` — to `/home/diegosouzapw/dev/proxys/OmniRoute/_artifacts/` instead.
 
-**Branch prefixes**: `feat/`, `fix/`, `refactor/`, `docs/`, `test/`, `chore/`
+- `_artifacts/` is a root `_*` path: already gitignored (`AGENTS.md` → "Root `_*` paths"), lives
+  on disk only, never tracked.
+- Reason: keeping scratch output inside the project (vs `/tmp`) makes it trivial for the operator
+  to find and delete everything temporary in one place, instead of hunting across ephemeral
+  session-specific `/tmp` directories that vanish or accumulate untracked.
+- Do **not** confuse this with `_tasks/` (Hard Rule #23, its own private git repo for durable
+  plans/specs/research/hand-offs) — `_artifacts/` is for disposable working files only, nothing
+  here needs to survive or be versioned.
 
-**Commit format** (Conventional Commits): `feat(db): add circuit breaker` — scopes: `db`, `sse`, `oauth`, `dashboard`, `api`, `cli`, `docker`, `ci`, `mcp`, `a2a`, `memory`, `skills`
+## Base-green before opening PRs
 
 **Husky hooks**:
 
@@ -562,3 +568,7 @@ When parsing streaming LLM responses (e.g. Responses API), check if a chunk repr
 ### 3. Database Handles in Tests
 
 Ensure that any unit tests that trigger database migrations or establish SQLite connections call `resetDbInstance()` and properly clean up/close all DB handles in a `test.after(...)` hook. Failure to release database connection handles will cause Node's native test runner to hang indefinitely.
+Before cutting a branch or opening a PR, run the base-green check (`AGENTS.md` → Git Workflow →
+"Base-green check"; project skills reference it as `.agents/skills/_shared/base-green.md`). A PR
+opened while the base tip is red must carry `⚠️ base-red inherited: #<issue>` in its body. To
+drain an accumulated red state (base tip + red PRs), use the `/sweep-reds` skill.
